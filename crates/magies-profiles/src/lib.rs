@@ -1,8 +1,12 @@
 //! Node import and profile services for `MgClash`.
 
+mod shadowsocks;
 mod trojan;
 mod vmess;
 
+pub use shadowsocks::{
+    ParsedShadowsocksNode, ShadowsocksCredential, ShadowsocksParseError, ShadowsocksParser,
+};
 pub use trojan::{ParsedTrojanNode, TrojanCredential, TrojanParseError, TrojanParser};
 pub use vmess::{ParsedVmessNode, VmessCredential, VmessParseError, VmessParser, VmessSecurity};
 
