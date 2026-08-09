@@ -1,10 +1,9 @@
 #![cfg(all(target_os = "macos", target_arch = "x86_64"))]
 
 use std::env::var_os;
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
-use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use magies_core_runtime::{
     CoreBinaryRequirement, CoreProcessSpec, CoreRuntime, CoreState, Sha256Hash, SingBoxAdapter,
@@ -13,7 +12,6 @@ use magies_core_runtime::{
 use magies_platform::CpuArchitecture;
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
-const RETRY_INTERVAL: Duration = Duration::from_millis(25);
 const XRAY_SHA256: &str = "afd0eaebb77994a18f29b00c5f50a4f7fbb77da06e24352d43035f3cad3c3786";
 const SING_BOX_SHA256: &str = "6e9749a4b40821bf07d301f099e75d871ea435861c9f5f0ac5687dc18e81b759";
 
@@ -48,23 +46,10 @@ fn run_listener_smoke(spec: &CoreProcessSpec, port: u16) {
 
     let mut runtime = CoreRuntime::default();
     runtime.start(spec).unwrap();
-
-    let started_at = Instant::now();
-    loop {
-        match runtime.poll().unwrap() {
-            CoreState::Running => {}
-            state => panic!("Core exited before opening {address}: {state:?}"),
-        }
-
-        if TcpStream::connect_timeout(&address, RETRY_INTERVAL).is_ok() {
-            break;
-        }
-        assert!(
-            started_at.elapsed() < STARTUP_TIMEOUT,
-            "Core did not open {address} within {STARTUP_TIMEOUT:?}"
-        );
-        sleep(RETRY_INTERVAL);
-    }
+    let health = runtime
+        .wait_for_tcp_health(address, STARTUP_TIMEOUT)
+        .unwrap();
+    assert!(health.ready_after <= STARTUP_TIMEOUT);
 
     runtime.stop().unwrap();
     assert_eq!(runtime.poll().unwrap(), CoreState::Stopped);

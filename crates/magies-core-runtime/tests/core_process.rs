@@ -2,6 +2,7 @@ use std::env::current_exe;
 use std::error::Error;
 use std::fs::{copy, read, remove_file, write};
 use std::io::{self, Write};
+use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
 use std::sync::mpsc::RecvTimeoutError;
 use std::thread::sleep;
@@ -11,13 +12,16 @@ use std::time::{Duration, Instant};
 use std::os::unix::fs::PermissionsExt;
 
 use magies_core_runtime::{
-    CoreBinaryError, CoreBinaryRequirement, CoreExit, CoreOutputEvent, CoreOutputStream,
-    CoreProcessSpec, CoreRuntime, CoreRuntimeError, CoreState, Sha256Hash, ValidatedCoreBinary,
-    locate_core_binary,
+    CoreBinaryError, CoreBinaryRequirement, CoreExit, CoreHealthError, CoreOutputEvent,
+    CoreOutputStream, CoreProcessSpec, CoreRuntime, CoreRuntimeError, CoreState, Sha256Hash,
+    ValidatedCoreBinary, locate_core_binary,
 };
 use magies_platform::CpuArchitecture;
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(2);
+const HEALTH_PORT: u16 = 18_982;
+const EXIT_HEALTH_PORT: u16 = 18_983;
+const TIMEOUT_HEALTH_PORT: u16 = 18_984;
 
 fn helper_process_spec(test_name: &str) -> CoreProcessSpec {
     let binary =
@@ -149,6 +153,136 @@ fn contains_bytes(contents: &[u8], expected: &[u8]) -> bool {
     contents
         .windows(expected.len())
         .any(|window| window == expected)
+}
+
+#[test]
+fn waits_until_a_running_core_opens_its_health_listener() {
+    let address = available_loopback_address(HEALTH_PORT);
+    let mut runtime = CoreRuntime::default();
+    let spec = helper_process_spec("helper_core_opens_health_listener_after_delay");
+
+    runtime.start(&spec).unwrap();
+    let health = runtime.wait_for_tcp_health(address, TEST_TIMEOUT).unwrap();
+
+    assert!(health.ready_after <= TEST_TIMEOUT);
+    assert_eq!(runtime.poll().unwrap(), CoreState::Running);
+    runtime.stop().unwrap();
+}
+
+#[test]
+fn reports_when_a_core_exits_before_becoming_healthy() {
+    let address = available_loopback_address(EXIT_HEALTH_PORT);
+    let mut runtime = CoreRuntime::default();
+    let spec = helper_process_spec("helper_core_exits_immediately");
+
+    runtime.start(&spec).unwrap();
+    let error = runtime
+        .wait_for_tcp_health(address, TEST_TIMEOUT)
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        CoreHealthError::ProcessExited(CoreExit {
+            success: true,
+            code: Some(0),
+        })
+    ));
+}
+
+#[test]
+fn returns_a_typed_health_timeout_and_keeps_the_core_running() {
+    let address = available_loopback_address(TIMEOUT_HEALTH_PORT);
+    let timeout = Duration::from_millis(40);
+    let mut runtime = CoreRuntime::default();
+    let spec = helper_process_spec("helper_core_runs_until_stopped");
+
+    runtime.start(&spec).unwrap();
+    let error = runtime.wait_for_tcp_health(address, timeout).unwrap_err();
+
+    assert!(matches!(
+        error,
+        CoreHealthError::TimedOut {
+            address: actual_address,
+            timeout: actual_timeout,
+            last_error: Some(_),
+        } if actual_address == address && actual_timeout == timeout
+    ));
+    assert_eq!(runtime.poll().unwrap(), CoreState::Running);
+
+    assert!(matches!(
+        runtime.wait_for_tcp_health(SocketAddr::from(([127, 0, 0, 1], 0)), Duration::ZERO),
+        Err(CoreHealthError::TimedOut {
+            timeout: Duration::ZERO,
+            last_error: None,
+            ..
+        })
+    ));
+    runtime.stop().unwrap();
+}
+
+#[test]
+fn refuses_a_health_check_without_a_running_core() {
+    let address = SocketAddr::from(([127, 0, 0, 1], 0));
+    let mut runtime = CoreRuntime::default();
+
+    assert!(matches!(
+        runtime.wait_for_tcp_health(address, TEST_TIMEOUT),
+        Err(CoreHealthError::NotRunning)
+    ));
+}
+
+#[test]
+fn exposes_actionable_health_error_messages_and_sources() {
+    let address = SocketAddr::from(([127, 0, 0, 1], 18_980));
+    let errors = [
+        (
+            CoreHealthError::NotRunning,
+            "cannot check health without a running Core",
+            false,
+        ),
+        (
+            CoreHealthError::ProcessExited(CoreExit {
+                success: false,
+                code: Some(1),
+            }),
+            "Core exited before becoming healthy (success: false, code: Some(1))",
+            false,
+        ),
+        (
+            CoreHealthError::Runtime(CoreRuntimeError::PollFailed(io::Error::other("poll"))),
+            "failed to inspect Core health: failed to poll core process: poll",
+            true,
+        ),
+        (
+            CoreHealthError::TimedOut {
+                address,
+                timeout: Duration::from_secs(2),
+                last_error: Some(io::Error::new(io::ErrorKind::ConnectionRefused, "refused")),
+            },
+            "Core did not open 127.0.0.1:18980 within 2s: refused",
+            true,
+        ),
+        (
+            CoreHealthError::TimedOut {
+                address,
+                timeout: Duration::ZERO,
+                last_error: None,
+            },
+            "Core did not open 127.0.0.1:18980 within 0ns",
+            false,
+        ),
+    ];
+
+    for (error, expected_message, has_source) in errors {
+        assert_eq!(error.to_string(), expected_message);
+        assert_eq!(error.source().is_some(), has_source);
+    }
+}
+
+fn available_loopback_address(port: u16) -> SocketAddr {
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    drop(TcpListener::bind(address).expect("the health-test port must be available"));
+    address
 }
 
 #[test]
@@ -387,4 +521,13 @@ fn helper_core_writes_large_output_then_exits() {
     let output = vec![b'x'; 1024 * 1024];
     io::stdout().write_all(&output).unwrap();
     io::stderr().write_all(&output).unwrap();
+}
+
+#[test]
+#[ignore = "spawned by health tests as a delayed-listener fake core"]
+fn helper_core_opens_health_listener_after_delay() {
+    sleep(Duration::from_millis(50));
+    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], HEALTH_PORT))).unwrap();
+    listener.accept().unwrap();
+    sleep(Duration::from_secs(60));
 }
