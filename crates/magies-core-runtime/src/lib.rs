@@ -1,6 +1,7 @@
 //! Proxy core process lifecycle.
 
 mod binary;
+mod xray;
 
 use std::error::Error;
 use std::ffi::OsString;
@@ -15,6 +16,7 @@ pub use binary::{
     CoreBinaryError, CoreBinaryFormat, CoreBinaryRequirement, Sha256Hash, ValidatedCoreBinary,
     locate_core_binary,
 };
+pub use xray::{ValidatedXrayConfig, XrayAdapter, XrayAdapterError, XrayOperation, XrayVersion};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
 

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use magies_core_runtime::{
     CoreBinaryRequirement, CoreProcessSpec, CoreRuntime, CoreState, Sha256Hash,
-    ValidatedCoreBinary, locate_core_binary,
+    ValidatedCoreBinary, XrayAdapter, locate_core_binary,
 };
 use magies_platform::CpuArchitecture;
 
@@ -20,44 +20,39 @@ const SING_BOX_SHA256: &str = "6e9749a4b40821bf07d301f099e75d871ea435861c9f5f0ac
 #[test]
 #[ignore = "requires MAGIES_XRAY_BIN pointing to an official macOS Intel binary"]
 fn xray_starts_a_local_http_listener_and_stops() {
-    run_listener_smoke(
-        &validated_binary("MAGIES_XRAY_BIN", XRAY_SHA256),
-        [
-            "run",
-            "-c",
-            fixture("xray-local-http.json").to_str().unwrap(),
-        ],
-        18_980,
-    );
+    let adapter = XrayAdapter::new(validated_binary("MAGIES_XRAY_BIN", XRAY_SHA256));
+    assert_eq!(adapter.version().unwrap().as_str(), "26.3.27");
+    let config = adapter
+        .validate_config(fixture("xray-local-http.json"))
+        .unwrap();
+
+    run_listener_smoke(&adapter.process_spec(&config), 18_980);
 }
 
 #[test]
 #[ignore = "requires MAGIES_SING_BOX_BIN pointing to an official macOS Intel binary"]
 fn sing_box_starts_a_local_mixed_listener_and_stops() {
+    let binary = validated_binary("MAGIES_SING_BOX_BIN", SING_BOX_SHA256);
     run_listener_smoke(
-        &validated_binary("MAGIES_SING_BOX_BIN", SING_BOX_SHA256),
-        [
-            "run",
-            "-c",
-            fixture("sing-box-local-mixed.json").to_str().unwrap(),
-        ],
+        &CoreProcessSpec::new(
+            &binary,
+            [
+                "run",
+                "-c",
+                fixture("sing-box-local-mixed.json").to_str().unwrap(),
+            ],
+        ),
         18_981,
     );
 }
 
-fn run_listener_smoke<I, A>(binary: &ValidatedCoreBinary, arguments: I, port: u16)
-where
-    I: IntoIterator<Item = A>,
-    A: Into<std::ffi::OsString>,
-{
+fn run_listener_smoke(spec: &CoreProcessSpec, port: u16) {
     let address = SocketAddr::from(([127, 0, 0, 1], port));
     let preflight = TcpListener::bind(address).expect("the smoke-test port must be available");
     drop(preflight);
 
     let mut runtime = CoreRuntime::default();
-    runtime
-        .start(&CoreProcessSpec::new(binary, arguments))
-        .unwrap();
+    runtime.start(spec).unwrap();
 
     let started_at = Instant::now();
     loop {
