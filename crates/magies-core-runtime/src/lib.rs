@@ -4,6 +4,7 @@ mod adapter;
 mod binary;
 mod health;
 mod output;
+mod recovery;
 mod sing_box;
 mod xray;
 
@@ -22,6 +23,9 @@ pub use binary::{
 };
 pub use health::{CoreHealth, CoreHealthError};
 pub use output::{CoreOutput, CoreOutputEvent, CoreOutputStream};
+pub use recovery::{
+    CoreRecovery, CoreRecoveryError, CoreRecoveryFailure, MAX_CRASH_RECOVERY_ATTEMPTS,
+};
 pub use sing_box::{
     SingBoxAdapter, SingBoxAdapterError, SingBoxOperation, SingBoxVersion, ValidatedSingBoxConfig,
 };
@@ -69,6 +73,7 @@ pub enum CoreState {
     Stopped,
     Running,
     Exited(CoreExit),
+    Failed { attempts: u8 },
 }
 
 #[derive(Debug)]
@@ -156,6 +161,7 @@ impl Error for CoreRuntimeError {
 pub struct CoreRuntime {
     child: Option<Child>,
     output_readers: Vec<output::CoreOutputReader>,
+    recovery_attempts: u8,
     state: CoreState,
 }
 
@@ -164,6 +170,7 @@ impl Default for CoreRuntime {
         Self {
             child: None,
             output_readers: Vec::new(),
+            recovery_attempts: 0,
             state: CoreState::Stopped,
         }
     }
@@ -178,6 +185,11 @@ impl CoreRuntime {
     /// cannot be polled, the validated binary changed, or the executable cannot
     /// be started.
     pub fn start(&mut self, spec: &CoreProcessSpec) -> Result<CoreOutput, CoreRuntimeError> {
+        self.recovery_attempts = 0;
+        self.start_process(spec)
+    }
+
+    fn start_process(&mut self, spec: &CoreProcessSpec) -> Result<CoreOutput, CoreRuntimeError> {
         if self.poll()? == CoreState::Running {
             return Err(CoreRuntimeError::AlreadyRunning);
         }
@@ -268,7 +280,9 @@ impl CoreRuntime {
         loop {
             match self.poll()? {
                 CoreState::Exited(exit) => return Ok(exit),
-                CoreState::Stopped => return Err(CoreRuntimeError::NotRunning),
+                CoreState::Stopped | CoreState::Failed { .. } => {
+                    return Err(CoreRuntimeError::NotRunning);
+                }
                 CoreState::Running if started_at.elapsed() >= timeout => {
                     return Err(CoreRuntimeError::WaitTimedOut { timeout });
                 }
@@ -287,6 +301,13 @@ impl CoreRuntime {
     /// Returns a typed error when no Core is running, polling fails, or the
     /// operating system cannot terminate or reap the process.
     pub fn stop(&mut self) -> Result<(), CoreRuntimeError> {
+        self.stop_process()?;
+        self.recovery_attempts = 0;
+
+        Ok(())
+    }
+
+    fn stop_process(&mut self) -> Result<(), CoreRuntimeError> {
         if self.poll()? != CoreState::Running {
             return Err(CoreRuntimeError::NotRunning);
         }
@@ -307,6 +328,12 @@ impl CoreRuntime {
         self.join_output_readers()?;
 
         Ok(())
+    }
+
+    /// Returns the operating-system ID of the currently retained child.
+    #[must_use]
+    pub fn process_id(&self) -> Option<u32> {
+        self.child.as_ref().map(Child::id)
     }
 
     fn join_output_readers(&mut self) -> Result<(), CoreRuntimeError> {
