@@ -2,6 +2,7 @@
 members = [
     "apps/desktop/src-tauri",
     "crates/magies-core-runtime",
+    "crates/magies-domain",
     "crates/magies-platform",
 ]
 resolver = "2"
