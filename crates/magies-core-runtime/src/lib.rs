@@ -2,6 +2,7 @@
 
 mod adapter;
 mod binary;
+mod output;
 mod sing_box;
 mod xray;
 
@@ -10,7 +11,7 @@ use std::ffi::OsString;
 use std::fmt::{Display, Formatter};
 use std::io;
 use std::path::PathBuf;
-use std::process::{Child, Command, ExitStatus};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -18,6 +19,7 @@ pub use binary::{
     CoreBinaryError, CoreBinaryFormat, CoreBinaryRequirement, Sha256Hash, ValidatedCoreBinary,
     locate_core_binary,
 };
+pub use output::{CoreOutput, CoreOutputEvent, CoreOutputStream};
 pub use sing_box::{
     SingBoxAdapter, SingBoxAdapterError, SingBoxOperation, SingBoxVersion, ValidatedSingBoxConfig,
 };
@@ -76,6 +78,12 @@ pub enum CoreRuntimeError {
         executable: PathBuf,
         source: io::Error,
     },
+    OutputPipeUnavailable(CoreOutputStream),
+    OutputReaderSpawnFailed {
+        stream: CoreOutputStream,
+        source: io::Error,
+    },
+    OutputReaderPanicked(CoreOutputStream),
     PollFailed(io::Error),
     TerminateFailed(io::Error),
     WaitFailed(io::Error),
@@ -99,6 +107,18 @@ impl Display for CoreRuntimeError {
                     executable.display()
                 )
             }
+            Self::OutputPipeUnavailable(stream) => {
+                write!(formatter, "Core {stream:?} pipe is unavailable")
+            }
+            Self::OutputReaderSpawnFailed { stream, source } => {
+                write!(
+                    formatter,
+                    "failed to start Core {stream:?} reader: {source}"
+                )
+            }
+            Self::OutputReaderPanicked(stream) => {
+                write!(formatter, "Core {stream:?} reader panicked")
+            }
             Self::PollFailed(source) => write!(formatter, "failed to poll core process: {source}"),
             Self::TerminateFailed(source) => {
                 write!(formatter, "failed to terminate core process: {source}")
@@ -118,16 +138,22 @@ impl Error for CoreRuntimeError {
         match self {
             Self::BinaryValidationFailed(source) => Some(source),
             Self::SpawnFailed { source, .. }
+            | Self::OutputReaderSpawnFailed { source, .. }
             | Self::PollFailed(source)
             | Self::TerminateFailed(source)
             | Self::WaitFailed(source) => Some(source),
-            Self::AlreadyRunning | Self::NotRunning | Self::WaitTimedOut { .. } => None,
+            Self::AlreadyRunning
+            | Self::NotRunning
+            | Self::OutputPipeUnavailable(_)
+            | Self::OutputReaderPanicked(_)
+            | Self::WaitTimedOut { .. } => None,
         }
     }
 }
 
 pub struct CoreRuntime {
     child: Option<Child>,
+    output_readers: Vec<output::CoreOutputReader>,
     state: CoreState,
 }
 
@@ -135,6 +161,7 @@ impl Default for CoreRuntime {
     fn default() -> Self {
         Self {
             child: None,
+            output_readers: Vec::new(),
             state: CoreState::Stopped,
         }
     }
@@ -148,7 +175,7 @@ impl CoreRuntime {
     /// Returns a typed error when another Core is running, the previous process
     /// cannot be polled, the validated binary changed, or the executable cannot
     /// be started.
-    pub fn start(&mut self, spec: &CoreProcessSpec) -> Result<(), CoreRuntimeError> {
+    pub fn start(&mut self, spec: &CoreProcessSpec) -> Result<CoreOutput, CoreRuntimeError> {
         if self.poll()? == CoreState::Running {
             return Err(CoreRuntimeError::AlreadyRunning);
         }
@@ -157,17 +184,51 @@ impl CoreRuntime {
             .binary
             .revalidate()
             .map_err(CoreRuntimeError::BinaryValidationFailed)?;
-        let child = Command::new(binary.path())
+        let mut child = Command::new(binary.path())
             .args(&spec.arguments)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|source| CoreRuntimeError::SpawnFailed {
                 executable: binary.path().to_path_buf(),
                 source,
             })?;
+        let stdout = child.stdout.take().ok_or_else(|| {
+            cleanup_started_child(&mut child, Vec::new());
+            CoreRuntimeError::OutputPipeUnavailable(CoreOutputStream::Stdout)
+        })?;
+        let stderr = child.stderr.take().ok_or_else(|| {
+            cleanup_started_child(&mut child, Vec::new());
+            CoreRuntimeError::OutputPipeUnavailable(CoreOutputStream::Stderr)
+        })?;
+        let (sender, output) = output::output_channel();
+        let stdout_reader =
+            output::spawn_output_reader(CoreOutputStream::Stdout, stdout, sender.clone()).map_err(
+                |source| {
+                    cleanup_started_child(&mut child, Vec::new());
+                    CoreRuntimeError::OutputReaderSpawnFailed {
+                        stream: CoreOutputStream::Stdout,
+                        source,
+                    }
+                },
+            )?;
+        let stderr_reader =
+            match output::spawn_output_reader(CoreOutputStream::Stderr, stderr, sender) {
+                Ok(reader) => reader,
+                Err(source) => {
+                    cleanup_started_child(&mut child, vec![stdout_reader]);
+                    return Err(CoreRuntimeError::OutputReaderSpawnFailed {
+                        stream: CoreOutputStream::Stderr,
+                        source,
+                    });
+                }
+            };
         self.child = Some(child);
+        self.output_readers = vec![stdout_reader, stderr_reader];
         self.state = CoreState::Running;
 
-        Ok(())
+        Ok(output)
     }
 
     /// Returns the current process state without blocking.
@@ -186,6 +247,7 @@ impl CoreRuntime {
             Some(status) => {
                 self.child = None;
                 self.state = CoreState::Exited(status.into());
+                self.join_output_readers()?;
             }
         }
 
@@ -240,22 +302,53 @@ impl CoreRuntime {
             return Err(CoreRuntimeError::WaitFailed(source));
         }
         self.state = CoreState::Stopped;
+        self.join_output_readers()?;
 
         Ok(())
+    }
+
+    fn join_output_readers(&mut self) -> Result<(), CoreRuntimeError> {
+        let mut failed_stream = None;
+        for reader in std::mem::take(&mut self.output_readers) {
+            let result = reader.join();
+            if failed_stream.is_none() {
+                failed_stream = result.err();
+            }
+        }
+        failed_stream.map_or(Ok(()), |stream| {
+            Err(CoreRuntimeError::OutputReaderPanicked(stream))
+        })
     }
 }
 
 impl Drop for CoreRuntime {
     fn drop(&mut self) {
-        let Some(mut child) = self.child.take() else {
-            return;
-        };
-
-        if let Err(error) = child.kill() {
-            report_drop_error("terminate", child.id(), &error);
+        if let Some(mut child) = self.child.take() {
+            if let Err(error) = child.kill() {
+                report_drop_error("terminate", child.id(), &error);
+            }
+            if let Err(error) = child.wait() {
+                report_drop_error("reap", child.id(), &error);
+            }
         }
-        if let Err(error) = child.wait() {
-            report_drop_error("reap", child.id(), &error);
+        for reader in std::mem::take(&mut self.output_readers) {
+            if let Err(stream) = reader.join() {
+                eprintln!("Core {stream:?} reader panicked during cleanup");
+            }
+        }
+    }
+}
+
+fn cleanup_started_child(child: &mut Child, readers: Vec<output::CoreOutputReader>) {
+    if let Err(error) = child.kill() {
+        report_drop_error("terminate after output setup failure", child.id(), &error);
+    }
+    if let Err(error) = child.wait() {
+        report_drop_error("reap after output setup failure", child.id(), &error);
+    }
+    for reader in readers {
+        if let Err(stream) = reader.join() {
+            eprintln!("Core {stream:?} reader panicked during failed output setup cleanup");
         }
     }
 }

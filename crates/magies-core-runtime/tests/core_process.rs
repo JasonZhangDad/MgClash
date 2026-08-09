@@ -1,17 +1,19 @@
 use std::env::current_exe;
 use std::error::Error;
 use std::fs::{copy, read, remove_file, write};
-use std::io;
+use std::io::{self, Write};
 use std::path::PathBuf;
+use std::sync::mpsc::RecvTimeoutError;
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 use magies_core_runtime::{
-    CoreBinaryError, CoreBinaryRequirement, CoreExit, CoreProcessSpec, CoreRuntime,
-    CoreRuntimeError, CoreState, Sha256Hash, ValidatedCoreBinary, locate_core_binary,
+    CoreBinaryError, CoreBinaryRequirement, CoreExit, CoreOutputEvent, CoreOutputStream,
+    CoreProcessSpec, CoreRuntime, CoreRuntimeError, CoreState, Sha256Hash, ValidatedCoreBinary,
+    locate_core_binary,
 };
 use magies_platform::CpuArchitecture;
 
@@ -64,6 +66,89 @@ fn starts_reports_health_and_stops_a_core_process() {
     runtime.start(&spec).unwrap();
     assert_eq!(runtime.poll().unwrap(), CoreState::Running);
     runtime.stop().unwrap();
+}
+
+#[test]
+fn streams_raw_stdout_and_stderr_while_the_core_is_running() {
+    let mut runtime = CoreRuntime::default();
+    let spec = helper_process_spec("helper_core_writes_output_then_runs");
+
+    let output = runtime.start(&spec).unwrap();
+    let deadline = Instant::now() + TEST_TIMEOUT;
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    while !contains_bytes(&stdout, b"stdout:\xff\n") || !contains_bytes(&stderr, b"stderr:\xfe\n") {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(!remaining.is_zero(), "timed out waiting for Core output");
+        match output.recv_timeout(remaining).unwrap() {
+            CoreOutputEvent::Chunk { stream, bytes } => match stream {
+                CoreOutputStream::Stdout => stdout.extend(bytes),
+                CoreOutputStream::Stderr => stderr.extend(bytes),
+            },
+            CoreOutputEvent::ReadFailed { stream, source } => {
+                panic!("failed to read {stream:?}: {source}")
+            }
+        }
+    }
+
+    assert_eq!(runtime.poll().unwrap(), CoreState::Running);
+    runtime.stop().unwrap();
+}
+
+#[test]
+fn closes_the_output_stream_after_a_natural_exit() {
+    let mut runtime = CoreRuntime::default();
+    let spec = helper_process_spec("helper_core_writes_output_then_exits");
+
+    let output = runtime.start(&spec).unwrap();
+    assert_eq!(
+        runtime.wait_for_exit(TEST_TIMEOUT).unwrap(),
+        CoreExit {
+            success: true,
+            code: Some(0),
+        }
+    );
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    loop {
+        match output.recv_timeout(TEST_TIMEOUT) {
+            Ok(CoreOutputEvent::Chunk { stream, bytes }) => match stream {
+                CoreOutputStream::Stdout => stdout.extend(bytes),
+                CoreOutputStream::Stderr => stderr.extend(bytes),
+            },
+            Ok(CoreOutputEvent::ReadFailed { stream, source }) => {
+                panic!("failed to read {stream:?}: {source}")
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+            Err(RecvTimeoutError::Timeout) => panic!("Core output stream remained open"),
+        }
+    }
+
+    assert!(contains_bytes(&stdout, b"finished stdout\n"));
+    assert!(contains_bytes(&stderr, b"finished stderr\n"));
+}
+
+#[test]
+fn keeps_draining_output_after_the_receiver_is_dropped() {
+    let mut runtime = CoreRuntime::default();
+    let spec = helper_process_spec("helper_core_writes_large_output_then_exits");
+
+    drop(runtime.start(&spec).unwrap());
+
+    assert_eq!(
+        runtime.wait_for_exit(TEST_TIMEOUT).unwrap(),
+        CoreExit {
+            success: true,
+            code: Some(0),
+        }
+    );
+}
+
+fn contains_bytes(contents: &[u8], expected: &[u8]) -> bool {
+    contents
+        .windows(expected.len())
+        .any(|window| window == expected)
 }
 
 #[test]
@@ -212,6 +297,24 @@ fn exposes_actionable_messages_and_sources_for_typed_errors() {
             true,
         ),
         (
+            CoreRuntimeError::OutputReaderSpawnFailed {
+                stream: CoreOutputStream::Stdout,
+                source: io::Error::other("reader spawn"),
+            },
+            "failed to start Core Stdout reader: reader spawn",
+            true,
+        ),
+        (
+            CoreRuntimeError::OutputPipeUnavailable(CoreOutputStream::Stdout),
+            "Core Stdout pipe is unavailable",
+            false,
+        ),
+        (
+            CoreRuntimeError::OutputReaderPanicked(CoreOutputStream::Stderr),
+            "Core Stderr reader panicked",
+            false,
+        ),
+        (
             CoreRuntimeError::PollFailed(io::Error::other("poll")),
             "failed to poll core process: poll",
             true,
@@ -260,3 +363,28 @@ fn helper_core_runs_until_stopped() {
 #[test]
 #[ignore = "spawned by lifecycle tests as a short-lived fake core"]
 fn helper_core_exits_immediately() {}
+
+#[test]
+#[ignore = "spawned by output tests as a long-running fake core"]
+fn helper_core_writes_output_then_runs() {
+    io::stdout().write_all(b"stdout:\xff\n").unwrap();
+    io::stdout().flush().unwrap();
+    io::stderr().write_all(b"stderr:\xfe\n").unwrap();
+    io::stderr().flush().unwrap();
+    sleep(Duration::from_secs(60));
+}
+
+#[test]
+#[ignore = "spawned by output tests as a short-lived fake core"]
+fn helper_core_writes_output_then_exits() {
+    io::stdout().write_all(b"finished stdout\n").unwrap();
+    io::stderr().write_all(b"finished stderr\n").unwrap();
+}
+
+#[test]
+#[ignore = "spawned by output tests as a high-output fake core"]
+fn helper_core_writes_large_output_then_exits() {
+    let output = vec![b'x'; 1024 * 1024];
+    io::stdout().write_all(&output).unwrap();
+    io::stderr().write_all(&output).unwrap();
+}
