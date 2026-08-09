@@ -2,6 +2,7 @@
 
 mod adapter;
 mod binary;
+mod health;
 mod output;
 mod sing_box;
 mod xray;
@@ -19,6 +20,7 @@ pub use binary::{
     CoreBinaryError, CoreBinaryFormat, CoreBinaryRequirement, Sha256Hash, ValidatedCoreBinary,
     locate_core_binary,
 };
+pub use health::{CoreHealth, CoreHealthError};
 pub use output::{CoreOutput, CoreOutputEvent, CoreOutputStream};
 pub use sing_box::{
     SingBoxAdapter, SingBoxAdapterError, SingBoxOperation, SingBoxVersion, ValidatedSingBoxConfig,
