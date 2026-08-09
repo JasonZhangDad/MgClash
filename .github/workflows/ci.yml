@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 jobs:
-  rust:
-    name: Rust (${{ matrix.target }})
+  desktop:
+    name: Desktop (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -27,6 +27,30 @@ jobs:
             runner: ubuntu-22.04
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+          node-version: 22.17.1
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+      - name: Test frontend
+        working-directory: apps/desktop
+        run: npm test
+      - name: Build frontend
+        working-directory: apps/desktop
+        run: npm run build
       - name: Show compiler target
         run: rustc --version --verbose
       - name: Test workspace
@@ -35,15 +59,18 @@ jobs:
         run: cargo fmt --all --check
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
-
-  coverage:
-    name: Coverage
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v6
-      - name: Install coverage tooling
+      - name: Check frontend coverage
+        if: runner.os == 'Linux'
+        working-directory: apps/desktop
+        run: npm run test:coverage
+      - name: Install Rust coverage tooling
+        if: runner.os == 'Linux'
         run: |
           rustup component add llvm-tools-preview
           cargo install cargo-llvm-cov --version 0.8.7 --locked
       - name: Enforce 80% line coverage
+        if: runner.os == 'Linux'
         run: cargo llvm-cov --workspace --locked --fail-under-lines 80
+      - name: Build unsigned desktop binary
+        working-directory: apps/desktop
+        run: npm run tauri -- build --no-bundle

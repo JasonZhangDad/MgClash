@@ -17,6 +17,11 @@ the documents conflict, V1.1 takes precedence.
 cargo test --workspace
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
+
+cd apps/desktop
+npm ci
+npm test
+npm run tauri -- build --no-bundle
 ```
 
 Release artifacts are intentionally unsigned during the current development
