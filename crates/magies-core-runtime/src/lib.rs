@@ -1,6 +1,8 @@
 //! Proxy core process lifecycle.
 
+mod adapter;
 mod binary;
+mod sing_box;
 mod xray;
 
 use std::error::Error;
@@ -15,6 +17,9 @@ use std::time::{Duration, Instant};
 pub use binary::{
     CoreBinaryError, CoreBinaryFormat, CoreBinaryRequirement, Sha256Hash, ValidatedCoreBinary,
     locate_core_binary,
+};
+pub use sing_box::{
+    SingBoxAdapter, SingBoxAdapterError, SingBoxOperation, SingBoxVersion, ValidatedSingBoxConfig,
 };
 pub use xray::{ValidatedXrayConfig, XrayAdapter, XrayAdapterError, XrayOperation, XrayVersion};
 

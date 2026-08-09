@@ -1,16 +1,15 @@
-use std::fs::{canonicalize, copy, create_dir, read, remove_dir, remove_file, write};
+mod common;
+
+use std::fs::canonicalize;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use magies_core_runtime::{
-    CoreBinaryRequirement, CoreRuntime, CoreState, Sha256Hash, ValidatedCoreBinary, XrayAdapter,
-    XrayAdapterError, XrayOperation, locate_core_binary,
+    CoreRuntime, CoreState, ValidatedCoreBinary, XrayAdapter, XrayAdapterError, XrayOperation,
 };
-use magies_platform::CpuArchitecture;
 
-static TEMPORARY_PATH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+use common::{TemporaryPath, compile_fixture, unique_temporary_path, validated_binary};
+
 static FAKE_XRAY: OnceLock<PathBuf> = OnceLock::new();
 
 #[test]
@@ -110,111 +109,6 @@ fn validated_fake_xray() -> ValidatedCoreBinary {
     validated_binary(fake_xray_path())
 }
 
-fn validated_binary(path: &Path) -> ValidatedCoreBinary {
-    let contents = read(path).expect("the fake Xray executable must be readable");
-    locate_core_binary(
-        path,
-        CoreBinaryRequirement::new(build_architecture(), Sha256Hash::digest(&contents)),
-    )
-    .unwrap()
-}
-
 fn fake_xray_path() -> &'static Path {
-    FAKE_XRAY.get_or_init(|| {
-        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures")
-            .join("fake_xray.rs");
-        let output = unique_temporary_path(&format!(
-            "compiled-fake-xray{}",
-            std::env::consts::EXE_SUFFIX
-        ));
-        let status = Command::new("rustc")
-            .args(["--edition=2024"])
-            .arg(source)
-            .arg("-o")
-            .arg(&output)
-            .status()
-            .expect("rustc must be available to compile the fake Xray fixture");
-        assert!(status.success(), "fake Xray fixture must compile");
-        output
-    })
-}
-
-fn build_architecture() -> CpuArchitecture {
-    match std::env::consts::ARCH {
-        "x86_64" => CpuArchitecture::X86_64,
-        "aarch64" => CpuArchitecture::Aarch64,
-        architecture => panic!("unsupported test architecture: {architecture}"),
-    }
-}
-
-fn unique_temporary_path(name: &str) -> PathBuf {
-    let sequence = TEMPORARY_PATH_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
-        "magies-xray-adapter-{}-{sequence}-{name}",
-        std::process::id()
-    ))
-}
-
-struct TemporaryPath {
-    path: PathBuf,
-    is_directory: bool,
-}
-
-impl TemporaryPath {
-    fn file(name: &str, contents: &[u8]) -> Self {
-        let path = unique_temporary_path(name);
-        write(&path, contents).unwrap();
-        Self {
-            path,
-            is_directory: false,
-        }
-    }
-
-    fn copy_of(name: &str, source: &Path) -> Self {
-        let path = unique_temporary_path(&format!("{name}{}", std::env::consts::EXE_SUFFIX));
-        copy(source, &path).unwrap();
-        Self {
-            path,
-            is_directory: false,
-        }
-    }
-
-    fn directory(name: &str) -> Self {
-        let path = unique_temporary_path(name);
-        create_dir(&path).unwrap();
-        Self {
-            path,
-            is_directory: true,
-        }
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-
-    fn remove(mut self) {
-        remove_file(&self.path).unwrap();
-        self.path = PathBuf::new();
-    }
-}
-
-impl Drop for TemporaryPath {
-    fn drop(&mut self) {
-        if self.path.as_os_str().is_empty() {
-            return;
-        }
-        let result = if self.is_directory {
-            remove_dir(&self.path)
-        } else {
-            remove_file(&self.path)
-        };
-        if let Err(error) = result {
-            eprintln!(
-                "failed to remove test path {}: {error}",
-                self.path.display()
-            );
-        }
-    }
+    FAKE_XRAY.get_or_init(|| compile_fixture("fake_xray.rs", "compiled-fake-xray"))
 }
