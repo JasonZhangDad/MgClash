@@ -88,6 +88,13 @@ impl ValidatedCoreBinary {
     pub const fn sha256(&self) -> Sha256Hash {
         self.sha256
     }
+
+    pub(crate) fn revalidate(&self) -> Result<Self, CoreBinaryError> {
+        locate_core_binary(
+            &self.path,
+            CoreBinaryRequirement::new(self.architecture, self.sha256),
+        )
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
