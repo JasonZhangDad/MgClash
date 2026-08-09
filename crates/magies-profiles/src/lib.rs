@@ -1,5 +1,9 @@
 //! Node import and profile services for `MgClash`.
 
+mod vmess;
+
+pub use vmess::{ParsedVmessNode, VmessCredential, VmessParseError, VmessParser, VmessSecurity};
+
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::num::NonZeroU16;
@@ -28,6 +32,14 @@ impl VlessParser {
     /// Returns a typed error when the URI is malformed, repeats or contains an
     /// unsupported parameter, or cannot be represented by the shared model.
     pub fn parse(&self, value: &str) -> Result<ParsedVlessNode, VlessParseError> {
+        self.parse_with_default_encryption(value, "none")
+    }
+
+    pub(crate) fn parse_with_default_encryption(
+        self,
+        value: &str,
+        default_encryption: &str,
+    ) -> Result<ParsedVlessNode, VlessParseError> {
         let value = value.trim();
         if !self.can_parse(value) {
             return Err(VlessParseError::UnsupportedScheme);
@@ -55,7 +67,7 @@ impl VlessParser {
         let mut parameters = QueryParameters::parse(&url)?;
         let encryption = parameters
             .take_non_empty("encryption")?
-            .unwrap_or_else(|| "none".to_owned());
+            .unwrap_or_else(|| default_encryption.to_owned());
         let flow = parameters.take("flow");
         let transport = parse_transport(&mut parameters)?;
         let tls = parse_tls(&mut parameters, &server)?;

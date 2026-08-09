@@ -7,8 +7,11 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+base64 = "0.22"
 magies-domain = { path = "../magies-domain" }
 percent-encoding = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 thiserror = "2"
 url = "2"
 uuid = "1"
