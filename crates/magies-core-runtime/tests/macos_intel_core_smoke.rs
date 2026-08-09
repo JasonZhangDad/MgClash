@@ -7,7 +7,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use magies_core_runtime::{
-    CoreBinaryRequirement, CoreProcessSpec, CoreRuntime, CoreState, Sha256Hash,
+    CoreBinaryRequirement, CoreProcessSpec, CoreRuntime, CoreState, Sha256Hash, SingBoxAdapter,
     ValidatedCoreBinary, XrayAdapter, locate_core_binary,
 };
 use magies_platform::CpuArchitecture;
@@ -32,18 +32,13 @@ fn xray_starts_a_local_http_listener_and_stops() {
 #[test]
 #[ignore = "requires MAGIES_SING_BOX_BIN pointing to an official macOS Intel binary"]
 fn sing_box_starts_a_local_mixed_listener_and_stops() {
-    let binary = validated_binary("MAGIES_SING_BOX_BIN", SING_BOX_SHA256);
-    run_listener_smoke(
-        &CoreProcessSpec::new(
-            &binary,
-            [
-                "run",
-                "-c",
-                fixture("sing-box-local-mixed.json").to_str().unwrap(),
-            ],
-        ),
-        18_981,
-    );
+    let adapter = SingBoxAdapter::new(validated_binary("MAGIES_SING_BOX_BIN", SING_BOX_SHA256));
+    assert_eq!(adapter.version().unwrap().as_str(), "1.13.18");
+    let config = adapter
+        .validate_config(fixture("sing-box-local-mixed.json"))
+        .unwrap();
+
+    run_listener_smoke(&adapter.process_spec(&config), 18_981);
 }
 
 fn run_listener_smoke(spec: &CoreProcessSpec, port: u16) {

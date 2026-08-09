@@ -7,44 +7,44 @@ use crate::adapter::{CoreConfigPathError, execute_core_command, resolve_config_p
 use crate::{CoreProcessSpec, ValidatedCoreBinary};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum XrayOperation {
+pub enum SingBoxOperation {
     ReadVersion,
     ValidateConfig,
 }
 
-impl std::fmt::Display for XrayOperation {
+impl std::fmt::Display for SingBoxOperation {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ReadVersion => formatter.write_str("read Xray version"),
-            Self::ValidateConfig => formatter.write_str("validate Xray config"),
+            Self::ReadVersion => formatter.write_str("read sing-box version"),
+            Self::ValidateConfig => formatter.write_str("validate sing-box config"),
         }
     }
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum XrayAdapterError {
-    #[error("Xray config not found: {path:?}")]
+pub enum SingBoxAdapterError {
+    #[error("sing-box config not found: {path:?}")]
     ConfigNotFound { path: PathBuf },
-    #[error("failed to resolve Xray config {path:?}: {source}")]
+    #[error("failed to resolve sing-box config {path:?}: {source}")]
     ConfigResolveFailed { path: PathBuf, source: io::Error },
-    #[error("Xray config is not a file: {path:?}")]
+    #[error("sing-box config is not a file: {path:?}")]
     ConfigNotAFile { path: PathBuf },
     #[error("failed to {operation}: {source}")]
     CommandStartFailed {
-        operation: XrayOperation,
+        operation: SingBoxOperation,
         source: io::Error,
     },
     #[error("failed to {operation} (exit code {status:?}): {stderr}")]
     CommandFailed {
-        operation: XrayOperation,
+        operation: SingBoxOperation,
         status: Option<i32>,
         stderr: String,
     },
-    #[error("invalid Xray version output: {stdout:?}")]
+    #[error("invalid sing-box version output: {stdout:?}")]
     InvalidVersionOutput { stdout: String },
 }
 
-impl From<CoreConfigPathError> for XrayAdapterError {
+impl From<CoreConfigPathError> for SingBoxAdapterError {
     fn from(error: CoreConfigPathError) -> Self {
         match error {
             CoreConfigPathError::NotFound { path } => Self::ConfigNotFound { path },
@@ -57,9 +57,9 @@ impl From<CoreConfigPathError> for XrayAdapterError {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct XrayVersion(String);
+pub struct SingBoxVersion(String);
 
-impl XrayVersion {
+impl SingBoxVersion {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -67,9 +67,9 @@ impl XrayVersion {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ValidatedXrayConfig(PathBuf);
+pub struct ValidatedSingBoxConfig(PathBuf);
 
-impl ValidatedXrayConfig {
+impl ValidatedSingBoxConfig {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.0
@@ -77,61 +77,60 @@ impl ValidatedXrayConfig {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct XrayAdapter {
+pub struct SingBoxAdapter {
     binary: ValidatedCoreBinary,
 }
 
-impl XrayAdapter {
+impl SingBoxAdapter {
     #[must_use]
     pub const fn new(binary: ValidatedCoreBinary) -> Self {
         Self { binary }
     }
 
-    /// Reads and parses the version reported by the validated Xray binary.
+    /// Reads and parses the version reported by the validated sing-box binary.
     ///
     /// # Errors
     ///
-    /// Returns a typed error when Xray cannot be started, exits unsuccessfully,
-    /// or does not report an Xray version.
-    pub fn version(&self) -> Result<XrayVersion, XrayAdapterError> {
-        let output = self.execute(XrayOperation::ReadVersion, ["version"])?;
+    /// Returns a typed error when sing-box cannot be started, exits
+    /// unsuccessfully, or does not report a sing-box version.
+    pub fn version(&self) -> Result<SingBoxVersion, SingBoxAdapterError> {
+        let output = self.execute(SingBoxOperation::ReadVersion, ["version"])?;
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         let version = stdout
             .lines()
-            .find_map(|line| line.strip_prefix("Xray "))
+            .find_map(|line| line.strip_prefix("sing-box version "))
             .and_then(|line| line.split_whitespace().next())
             .filter(|version| !version.is_empty())
-            .ok_or_else(|| XrayAdapterError::InvalidVersionOutput {
+            .ok_or_else(|| SingBoxAdapterError::InvalidVersionOutput {
                 stdout: stdout.clone(),
             })?;
-        Ok(XrayVersion(version.to_owned()))
+        Ok(SingBoxVersion(version.to_owned()))
     }
 
-    /// Resolves a config file and asks Xray to validate it without starting.
+    /// Resolves a config file and asks sing-box to validate it without starting.
     ///
     /// # Errors
     ///
-    /// Returns a typed error when the path is invalid, Xray cannot be started,
-    /// or Xray rejects the config.
+    /// Returns a typed error when the path is invalid, sing-box cannot be
+    /// started, or sing-box rejects the config.
     pub fn validate_config(
         &self,
         configured_path: impl AsRef<Path>,
-    ) -> Result<ValidatedXrayConfig, XrayAdapterError> {
+    ) -> Result<ValidatedSingBoxConfig, SingBoxAdapterError> {
         let path = resolve_config_path(configured_path)?;
         self.execute(
-            XrayOperation::ValidateConfig,
+            SingBoxOperation::ValidateConfig,
             [
-                OsString::from("run"),
-                OsString::from("-test"),
+                OsString::from("check"),
                 OsString::from("-c"),
                 path.as_os_str().to_owned(),
             ],
         )?;
-        Ok(ValidatedXrayConfig(path))
+        Ok(ValidatedSingBoxConfig(path))
     }
 
     #[must_use]
-    pub fn process_spec(&self, config: &ValidatedXrayConfig) -> CoreProcessSpec {
+    pub fn process_spec(&self, config: &ValidatedSingBoxConfig) -> CoreProcessSpec {
         CoreProcessSpec::new(
             &self.binary,
             [
@@ -144,17 +143,17 @@ impl XrayAdapter {
 
     fn execute<I, A>(
         &self,
-        operation: XrayOperation,
+        operation: SingBoxOperation,
         arguments: I,
-    ) -> Result<Output, XrayAdapterError>
+    ) -> Result<Output, SingBoxAdapterError>
     where
         I: IntoIterator<Item = A>,
         A: AsRef<std::ffi::OsStr>,
     {
         let output = execute_core_command(&self.binary, arguments)
-            .map_err(|source| XrayAdapterError::CommandStartFailed { operation, source })?;
+            .map_err(|source| SingBoxAdapterError::CommandStartFailed { operation, source })?;
         if !output.status.success() {
-            return Err(XrayAdapterError::CommandFailed {
+            return Err(SingBoxAdapterError::CommandFailed {
                 operation,
                 status: output.status.code(),
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
