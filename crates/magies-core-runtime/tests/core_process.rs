@@ -1,14 +1,17 @@
 use std::env::current_exe;
 use std::error::Error;
-use std::fs::{copy, read, remove_file};
+use std::fs::{copy, read, remove_file, write};
 use std::io;
 use std::path::PathBuf;
 use std::thread::sleep;
 use std::time::Duration;
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use magies_core_runtime::{
-    CoreBinaryRequirement, CoreExit, CoreProcessSpec, CoreRuntime, CoreRuntimeError, CoreState,
-    Sha256Hash, ValidatedCoreBinary, locate_core_binary,
+    CoreBinaryError, CoreBinaryRequirement, CoreExit, CoreProcessSpec, CoreRuntime,
+    CoreRuntimeError, CoreState, Sha256Hash, ValidatedCoreBinary, locate_core_binary,
 };
 use magies_platform::CpuArchitecture;
 
@@ -57,6 +60,10 @@ fn starts_reports_health_and_stops_a_core_process() {
         runtime.wait_for_exit(TEST_TIMEOUT),
         Err(CoreRuntimeError::NotRunning)
     ));
+
+    runtime.start(&spec).unwrap();
+    assert_eq!(runtime.poll().unwrap(), CoreState::Running);
+    runtime.stop().unwrap();
 }
 
 #[test]
@@ -99,7 +106,7 @@ fn returns_a_typed_timeout_while_the_core_is_still_running() {
 }
 
 #[test]
-fn preserves_stopped_state_when_spawning_fails() {
+fn refuses_a_validated_core_binary_deleted_before_startup() {
     let mut runtime = CoreRuntime::default();
     let source = current_exe().unwrap();
     let missing_executable = std::env::temp_dir().join(format!(
@@ -116,10 +123,64 @@ fn preserves_stopped_state_when_spawning_fails() {
 
     assert!(matches!(
         error,
+        CoreRuntimeError::BinaryValidationFailed(CoreBinaryError::NotFound { path })
+            if path == resolved_executable
+    ));
+    assert_eq!(runtime.poll().unwrap(), CoreState::Stopped);
+}
+
+#[cfg(unix)]
+#[test]
+fn preserves_stopped_state_when_spawning_fails() {
+    let source = current_exe().unwrap();
+    let executable =
+        std::env::temp_dir().join(format!("non-executable-magies-core-{}", std::process::id()));
+    copy(&source, &executable).unwrap();
+    let binary = validated_binary(&executable);
+    let resolved_executable = binary.path().to_path_buf();
+    let spec = CoreProcessSpec::new(&binary, std::iter::empty::<&str>());
+    let mut permissions = executable.metadata().unwrap().permissions();
+    permissions.set_mode(0o600);
+    std::fs::set_permissions(&executable, permissions).unwrap();
+    let mut runtime = CoreRuntime::default();
+
+    let error = runtime.start(&spec).unwrap_err();
+
+    assert!(matches!(
+        error,
         CoreRuntimeError::SpawnFailed { executable, .. }
             if executable == resolved_executable
     ));
     assert_eq!(runtime.poll().unwrap(), CoreState::Stopped);
+    remove_file(executable).unwrap();
+}
+
+#[test]
+fn refuses_a_core_binary_changed_after_the_process_spec_was_created() {
+    let source = current_exe().unwrap();
+    let executable = std::env::temp_dir().join(format!(
+        "changed-magies-core-{}{}",
+        std::process::id(),
+        std::env::consts::EXE_SUFFIX
+    ));
+    copy(&source, &executable).unwrap();
+    let binary = validated_binary(&executable);
+    let resolved_executable = binary.path().to_path_buf();
+    let spec = CoreProcessSpec::new(&binary, std::iter::empty::<&str>());
+    let mut contents = read(&executable).unwrap();
+    *contents.last_mut().unwrap() ^= 0xff;
+    write(&executable, contents).unwrap();
+    let mut runtime = CoreRuntime::default();
+
+    let error = runtime.start(&spec).unwrap_err();
+
+    assert!(matches!(
+        error,
+        CoreRuntimeError::BinaryValidationFailed(CoreBinaryError::HashMismatch { path, .. })
+            if path == resolved_executable
+    ));
+    assert_eq!(runtime.poll().unwrap(), CoreState::Stopped);
+    remove_file(executable).unwrap();
 }
 
 #[test]
@@ -134,6 +195,13 @@ fn exposes_actionable_messages_and_sources_for_typed_errors() {
             CoreRuntimeError::NotRunning,
             "core process is not running",
             false,
+        ),
+        (
+            CoreRuntimeError::BinaryValidationFailed(CoreBinaryError::NotFound {
+                path: PathBuf::from("xray"),
+            }),
+            "Core binary failed launch validation: Core binary not found: \"xray\"",
+            true,
         ),
         (
             CoreRuntimeError::SpawnFailed {

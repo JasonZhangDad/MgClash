@@ -27,7 +27,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CoreProcessSpec {
-    executable: PathBuf,
+    binary: ValidatedCoreBinary,
     arguments: Vec<OsString>,
 }
 
@@ -39,7 +39,7 @@ impl CoreProcessSpec {
         A: Into<OsString>,
     {
         Self {
-            executable: binary.path().to_path_buf(),
+            binary: binary.clone(),
             arguments: arguments.into_iter().map(Into::into).collect(),
         }
     }
@@ -71,6 +71,7 @@ pub enum CoreState {
 pub enum CoreRuntimeError {
     AlreadyRunning,
     NotRunning,
+    BinaryValidationFailed(CoreBinaryError),
     SpawnFailed {
         executable: PathBuf,
         source: io::Error,
@@ -88,6 +89,9 @@ impl Display for CoreRuntimeError {
         match self {
             Self::AlreadyRunning => formatter.write_str("core process is already running"),
             Self::NotRunning => formatter.write_str("core process is not running"),
+            Self::BinaryValidationFailed(source) => {
+                write!(formatter, "Core binary failed launch validation: {source}")
+            }
             Self::SpawnFailed { executable, source } => {
                 write!(
                     formatter,
@@ -112,6 +116,7 @@ impl Display for CoreRuntimeError {
 impl Error for CoreRuntimeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::BinaryValidationFailed(source) => Some(source),
             Self::SpawnFailed { source, .. }
             | Self::PollFailed(source)
             | Self::TerminateFailed(source)
@@ -141,17 +146,22 @@ impl CoreRuntime {
     /// # Errors
     ///
     /// Returns a typed error when another Core is running, the previous process
-    /// cannot be polled, or the executable cannot be started.
+    /// cannot be polled, the validated binary changed, or the executable cannot
+    /// be started.
     pub fn start(&mut self, spec: &CoreProcessSpec) -> Result<(), CoreRuntimeError> {
         if self.poll()? == CoreState::Running {
             return Err(CoreRuntimeError::AlreadyRunning);
         }
 
-        let child = Command::new(&spec.executable)
+        let binary = spec
+            .binary
+            .revalidate()
+            .map_err(CoreRuntimeError::BinaryValidationFailed)?;
+        let child = Command::new(binary.path())
             .args(&spec.arguments)
             .spawn()
             .map_err(|source| CoreRuntimeError::SpawnFailed {
-                executable: spec.executable.clone(),
+                executable: binary.path().to_path_buf(),
                 source,
             })?;
         self.child = Some(child);
