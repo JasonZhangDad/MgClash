@@ -1,0 +1,28 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "MgClash",
+  "version": "0.1.0",
+  "identifier": "com.magies.mgclash",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "MgClash",
+        "width": 720,
+        "height": 480,
+        "minWidth": 560,
+        "minHeight": 360
+      }
+    ]
+  },
+  "bundle": {
+    "active": false,
+    "icon": ["icons/512x512.png"]
+  }
+}

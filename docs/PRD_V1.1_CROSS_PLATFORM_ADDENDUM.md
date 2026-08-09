@@ -140,11 +140,11 @@ GitHub 当前将 `macos-15-intel` 列为 x64 runner。该托管 Intel runner 已
 
 ### Phase 0A — 跨平台基础
 
-- [ ] CP01 独立仓库、workspace、格式化与静态检查；
-- [ ] CP02 目标平台/CPU 识别与 typed error；
-- [ ] CP03 三端 CI 矩阵，Intel job 不允许降级为 arm64；
-- [ ] CP04 unsigned 构建能力开关；
-- [ ] CP05 Tauri 最小窗口与 Rust command smoke test。
+- [x] CP01 独立仓库、workspace、格式化与静态检查；
+- [x] CP02 目标平台/CPU 识别与 typed error；
+- [x] CP03 三端 CI 矩阵，Intel job 不允许降级为 arm64；
+- [x] CP04 unsigned 构建能力开关；
+- [x] CP05 Tauri 最小窗口与 Rust command smoke test。
 
 退出条件：四个目标组合都能编译共享层，平台识别测试通过，Intel CI 独立运行。
 

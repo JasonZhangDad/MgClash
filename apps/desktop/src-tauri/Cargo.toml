@@ -1,0 +1,21 @@
+[package]
+name = "magies-desktop"
+description = "MgClash Tauri desktop shell"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+name = "magies_desktop_lib"
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }
+
+[dependencies]
+magies-platform = { path = "../../../crates/magies-platform" }
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "=2.11.5", features = [] }
+
+[lints]
+workspace = true
