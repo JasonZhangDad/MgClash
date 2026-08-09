@@ -6,5 +6,10 @@ license.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[dependencies]
+magies-platform = { path = "../magies-platform" }
+sha2 = "0.10"
+thiserror = "2"
+
 [lints]
 workspace = true

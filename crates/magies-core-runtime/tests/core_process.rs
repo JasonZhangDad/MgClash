@@ -1,19 +1,40 @@
 use std::env::current_exe;
 use std::error::Error;
+use std::fs::{copy, read, remove_file};
 use std::io;
 use std::path::PathBuf;
 use std::thread::sleep;
 use std::time::Duration;
 
-use magies_core_runtime::{CoreExit, CoreProcessSpec, CoreRuntime, CoreRuntimeError, CoreState};
+use magies_core_runtime::{
+    CoreBinaryRequirement, CoreExit, CoreProcessSpec, CoreRuntime, CoreRuntimeError, CoreState,
+    Sha256Hash, ValidatedCoreBinary, locate_core_binary,
+};
+use magies_platform::CpuArchitecture;
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn helper_process_spec(test_name: &str) -> CoreProcessSpec {
-    CoreProcessSpec::new(
-        current_exe().expect("the integration test executable must exist"),
-        ["--ignored", "--exact", test_name],
+    let binary =
+        validated_binary(&current_exe().expect("the integration test executable must exist"));
+    CoreProcessSpec::new(&binary, ["--ignored", "--exact", test_name])
+}
+
+fn validated_binary(path: &std::path::Path) -> ValidatedCoreBinary {
+    let contents = read(path).expect("the integration test executable must be readable");
+    locate_core_binary(
+        path,
+        CoreBinaryRequirement::new(build_architecture(), Sha256Hash::digest(&contents)),
     )
+    .unwrap()
+}
+
+fn build_architecture() -> CpuArchitecture {
+    match std::env::consts::ARCH {
+        "x86_64" => CpuArchitecture::X86_64,
+        "aarch64" => CpuArchitecture::Aarch64,
+        architecture => panic!("unsupported test architecture: {architecture}"),
+    }
 }
 
 #[test]
@@ -80,15 +101,23 @@ fn returns_a_typed_timeout_while_the_core_is_still_running() {
 #[test]
 fn preserves_stopped_state_when_spawning_fails() {
     let mut runtime = CoreRuntime::default();
-    let missing_executable = PathBuf::from("definitely-missing-magies-core");
-    let spec = CoreProcessSpec::new(&missing_executable, std::iter::empty::<&str>());
+    let source = current_exe().unwrap();
+    let missing_executable = std::env::temp_dir().join(format!(
+        "definitely-missing-magies-core-{}",
+        std::process::id()
+    ));
+    copy(&source, &missing_executable).unwrap();
+    let binary = validated_binary(&missing_executable);
+    let resolved_executable = binary.path().to_path_buf();
+    let spec = CoreProcessSpec::new(&binary, std::iter::empty::<&str>());
+    remove_file(&missing_executable).unwrap();
 
     let error = runtime.start(&spec).unwrap_err();
 
     assert!(matches!(
         error,
         CoreRuntimeError::SpawnFailed { executable, .. }
-            if executable == missing_executable
+            if executable == resolved_executable
     ));
     assert_eq!(runtime.poll().unwrap(), CoreState::Stopped);
 }

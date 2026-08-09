@@ -1,5 +1,7 @@
 //! Proxy core process lifecycle.
 
+mod binary;
+
 use std::error::Error;
 use std::ffi::OsString;
 use std::fmt::{Display, Formatter};
@@ -8,6 +10,11 @@ use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
+
+pub use binary::{
+    CoreBinaryError, CoreBinaryFormat, CoreBinaryRequirement, Sha256Hash, ValidatedCoreBinary,
+    locate_core_binary,
+};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
 
@@ -19,14 +26,13 @@ pub struct CoreProcessSpec {
 
 impl CoreProcessSpec {
     #[must_use]
-    pub fn new<P, I, A>(executable: P, arguments: I) -> Self
+    pub fn new<I, A>(binary: &ValidatedCoreBinary, arguments: I) -> Self
     where
-        P: Into<PathBuf>,
         I: IntoIterator<Item = A>,
         A: Into<OsString>,
     {
         Self {
-            executable: executable.into(),
+            executable: binary.path().to_path_buf(),
             arguments: arguments.into_iter().map(Into::into).collect(),
         }
     }
