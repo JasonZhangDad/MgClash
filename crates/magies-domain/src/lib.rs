@@ -6,7 +6,7 @@ use std::num::{NonZeroU16, NonZeroU32};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProxyProtocol {
     Vless,
@@ -225,7 +225,7 @@ pub enum SubscriptionModelError {
     InvalidUpdateInterval { minutes: u32 },
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(tag = "type")]
 pub enum TransportConfig {
     #[serde(rename = "tcp")]
@@ -241,7 +241,7 @@ pub enum TransportConfig {
     },
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GrpcMode {
     Gun,
@@ -249,7 +249,7 @@ pub enum GrpcMode {
     Guna,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(tag = "type")]
 pub enum TlsConfig {
     #[serde(rename = "tls")]
