@@ -13,8 +13,9 @@ use std::os::unix::fs::PermissionsExt;
 
 use magies_core_runtime::{
     CoreBinaryError, CoreBinaryRequirement, CoreExit, CoreHealthError, CoreOutputEvent,
-    CoreOutputStream, CoreProcessSpec, CoreRuntime, CoreRuntimeError, CoreState, Sha256Hash,
-    ValidatedCoreBinary, locate_core_binary,
+    CoreOutputStream, CoreProcessSpec, CoreRecoveryError, CoreRecoveryFailure, CoreRuntime,
+    CoreRuntimeError, CoreState, MAX_CRASH_RECOVERY_ATTEMPTS, Sha256Hash, ValidatedCoreBinary,
+    locate_core_binary,
 };
 use magies_platform::CpuArchitecture;
 
@@ -22,6 +23,9 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(2);
 const HEALTH_PORT: u16 = 18_982;
 const EXIT_HEALTH_PORT: u16 = 18_983;
 const TIMEOUT_HEALTH_PORT: u16 = 18_984;
+const RECOVERY_HEALTH_PORT: u16 = 18_985;
+const EXHAUSTED_RECOVERY_PORT: u16 = 18_986;
+const TIMEOUT_RECOVERY_PORT: u16 = 18_987;
 
 fn helper_process_spec(test_name: &str) -> CoreProcessSpec {
     let binary =
@@ -249,6 +253,11 @@ fn exposes_actionable_health_error_messages_and_sources() {
             false,
         ),
         (
+            CoreHealthError::RecoveryFailed { attempts: 3 },
+            "cannot check health after Core recovery failed in 3 attempts",
+            false,
+        ),
+        (
             CoreHealthError::Runtime(CoreRuntimeError::PollFailed(io::Error::other("poll"))),
             "failed to inspect Core health: failed to poll core process: poll",
             true,
@@ -283,6 +292,252 @@ fn available_loopback_address(port: u16) -> SocketAddr {
     let address = SocketAddr::from(([127, 0, 0, 1], port));
     drop(TcpListener::bind(address).expect("the health-test port must be available"));
     address
+}
+
+#[test]
+fn recovers_a_crashed_core_and_returns_its_new_output_stream() {
+    let marker = recovery_marker("success");
+    remove_marker(&marker);
+    let address = available_loopback_address(RECOVERY_HEALTH_PORT);
+    let spec = helper_process_spec("helper_core_crashes_once_then_opens_recovery_listener");
+    let mut runtime = CoreRuntime::default();
+
+    runtime.start(&spec).unwrap();
+    assert_eq!(
+        runtime.wait_for_exit(TEST_TIMEOUT).unwrap(),
+        CoreExit {
+            success: false,
+            code: Some(17),
+        }
+    );
+
+    let recovery = runtime
+        .recover_after_crash(&spec, address, TEST_TIMEOUT)
+        .unwrap();
+
+    assert_eq!(recovery.attempts, 1);
+    assert!(recovery.health.ready_after <= TEST_TIMEOUT);
+    assert_eq!(runtime.poll().unwrap(), CoreState::Running);
+    let deadline = Instant::now() + TEST_TIMEOUT;
+    let mut stdout = Vec::new();
+    while !contains_bytes(&stdout, b"recovered\n") {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "timed out waiting for recovery output"
+        );
+        match recovery.output.recv_timeout(remaining).unwrap() {
+            CoreOutputEvent::Chunk {
+                stream: CoreOutputStream::Stdout,
+                bytes,
+            } => stdout.extend(bytes),
+            CoreOutputEvent::Chunk {
+                stream: CoreOutputStream::Stderr,
+                ..
+            } => {}
+            CoreOutputEvent::ReadFailed { stream, source } => {
+                panic!("failed to read recovery {stream:?}: {source}")
+            }
+        }
+    }
+
+    runtime.stop().unwrap();
+    remove_marker(&marker);
+}
+
+#[test]
+fn refuses_recovery_for_a_running_or_user_stopped_core() {
+    let address = SocketAddr::from(([127, 0, 0, 1], 0));
+    let spec = helper_process_spec("helper_core_runs_until_stopped");
+    let mut runtime = CoreRuntime::default();
+
+    runtime.start(&spec).unwrap();
+    assert!(matches!(
+        runtime.recover_after_crash(&spec, address, TEST_TIMEOUT),
+        Err(CoreRecoveryError::NotCrashed(CoreState::Running))
+    ));
+
+    runtime.stop().unwrap();
+    assert!(matches!(
+        runtime.recover_after_crash(&spec, address, TEST_TIMEOUT),
+        Err(CoreRecoveryError::NotCrashed(CoreState::Stopped))
+    ));
+}
+
+#[test]
+fn enters_failed_state_after_three_crashing_recovery_attempts() {
+    let address = available_loopback_address(EXHAUSTED_RECOVERY_PORT);
+    let spec = helper_process_spec("helper_core_exits_immediately");
+    let mut runtime = CoreRuntime::default();
+
+    runtime.start(&spec).unwrap();
+    runtime.wait_for_exit(TEST_TIMEOUT).unwrap();
+    let error = runtime
+        .recover_after_crash(&spec, address, TEST_TIMEOUT)
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        CoreRecoveryError::AttemptsExhausted {
+            attempts: MAX_CRASH_RECOVERY_ATTEMPTS,
+            last_failure: CoreRecoveryFailure::Health(CoreHealthError::ProcessExited(_)),
+        }
+    ));
+    assert_eq!(
+        runtime.poll().unwrap(),
+        CoreState::Failed {
+            attempts: MAX_CRASH_RECOVERY_ATTEMPTS,
+        }
+    );
+    assert!(matches!(
+        runtime.recover_after_crash(&spec, address, TEST_TIMEOUT),
+        Err(CoreRecoveryError::RetryLimitReached {
+            attempts: MAX_CRASH_RECOVERY_ATTEMPTS,
+        })
+    ));
+
+    runtime
+        .start(&helper_process_spec("helper_core_runs_until_stopped"))
+        .unwrap();
+    assert_eq!(runtime.poll().unwrap(), CoreState::Running);
+    runtime.stop().unwrap();
+}
+
+#[test]
+fn stops_unhealthy_recovery_attempts_before_retrying() {
+    let marker = recovery_marker("timeout");
+    remove_marker(&marker);
+    let address = available_loopback_address(TIMEOUT_RECOVERY_PORT);
+    let spec = helper_process_spec("helper_core_crashes_once_then_runs_without_listener");
+    let timeout = Duration::from_millis(20);
+    let mut runtime = CoreRuntime::default();
+
+    runtime.start(&spec).unwrap();
+    runtime.wait_for_exit(TEST_TIMEOUT).unwrap();
+    let error = runtime
+        .recover_after_crash(&spec, address, timeout)
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        CoreRecoveryError::AttemptsExhausted {
+            attempts: MAX_CRASH_RECOVERY_ATTEMPTS,
+            last_failure: CoreRecoveryFailure::Health(CoreHealthError::TimedOut { .. }),
+        }
+    ));
+    assert_eq!(
+        runtime.poll().unwrap(),
+        CoreState::Failed {
+            attempts: MAX_CRASH_RECOVERY_ATTEMPTS,
+        }
+    );
+    remove_marker(&marker);
+}
+
+#[test]
+fn revalidates_the_binary_before_every_recovery_attempt() {
+    let source = current_exe().unwrap();
+    let executable = std::env::temp_dir().join(format!(
+        "recovery-validation-magies-core-{}{}",
+        std::process::id(),
+        std::env::consts::EXE_SUFFIX
+    ));
+    copy(&source, &executable).unwrap();
+    let binary = validated_binary(&executable);
+    let spec = CoreProcessSpec::new(
+        &binary,
+        ["--ignored", "--exact", "helper_core_exits_immediately"],
+    );
+    let mut runtime = CoreRuntime::default();
+
+    runtime.start(&spec).unwrap();
+    runtime.wait_for_exit(TEST_TIMEOUT).unwrap();
+    let mut contents = read(&executable).unwrap();
+    *contents.last_mut().unwrap() ^= 0xff;
+    write(&executable, contents).unwrap();
+    let error = runtime
+        .recover_after_crash(&spec, SocketAddr::from(([127, 0, 0, 1], 0)), TEST_TIMEOUT)
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        CoreRecoveryError::AttemptsExhausted {
+            attempts: MAX_CRASH_RECOVERY_ATTEMPTS,
+            last_failure: CoreRecoveryFailure::Start(CoreRuntimeError::BinaryValidationFailed(
+                CoreBinaryError::HashMismatch { .. }
+            )),
+        }
+    ));
+    remove_file(executable).unwrap();
+}
+
+fn recovery_marker(name: &str) -> PathBuf {
+    let executable = current_exe().expect("the integration test executable must exist");
+    let file_name = executable
+        .file_name()
+        .expect("the integration test executable must have a file name")
+        .to_string_lossy();
+    std::env::temp_dir().join(format!("{file_name}-{name}.marker"))
+}
+
+fn remove_marker(path: &std::path::Path) {
+    match remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => panic!(
+            "failed to remove recovery marker {}: {error}",
+            path.display()
+        ),
+    }
+}
+
+#[test]
+fn exposes_actionable_recovery_error_messages_and_sources() {
+    let errors = [
+        (
+            CoreRecoveryError::NotCrashed(CoreState::Stopped),
+            "Core recovery requires an exited process, got Stopped",
+            false,
+        ),
+        (
+            CoreRecoveryError::Runtime(CoreRuntimeError::PollFailed(io::Error::other("poll"))),
+            "failed to inspect crashed Core: failed to poll core process: poll",
+            true,
+        ),
+        (
+            CoreRecoveryError::CleanupFailed {
+                attempt: 2,
+                source: CoreRuntimeError::WaitFailed(io::Error::other("wait")),
+            },
+            "failed to clean up unhealthy Core recovery attempt 2: failed to wait for core process: wait",
+            true,
+        ),
+        (
+            CoreRecoveryError::AttemptsExhausted {
+                attempts: 3,
+                last_failure: CoreRecoveryFailure::Start(CoreRuntimeError::AlreadyRunning),
+            },
+            "Core recovery failed after 3 attempts: Core recovery start failed: core process is already running",
+            true,
+        ),
+        (
+            CoreRecoveryError::RetryLimitReached { attempts: 3 },
+            "Core recovery retry limit already reached after 3 attempts",
+            false,
+        ),
+    ];
+
+    for (error, expected_message, has_source) in errors {
+        assert_eq!(error.to_string(), expected_message);
+        assert_eq!(error.source().is_some(), has_source);
+    }
+
+    let failure = CoreRecoveryFailure::Health(CoreHealthError::NotRunning);
+    assert_eq!(
+        failure.to_string(),
+        "restarted Core is unhealthy: cannot check health without a running Core"
+    );
+    assert!(failure.source().is_some());
 }
 
 #[test]
@@ -529,5 +784,34 @@ fn helper_core_opens_health_listener_after_delay() {
     sleep(Duration::from_millis(50));
     let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], HEALTH_PORT))).unwrap();
     listener.accept().unwrap();
+    sleep(Duration::from_secs(60));
+}
+
+#[test]
+#[ignore = "spawned by recovery tests as a crash-once fake core"]
+fn helper_core_crashes_once_then_opens_recovery_listener() {
+    let marker = recovery_marker("success");
+    if !marker.exists() {
+        write(marker, b"crashed").unwrap();
+        std::process::exit(17);
+    }
+
+    io::stdout().write_all(b"recovered\n").unwrap();
+    io::stdout().flush().unwrap();
+    let listener =
+        TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], RECOVERY_HEALTH_PORT))).unwrap();
+    listener.accept().unwrap();
+    sleep(Duration::from_secs(60));
+}
+
+#[test]
+#[ignore = "spawned by recovery tests as an unhealthy crash-once fake core"]
+fn helper_core_crashes_once_then_runs_without_listener() {
+    let marker = recovery_marker("timeout");
+    if !marker.exists() {
+        write(marker, b"crashed").unwrap();
+        std::process::exit(17);
+    }
+
     sleep(Duration::from_secs(60));
 }

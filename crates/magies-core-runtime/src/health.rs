@@ -18,6 +18,9 @@ pub struct CoreHealth {
 #[derive(Debug)]
 pub enum CoreHealthError {
     NotRunning,
+    RecoveryFailed {
+        attempts: u8,
+    },
     ProcessExited(CoreExit),
     Runtime(CoreRuntimeError),
     TimedOut {
@@ -31,6 +34,10 @@ impl Display for CoreHealthError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotRunning => formatter.write_str("cannot check health without a running Core"),
+            Self::RecoveryFailed { attempts } => write!(
+                formatter,
+                "cannot check health after Core recovery failed in {attempts} attempts"
+            ),
             Self::ProcessExited(exit) => write!(
                 formatter,
                 "Core exited before becoming healthy (success: {}, code: {:?})",
@@ -62,7 +69,10 @@ impl Error for CoreHealthError {
                 last_error: Some(source),
                 ..
             } => Some(source),
-            Self::NotRunning | Self::ProcessExited(_) | Self::TimedOut { .. } => None,
+            Self::NotRunning
+            | Self::RecoveryFailed { .. }
+            | Self::ProcessExited(_)
+            | Self::TimedOut { .. } => None,
         }
     }
 }
@@ -85,6 +95,9 @@ impl CoreRuntime {
         loop {
             match self.poll().map_err(CoreHealthError::Runtime)? {
                 CoreState::Stopped => return Err(CoreHealthError::NotRunning),
+                CoreState::Failed { attempts } => {
+                    return Err(CoreHealthError::RecoveryFailed { attempts });
+                }
                 CoreState::Exited(exit) => return Err(CoreHealthError::ProcessExited(exit)),
                 CoreState::Running => {}
             }

@@ -3,6 +3,7 @@
 use std::env::var_os;
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use magies_core_runtime::{
@@ -50,6 +51,22 @@ fn run_listener_smoke(spec: &CoreProcessSpec, port: u16) {
         .wait_for_tcp_health(address, STARTUP_TIMEOUT)
         .unwrap();
     assert!(health.ready_after <= STARTUP_TIMEOUT);
+
+    let process_id = runtime
+        .process_id()
+        .expect("the Core must have a process ID");
+    let kill_status = Command::new("kill")
+        .args(["-9", &process_id.to_string()])
+        .status()
+        .unwrap();
+    assert!(kill_status.success());
+    assert!(!runtime.wait_for_exit(STARTUP_TIMEOUT).unwrap().success);
+
+    let recovery = runtime
+        .recover_after_crash(spec, address, STARTUP_TIMEOUT)
+        .unwrap();
+    assert_eq!(recovery.attempts, 1);
+    assert!(recovery.health.ready_after <= STARTUP_TIMEOUT);
 
     runtime.stop().unwrap();
     assert_eq!(runtime.poll().unwrap(), CoreState::Stopped);
