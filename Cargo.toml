@@ -4,6 +4,7 @@ members = [
     "crates/magies-core-runtime",
     "crates/magies-domain",
     "crates/magies-platform",
+    "crates/magies-profiles",
 ]
 resolver = "2"
 

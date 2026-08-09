@@ -141,7 +141,17 @@ pub enum TransportConfig {
     Grpc {
         #[serde(rename = "serviceName")]
         service_name: String,
+        mode: GrpcMode,
+        authority: Option<String>,
     },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GrpcMode {
+    Gun,
+    Multi,
+    Guna,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -154,6 +164,7 @@ pub enum TlsConfig {
         #[serde(rename = "allowInsecure")]
         allow_insecure: bool,
         alpn: Vec<String>,
+        fingerprint: Option<String>,
     },
     #[serde(rename = "reality")]
     Reality {
@@ -164,6 +175,9 @@ pub enum TlsConfig {
         #[serde(rename = "shortId")]
         short_id: Option<String>,
         fingerprint: Option<String>,
+        alpn: Vec<String>,
+        #[serde(rename = "spiderX")]
+        spider_x: Option<String>,
     },
 }
 

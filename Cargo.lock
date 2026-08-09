@@ -1702,6 +1702,17 @@ name = "magies-platform"
 version = "0.1.0"
 
 [[package]]
+name = "magies-profiles"
+version = "0.1.0"
+dependencies = [
+ "magies-domain",
+ "percent-encoding",
+ "thiserror 2.0.20",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "markup5ever"
 version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
