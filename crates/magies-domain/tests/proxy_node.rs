@@ -1,5 +1,5 @@
 use magies_domain::{
-    CredentialRef, NodeModelError, ProxyNode, ProxyProtocol, TimestampMillis, TlsConfig,
+    CredentialRef, GrpcMode, NodeModelError, ProxyNode, ProxyProtocol, TimestampMillis, TlsConfig,
     TransportConfig,
 };
 use serde_json::{Value, json};
@@ -82,6 +82,8 @@ fn round_trips_transport_tls_and_runtime_metadata() {
         public_key: "example-public-key".to_owned(),
         short_id: Some("6ba85179e30d4fc2".to_owned()),
         fingerprint: Some("chrome".to_owned()),
+        alpn: Vec::new(),
+        spider_x: None,
     });
     node.udp_enabled = false;
     node.subscription_id = Some(Uuid::parse_str("018f78b5-2cd0-7000-a9a6-3bccf60951e8").unwrap());
@@ -111,22 +113,31 @@ fn supports_tcp_grpc_and_standard_tls_without_stringly_typed_kinds() {
     assert_eq!(
         serde_json::to_value(TransportConfig::Grpc {
             service_name: "api.v1".to_owned(),
+            mode: GrpcMode::Gun,
+            authority: None,
         })
         .unwrap(),
-        json!({ "type": "grpc", "serviceName": "api.v1" })
+        json!({
+            "type": "grpc",
+            "serviceName": "api.v1",
+            "mode": "gun",
+            "authority": null
+        })
     );
     assert_eq!(
         serde_json::to_value(TlsConfig::Tls {
             server_name: Some("example.com".to_owned()),
             allow_insecure: false,
             alpn: vec!["h2".to_owned(), "http/1.1".to_owned()],
+            fingerprint: Some("chrome".to_owned()),
         })
         .unwrap(),
         json!({
             "type": "tls",
             "serverName": "example.com",
             "allowInsecure": false,
-            "alpn": ["h2", "http/1.1"]
+            "alpn": ["h2", "http/1.1"],
+            "fingerprint": "chrome"
         })
     );
 }
