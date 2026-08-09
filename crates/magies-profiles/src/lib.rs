@@ -1,6 +1,7 @@
 //! Node import and profile services for `MgClash`.
 
 mod hysteria2;
+mod node_dedup;
 mod shadowsocks;
 mod subscription;
 mod subscription_transaction;
@@ -10,6 +11,10 @@ mod vmess;
 pub use hysteria2::{
     Hysteria2Credential, Hysteria2Obfuscation, Hysteria2ObfuscationMethod, Hysteria2ParseError,
     Hysteria2Parser, ParsedHysteria2Node,
+};
+pub use node_dedup::{
+    CredentialIdentity, NodeDedupCandidate, NodeDedupResult, NodeDedupSummary, NodeDeduplicator,
+    NodeFingerprint,
 };
 pub use shadowsocks::{
     ParsedShadowsocksNode, ShadowsocksCredential, ShadowsocksParseError, ShadowsocksParser,
