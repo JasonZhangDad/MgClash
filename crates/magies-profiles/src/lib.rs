@@ -1,7 +1,9 @@
 //! Node import and profile services for `MgClash`.
 
+mod trojan;
 mod vmess;
 
+pub use trojan::{ParsedTrojanNode, TrojanCredential, TrojanParseError, TrojanParser};
 pub use vmess::{ParsedVmessNode, VmessCredential, VmessParseError, VmessParser, VmessSecurity};
 
 use std::collections::BTreeMap;
@@ -349,9 +351,17 @@ fn parse_tls(
     parameters: &mut QueryParameters,
     server: &ServerAddress,
 ) -> Result<Option<TlsConfig>, VlessParseError> {
+    parse_tls_with_default(parameters, server, "none")
+}
+
+fn parse_tls_with_default(
+    parameters: &mut QueryParameters,
+    server: &ServerAddress,
+    default_security: &str,
+) -> Result<Option<TlsConfig>, VlessParseError> {
     let security = parameters
         .take_non_empty("security")?
-        .unwrap_or_else(|| "none".to_owned());
+        .unwrap_or_else(|| default_security.to_owned());
     match security.as_str() {
         "none" => Ok(None),
         "tls" => Ok(Some(TlsConfig::Tls {
