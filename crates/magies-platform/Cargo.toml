@@ -1,0 +1,10 @@
+[package]
+name = "magies-platform"
+description = "Supported target and build capability model for MgClash"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
