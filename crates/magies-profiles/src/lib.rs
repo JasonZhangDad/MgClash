@@ -1,9 +1,14 @@
 //! Node import and profile services for `MgClash`.
 
+mod hysteria2;
 mod shadowsocks;
 mod trojan;
 mod vmess;
 
+pub use hysteria2::{
+    Hysteria2Credential, Hysteria2Obfuscation, Hysteria2ObfuscationMethod, Hysteria2ParseError,
+    Hysteria2Parser, ParsedHysteria2Node,
+};
 pub use shadowsocks::{
     ParsedShadowsocksNode, ShadowsocksCredential, ShadowsocksParseError, ShadowsocksParser,
 };
