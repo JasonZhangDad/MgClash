@@ -1,7 +1,7 @@
 //! Shared domain models for `MgClash`.
 
 use std::fmt::{Debug, Formatter};
-use std::num::NonZeroU16;
+use std::num::{NonZeroU16, NonZeroU32};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -128,6 +128,101 @@ impl From<CredentialRef> for String {
     fn from(value: CredentialRef) -> Self {
         value.0
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct SubscriptionName(String);
+
+impl SubscriptionName {
+    /// Creates a non-empty subscription name and removes surrounding whitespace.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SubscriptionModelError::EmptyName`] when the value contains
+    /// no non-whitespace characters.
+    pub fn new(value: impl Into<String>) -> Result<Self, SubscriptionModelError> {
+        let value = value.into();
+        let normalized = value.trim();
+        if normalized.is_empty() {
+            Err(SubscriptionModelError::EmptyName)
+        } else {
+            Ok(Self(normalized.to_owned()))
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for SubscriptionName {
+    type Error = SubscriptionModelError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<SubscriptionName> for String {
+    fn from(value: SubscriptionName) -> Self {
+        value.0
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Subscription {
+    pub id: Uuid,
+    pub name: SubscriptionName,
+    pub url_secret_ref: CredentialRef,
+    pub update_interval_minutes: NonZeroU32,
+    pub auto_update: bool,
+    pub last_updated_at: Option<TimestampMillis>,
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+    pub enabled: bool,
+}
+
+impl Subscription {
+    /// Creates a subscription with disabled automatic updates and no fetch metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation error for an empty name or zero update interval.
+    pub fn new(
+        id: Uuid,
+        name: impl Into<String>,
+        url_secret_ref: CredentialRef,
+        update_interval_minutes: u32,
+    ) -> Result<Self, SubscriptionModelError> {
+        let name = SubscriptionName::new(name)?;
+        let update_interval_minutes = NonZeroU32::new(update_interval_minutes).ok_or(
+            SubscriptionModelError::InvalidUpdateInterval {
+                minutes: update_interval_minutes,
+            },
+        )?;
+        Ok(Self {
+            id,
+            name,
+            url_secret_ref,
+            update_interval_minutes,
+            auto_update: false,
+            last_updated_at: None,
+            etag: None,
+            last_modified: None,
+            enabled: true,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum SubscriptionModelError {
+    #[error("subscription name must not be empty")]
+    EmptyName,
+    #[error("subscription update interval must be greater than zero, got {minutes}")]
+    InvalidUpdateInterval { minutes: u32 },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
