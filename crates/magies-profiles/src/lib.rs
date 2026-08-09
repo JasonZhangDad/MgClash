@@ -2,6 +2,7 @@
 
 mod hysteria2;
 mod shadowsocks;
+mod subscription;
 mod trojan;
 mod vmess;
 
@@ -11,6 +12,10 @@ pub use hysteria2::{
 };
 pub use shadowsocks::{
     ParsedShadowsocksNode, ShadowsocksCredential, ShadowsocksParseError, ShadowsocksParser,
+};
+pub use subscription::{
+    SubscriptionFetchError, SubscriptionFetchOptions, SubscriptionFetchResult, SubscriptionFetcher,
+    SubscriptionValidators,
 };
 pub use trojan::{ParsedTrojanNode, TrojanCredential, TrojanParseError, TrojanParser};
 pub use vmess::{ParsedVmessNode, VmessCredential, VmessParseError, VmessParser, VmessSecurity};
