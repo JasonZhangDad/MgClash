@@ -9,6 +9,7 @@ version.workspace = true
 [dependencies]
 base64 = "0.22"
 magies-domain = { path = "../magies-domain" }
+magies-platform = { path = "../magies-platform" }
 percent-encoding = "2"
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls-no-provider"] }
 rusqlite = { version = "=0.35.0", features = ["bundled"] }
@@ -22,7 +23,6 @@ uuid = "1"
 
 [dev-dependencies]
 magies-core-runtime = { path = "../magies-core-runtime" }
-magies-platform = { path = "../magies-platform" }
 tokio = { version = "1", features = ["rt"] }
 
 [lints]

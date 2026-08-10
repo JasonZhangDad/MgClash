@@ -25,7 +25,7 @@ pub enum CpuArchitecture {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TunAvailability {
     UnavailableInUnsignedBuild,
-    PendingPlatformValidation,
+    RequiresElevation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,9 +97,7 @@ impl TargetPlatform {
     pub const fn unsigned_tun_availability(self) -> TunAvailability {
         match self.os {
             OperatingSystem::MacOs => TunAvailability::UnavailableInUnsignedBuild,
-            OperatingSystem::Windows | OperatingSystem::Linux => {
-                TunAvailability::PendingPlatformValidation
-            }
+            OperatingSystem::Windows | OperatingSystem::Linux => TunAvailability::RequiresElevation,
         }
     }
 }

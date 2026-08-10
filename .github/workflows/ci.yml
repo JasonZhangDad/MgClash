@@ -63,6 +63,39 @@ jobs:
         env:
           GSETTINGS_BACKEND: memory
         run: cargo test -p magies-platform --test linux_system_proxy_real -- --ignored --nocapture
+      - name: Prepare Linux TUN smoke
+        if: runner.os == 'Linux'
+        run: |
+          curl --fail --location --silent --show-error \
+            --output "$RUNNER_TEMP/sing-box-linux.tar.gz" \
+            https://github.com/SagerNet/sing-box/releases/download/v1.13.18/sing-box-1.13.18-linux-amd64.tar.gz
+          echo "d34d987ed6ae39ca3760269264fb502b867e5477db45518c829b07776245c495  $RUNNER_TEMP/sing-box-linux.tar.gz" | sha256sum --check
+          tar --extract --gzip --file "$RUNNER_TEMP/sing-box-linux.tar.gz" --directory "$RUNNER_TEMP"
+          sudo setcap cap_net_admin+ep "$RUNNER_TEMP/sing-box-1.13.18-linux-amd64/sing-box"
+          test -c /dev/net/tun
+          echo "MAGIES_SING_BOX_TUN_BIN=$RUNNER_TEMP/sing-box-1.13.18-linux-amd64/sing-box" >> "$GITHUB_ENV"
+      - name: Prepare Windows TUN smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tools = Join-Path $env:RUNNER_TEMP "magies-tun"
+          New-Item -ItemType Directory -Force -Path $tools | Out-Null
+          $singBoxZip = Join-Path $tools "sing-box.zip"
+          Invoke-WebRequest -Uri "https://github.com/SagerNet/sing-box/releases/download/v1.13.18/sing-box-1.13.18-windows-amd64.zip" -OutFile $singBoxZip
+          if ((Get-FileHash -Algorithm SHA256 $singBoxZip).Hash -ne "65045155FFDC506334F01A4353889657DDFC024F72B394081A9ABAEF34DFBEF3") { throw "sing-box SHA256 mismatch" }
+          Expand-Archive -Path $singBoxZip -DestinationPath $tools
+          $wintunZip = Join-Path $tools "wintun.zip"
+          Invoke-WebRequest -Uri "https://www.wintun.net/builds/wintun-0.14.1.zip" -OutFile $wintunZip
+          if ((Get-FileHash -Algorithm SHA256 $wintunZip).Hash -ne "07C256185D6EE3652E09FA55C0B673E2624B565E02C4B9091C79CA7D2F24EF51") { throw "Wintun SHA256 mismatch" }
+          Expand-Archive -Path $wintunZip -DestinationPath $tools
+          $binaryDirectory = Join-Path $tools "sing-box-1.13.18-windows-amd64"
+          $wintunDll = Join-Path $tools "wintun/bin/amd64/wintun.dll"
+          if ((Get-AuthenticodeSignature $wintunDll).Status -ne "Valid") { throw "Wintun signature is invalid" }
+          Copy-Item $wintunDll (Join-Path $binaryDirectory "wintun.dll")
+          "MAGIES_SING_BOX_TUN_BIN=$(Join-Path $binaryDirectory 'sing-box.exe')" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Verify Windows and Linux TUN device creation
+        if: runner.os == 'Windows' || runner.os == 'Linux'
+        run: cargo test -p magies-profiles --test tun_smoke -- --ignored --nocapture
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Run Clippy

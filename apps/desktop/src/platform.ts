@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 export interface PlatformSummary {
   artifactIdentifier: string;
   tunAvailability:
-    | "pendingPlatformValidation"
+    | "requiresElevation"
     | "unavailableInUnsignedBuild";
 }
 
