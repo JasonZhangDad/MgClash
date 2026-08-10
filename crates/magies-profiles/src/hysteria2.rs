@@ -5,6 +5,7 @@ use magies_domain::{
     CredentialRef, NodeModelError, NodeName, ProxyNode, ProxyProtocol, ServerAddress, TlsConfig,
     TransportConfig,
 };
+use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
@@ -92,6 +93,7 @@ impl Hysteria2Parser {
     }
 }
 
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Hysteria2Credential {
     authentication: Option<String>,
     obfuscation: Option<Hysteria2Obfuscation>,
@@ -115,13 +117,13 @@ impl Debug for Hysteria2Credential {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Hysteria2ObfuscationMethod {
     Salamander,
     Gecko,
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Hysteria2Obfuscation {
     method: Hysteria2ObfuscationMethod,
     password: String,

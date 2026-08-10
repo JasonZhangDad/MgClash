@@ -6,7 +6,7 @@ use magies_domain::{
     CredentialRef, GrpcMode, NodeModelError, NodeName, ProxyNode, ProxyProtocol, ServerAddress,
     TlsConfig, TransportConfig,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{ParsedVlessNode, VlessCredential, VlessParseError, VlessParser, default_name};
@@ -43,7 +43,7 @@ impl VmessParser {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum VmessSecurity {
     Auto,
     Aes128Gcm,
@@ -67,6 +67,7 @@ impl VmessSecurity {
     }
 }
 
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct VmessCredential {
     user_id: Uuid,
     security: VmessSecurity,

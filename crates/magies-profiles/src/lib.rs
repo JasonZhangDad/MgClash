@@ -1,5 +1,6 @@
 //! Node import and profile services for `MgClash`.
 
+mod credential_codec;
 mod dns_config;
 mod hysteria2;
 mod local_proxy_config;
@@ -13,6 +14,7 @@ mod trojan;
 mod tun_config;
 mod vmess;
 
+pub use credential_codec::{CredentialCodec, CredentialCodecError, StoredNodeCredential};
 pub use dns_config::{
     DnsConfigError, DnsProfile, DnsRule, DnsServer, DnsStrategy, GeneratedDnsConfig,
     PlainDnsTransport, SingBoxDnsConfigGenerator,
@@ -59,6 +61,7 @@ use magies_domain::{
     TlsConfig, TransportConfig,
 };
 use percent_encoding::percent_decode_str;
+use serde::{Deserialize, Serialize};
 use url::{Host, Url};
 use uuid::Uuid;
 
@@ -148,6 +151,7 @@ impl VlessParser {
     }
 }
 
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct VlessCredential {
     user_id: Uuid,
     encryption: String,

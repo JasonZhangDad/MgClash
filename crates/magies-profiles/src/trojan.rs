@@ -5,6 +5,7 @@ use magies_domain::{
     CredentialRef, GrpcMode, NodeModelError, NodeName, ProxyNode, ProxyProtocol, ServerAddress,
     TlsConfig, TransportConfig,
 };
+use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
@@ -87,6 +88,7 @@ impl TrojanParser {
     }
 }
 
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TrojanCredential {
     password: String,
     flow: Option<String>,
