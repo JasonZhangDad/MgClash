@@ -1803,6 +1803,7 @@ name = "magies-profiles"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "ipnet",
  "magies-core-runtime",
  "magies-domain",
  "magies-platform",

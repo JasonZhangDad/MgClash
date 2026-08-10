@@ -8,6 +8,7 @@ version.workspace = true
 
 [dependencies]
 base64 = "0.22"
+ipnet = "2"
 magies-domain = { path = "../magies-domain" }
 magies-platform = { path = "../magies-platform" }
 percent-encoding = "2"
