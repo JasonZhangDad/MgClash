@@ -1,0 +1,181 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+MgClash is a cross-platform desktop proxy client (macOS 13+ x86_64/aarch64, Windows 10/11 x86_64,
+Ubuntu 22.04+ x86_64) built as a Rust workspace plus a Tauri 2 + React shell. It drives external
+proxy Cores (`sing-box`, `Xray`) as child processes; it does not implement the proxy protocols.
+
+Product behavior is defined by `Magies_Proxy_PRD_V1.0.md` plus
+`docs/PRD_V1.1_CROSS_PLATFORM_ADDENDUM.md`. **When they conflict, V1.1 wins.** Commit subjects and
+spike docs reference PRD task IDs (`B04`, `E05`, `CP03`, …) — look them up in the PRD when a change
+claims to implement one.
+
+## Commands
+
+```sh
+# Rust (workspace root)
+cargo test --workspace
+cargo test -p magies-profiles --test sing_box_runtime_config          # one test file
+cargo test -p magies-session --test desktop_session starts_core_before_system_proxy # one test
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings                 # pedantic lints are CI errors
+cargo llvm-cov --workspace --fail-under-lines 80                      # coverage gate
+
+# Frontend / desktop shell (apps/desktop)
+npm ci
+npm test                        # vitest run
+npm run test:coverage           # 80% branches/functions/lines/statements gate
+npm run build                   # tsc --noEmit && vite build
+npm run dev                     # vite only, port 1420
+npm run tauri -- build --no-bundle
+
+# unsigned release artifact for the host platform
+scripts/package-unsigned.sh
+```
+
+### Smoke and integration tests behind `--ignored`
+
+Anything that touches a real Core binary, a real TUN device, the OS credential store, or the host's
+System Proxy is `#[ignore]`d and only runs explicitly. They need env vars pointing at *official*
+pinned binaries:
+
+| Var | Used by |
+| --- | --- |
+| `MAGIES_SING_BOX_TUN_BIN` | `magies-profiles --test tun_smoke` |
+| `MAGIES_SING_BOX_DNS_BIN` | `magies-profiles --test dns_smoke` |
+| `MAGIES_SING_BOX_CONFIG_BIN` | `magies-profiles --test sing_box_outbound_smoke`, `--test sing_box_runtime_e2e` |
+| `MAGIES_SING_BOX_BIN` / `MAGIES_XRAY_BIN` | macOS Intel core smokes, `local_proxy_core_smoke` |
+| `MAGIES_MACOS_NETWORK_SERVICE` | macOS System Proxy real test; also the app's macOS proxy adapter |
+| `MAGIES_SING_BOX_SHA256` | the app's pinned Core digest (also compiled in at build time) |
+| `MAGIES_SOAK_CORE_BIN` / `MAGIES_SOAK_DURATION_SECS` | `magies-session --test soak` |
+
+```sh
+cargo test -p magies-profiles --test tun_smoke -- --ignored --nocapture
+cargo test -p magies-storage --test secret_store platform_store_obeys_secret_store_contract -- --ignored
+
+# no pinned binary needed: reads the host's real default route / runs a fixture Core
+cargo test -p magies-platform --test network_path -- --ignored --nocapture
+cargo test -p magies-session --test soak -- --ignored --nocapture
+MAGIES_SOAK_DURATION_SECS=259200 cargo test -p magies-session --test soak -- --ignored --nocapture
+```
+
+`.github/workflows/ci.yml` is the authoritative recipe: it downloads sing-box 1.13.18 and Wintun
+0.14.1, verifies SHA-256 and (on Windows) the Authenticode signature, grants `CAP_NET_ADMIN` on
+Linux, and wraps the Linux keyring test in `dbus-run-session` + `gnome-keyring-daemon`. Reproduce
+those steps locally rather than inventing new ones.
+
+## Architecture
+
+### Crate graph
+
+```
+magies-domain      validated newtypes (NodeName, ServerAddress, CredentialRef, ProxyNode, …)
+magies-platform    OS/CPU matrix, unsigned-build capabilities, System Proxy adapters + recovery,
+                   default-route fingerprint (network_path)
+magies-storage     SecretStore trait; PlatformSecretStore (keyring) / MemorySecretStore
+magies-routing     RouteProfile → ordered sing-box route JSON
+magies-core-runtime process lifecycle: binary validation, adapters, spawn/poll/stop, output,
+                   health, crash recovery, atomic runtime config file, TUN state machine
+magies-profiles    URI parsers + ShareLinkParser dispatcher, subscriptions (SQLite), credential
+                   codec, config generators, DiagnosticRedactor
+magies-session     DesktopSession — orchestrates all of the above; NetworkRecoveryPolicy +
+                   NetworkWatcher for network-change and sleep/wake recovery
+apps/desktop       Tauri shell (thin) + React UI
+```
+
+Dependencies flow strictly downward. **The Rust layers must not depend on Tauri** (PRD constraint 3).
+`apps/desktop/src-tauri` depends on every crate above but stays a thin command layer: DTO
+conversion, Tauri state, and the two per-OS wiring modules (`core_control`, `platform_proxy`).
+Logic belongs in the crates — if a command body grows past plumbing, it is in the wrong place.
+The UI never reads or writes Core JSON (constraint 4); it goes through Tauri commands.
+
+### Config generation pipeline
+
+Everything converges on `SingBoxRuntimeConfigGenerator::generate` (`magies-profiles/src/sing_box_runtime_config.rs`),
+which assembles one sing-box JSON document from independently tested sub-generators:
+
+- `SingBoxOutboundConfigGenerator` — the selected node's outbound (only emitted when the route
+  actually references `proxy`)
+- `LocalSocksConfigGenerator` / `LocalHttpConfigGenerator` — loopback inbounds
+- `SingBoxTunConfigGenerator` — TUN inbound, plus prepended `sniff` / `hijack-dns` route actions
+- `SingBoxDnsConfigGenerator`, `SingBoxRouteConfigGenerator`
+
+Each sub-generator has its own unit test file *and* an `--ignored` smoke test that feeds the output
+to a real `sing-box check`. Adding a config field means updating both.
+
+### Session lifecycle (`magies-session`)
+
+`DesktopSession::start` has a deliberate order that must be preserved:
+
+1. load secret from `SecretStore` → `CredentialCodec::decode`
+2. generate config → `AtomicRuntimeConfig::write` (temp file + rename, `session-<uuid>.json`)
+3. start Core (`CoreSessionControl::start` → validate binary, `sing-box check`, spawn, TCP health)
+4. **only then** enable System Proxy
+
+Failure at step 4 rolls the Core back; if the rollback itself fails the session stays `active` so it
+remains stoppable, and the error carries both causes (`ProxyEnableAndCoreRollback`). `stop` reverses
+the order: restore System Proxy, then stop Core. TUN and System Proxy are mutually exclusive
+(`ConflictingNetworkModes`).
+
+`DesktopSession` is generic over `SecretStore`, `CoreSessionControl`, and `SystemProxySessionControl`
+so tests inject fakes. `SingBoxCoreControl` is the real `CoreSessionControl` impl. An active session
+retains the profile it started from (`active_profile`) so recovery can restart it without the caller
+reassembling it.
+
+### Recovery (`magies-session`)
+
+`NetworkRecoveryPolicy` implements PRD section 29: debounce → check Core health → reconnect *only*
+when the probe fails, bounded to `MAX_RECOVERY_ATTEMPTS`. Two properties are load-bearing and have
+their own tests — **a user-requested `stop` is never undone by recovery**, and **an exhausted burst
+is not terminal** (the profile is retained so a later event retries; waking with no network yet must
+not kill the session permanently). `NWPathMonitor` is unusable here because `unsafe_code` is
+`forbid`ed workspace-wide, so `NetworkWatcher` derives events from polled default-route
+fingerprints plus wall-clock gaps. See ADR-adjacent spike `docs/spikes/0021`.
+
+### Platform adapters
+
+`magies-platform` isolates every OS-specific behavior behind a trait with per-OS implementations
+(`macos_system_proxy.rs` via `networksetup`/SystemConfiguration, `windows_system_proxy.rs` via the
+registry, `linux_system_proxy.rs` via GSettings/`gio`). `SystemProxyRecoveryManager` snapshots the
+user's pre-existing proxy state into a `JsonRecoveryStore` before mutating it, and can detect and
+repair a leftover snapshot at startup (`inspect_startup` / `recover` / `dismiss`).
+
+Unsupported capabilities must fail with a typed error **before** startup and must not be shown as
+available in the UI — e.g. `TargetPlatform::unsigned_tun_availability` returns
+`UnavailableInUnsignedBuild` on macOS, which the UI surfaces as a disabled TUN toggle. All release
+artifacts are currently unsigned; see ADR 0001/0002 for the consequences.
+
+## Conventions
+
+- **Rust 2024 edition, toolchain pinned to 1.97.1** (`rust-toolchain.toml`). `unsafe_code` is
+  `forbid`ed workspace-wide; `clippy::pedantic` is on and CI denies warnings.
+- **Typed errors everywhere.** `thiserror` enums per module, `#[source]` chaining, and generic error
+  parameters when a type wraps injected adapters (`DesktopSessionError<C, P>`). No `anyhow`, no
+  string errors. `expect` is only used for invariants the type system already guarantees, with the
+  reason spelled out.
+- **Validated newtypes over primitives.** Construct through fallible constructors (`NodeName::new`,
+  `ProxyEndpoint::new`, `TunProfile::new`) that return domain errors; serde uses
+  `try_from = "String"` so deserialization goes through the same validation.
+- **Tests live in `tests/`, not inline.** Integration tests exercise the public API; only a handful
+  of modules have `mod tests`. `magies-core-runtime/tests/fixtures/*.rs` are standalone programs
+  compiled with `rustc` at test time (`common::compile_fixture`) to act as fake Cores — that is how
+  process lifecycle, output streaming, health, and crash recovery are tested without a real binary.
+- **Secrets never touch the domain model.** `ProxyNode` holds a `CredentialRef`; the actual secret
+  lives in the OS keyring as a `SecretValue` (zeroized on drop, `Debug` prints `[REDACTED]`), and is
+  serialized through `CredentialCodec`.
+- **Pinned external versions are load-bearing**: sing-box 1.13.18, Wintun 0.14.1, `tauri =2.11.5`,
+  `keyring =3.6.3`, `rusqlite =0.35.0`. SHA-256 digests for the downloads live in ADR 0002 and CI.
+- **Branch + commit style**: one branch per PRD task (`feat/tun-state-machine`), Conventional
+  Commits with a one-line subject and empty body (`feat(session): control sing-box lifecycle`).
+  Commits are small and single-purpose.
+- **Docs**: an ADR in `docs/adr/` for locked-in architectural decisions, a numbered spike report in
+  `docs/spikes/` for capability investigations (scope, shared boundary, test result, remaining
+  work). PRD and ADR 0001 are in Chinese; code, comments, and newer docs are in English.
+  Every spike ends with a **Remaining work** section naming what was *not* verified — keep that
+  habit; an unverified claim is worse than an acknowledged gap.
+- **Release artifacts are unsigned** and named `mgclash-<version>-<os>-<cpu>-unsigned.<ext>` with a
+  `.sha256` sidecar (ADR 0003). The artifact does not bundle sing-box yet: verified official macOS
+  digests do not exist in this repo, and inventing one would defeat the pin.
