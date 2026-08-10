@@ -1,6 +1,7 @@
 //! Node import and profile services for `MgClash`.
 
 mod hysteria2;
+mod local_proxy_config;
 mod node_dedup;
 mod shadowsocks;
 mod subscription;
@@ -11,6 +12,10 @@ mod vmess;
 pub use hysteria2::{
     Hysteria2Credential, Hysteria2Obfuscation, Hysteria2ObfuscationMethod, Hysteria2ParseError,
     Hysteria2Parser, ParsedHysteria2Node,
+};
+pub use local_proxy_config::{
+    DEFAULT_SOCKS_PORT, GeneratedCoreConfig, LocalProxyConfigError, LocalSocksConfigGenerator,
+    LocalSocksProfile,
 };
 pub use node_dedup::{
     CredentialIdentity, NodeDedupCandidate, NodeDedupResult, NodeDedupSummary, NodeDeduplicator,
