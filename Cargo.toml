@@ -6,6 +6,7 @@ members = [
     "crates/magies-platform",
     "crates/magies-profiles",
     "crates/magies-routing",
+    "crates/magies-session",
     "crates/magies-storage",
 ]
 resolver = "2"
