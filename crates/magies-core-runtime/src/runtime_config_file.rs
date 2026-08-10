@@ -116,7 +116,13 @@ fn restrict_permissions(file: &File, path: &Path) -> Result<(), RuntimeConfigFil
         })
 }
 
+/// Windows has no `chmod`; the file inherits the directory's ACL. The `Result`
+/// is kept so both targets share one signature and one call site.
 #[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "signature must match the Unix implementation"
+)]
 fn restrict_permissions(_file: &File, _path: &Path) -> Result<(), RuntimeConfigFileError> {
     Ok(())
 }
