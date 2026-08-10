@@ -72,27 +72,28 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          # A headless runner has no keyring collections at all. Starting the
-          # daemon is not enough: the Secret Service resolves `default` through
-          # an alias, and with none set ReadAlias returns "/", which the client
-          # reports as NoStorageAccess(NoResult) on the first put. Create the
-          # collection and claim the alias explicitly, then print what the alias
-          # resolves to so a future failure is diagnosable from the log.
+          # A headless runner has no keyring. Two things matter here and both
+          # were learned the hard way from CI logs:
+          #   * the script needs a shebang, or the kernel hands it to dash,
+          #     which rejects `set -o pipefail`;
+          #   * the unlock password must not be empty. With an empty one
+          #     gnome-keyring does not create the login keyring, so there is no
+          #     default collection, `ReadAlias default` returns "/", and the
+          #     first put fails with NoStorageAccess(NoResult). Asking the
+          #     service to CreateCollection instead only returns a prompt path,
+          #     which nothing can satisfy without a prompter.
+          # The alias is printed so any future failure is diagnosable from the log.
           cat > "$RUNNER_TEMP/keyring-round-trip.sh" <<'SCRIPT'
           #!/usr/bin/env bash
-          # Run through bash explicitly: without a shebang the kernel hands a
-          # bare script to /bin/sh, which is dash here, and dash rejects
-          # `set -o pipefail` on the first line.
           set -euo pipefail
-          eval "$(printf '' | gnome-keyring-daemon --unlock --components=secrets)"
-          gdbus call --session --dest org.freedesktop.secrets \
-            --object-path /org/freedesktop/secrets \
-            --method org.freedesktop.Secret.Service.CreateCollection \
-            "{'org.freedesktop.Secret.Collection.Label': <'default'>}" default || true
+          rm -rf "$HOME/.local/share/keyrings"
+          mkdir -p "$HOME/.local/share/keyrings"
+          eval "$(printf 'mgclash-ci' | gnome-keyring-daemon --unlock --components=secrets)"
           echo "default alias resolves to: $(gdbus call --session \
             --dest org.freedesktop.secrets \
             --object-path /org/freedesktop/secrets \
             --method org.freedesktop.Secret.Service.ReadAlias default || echo '<unavailable>')"
+          ls -la "$HOME/.local/share/keyrings" || true
           cargo test -p magies-storage --test secret_store platform_store_obeys_secret_store_contract -- --ignored --nocapture
           SCRIPT
           dbus-run-session -- bash "$RUNNER_TEMP/keyring-round-trip.sh"
