@@ -5,7 +5,7 @@ use std::error::Error;
 use std::fs::remove_file;
 use std::net::{SocketAddr, TcpListener};
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use magies_core_runtime::{
     CoreHealthError, CoreProcessSpec, CoreRuntimeError, TunFailure, TunRuntime, TunRuntimeError,
@@ -14,6 +14,26 @@ use magies_core_runtime::{
 use magies_platform::{OperatingSystem, TargetPlatform};
 
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long to wait for a Core that exits on its own to be reaped. Generous on
+/// purpose: a loaded CI runner can take far longer than the fixture's lifetime.
+const EXIT_TIMEOUT: Duration = Duration::from_secs(10);
+const POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+/// Polls until the Core is no longer running, or the deadline passes.
+///
+/// Sleeping for a fixed margin past the fixture's lifetime and asserting once
+/// raced: the child's sleep is a lower bound, and reaping it costs more time
+/// still, so a busy runner reported `Running` and failed the assertion.
+fn poll_until_not_running(runtime: &mut TunRuntime) -> TunState {
+    let deadline = Instant::now() + EXIT_TIMEOUT;
+    loop {
+        let state = runtime.poll().unwrap();
+        if state != TunState::Running || Instant::now() >= deadline {
+            return state;
+        }
+        sleep(POLL_INTERVAL);
+    }
+}
 
 fn target(os: &str, architecture: &str) -> TargetPlatform {
     TargetPlatform::parse(os, architecture).unwrap()
@@ -131,10 +151,11 @@ fn polling_reports_a_core_that_exits_after_startup() {
     runtime
         .start(target("linux", "x86_64"), &spec, address, HEALTH_TIMEOUT)
         .unwrap();
-    sleep(Duration::from_millis(120));
+
+    let state = poll_until_not_running(&mut runtime);
 
     assert!(matches!(
-        runtime.poll().unwrap(),
+        state,
         TunState::Failed(TunFailure::CoreExited(exit)) if exit.success
     ));
     runtime.stop().unwrap();
