@@ -79,6 +79,10 @@ jobs:
           # collection and claim the alias explicitly, then print what the alias
           # resolves to so a future failure is diagnosable from the log.
           cat > "$RUNNER_TEMP/keyring-round-trip.sh" <<'SCRIPT'
+          #!/usr/bin/env bash
+          # Run through bash explicitly: without a shebang the kernel hands a
+          # bare script to /bin/sh, which is dash here, and dash rejects
+          # `set -o pipefail` on the first line.
           set -euo pipefail
           eval "$(printf '' | gnome-keyring-daemon --unlock --components=secrets)"
           gdbus call --session --dest org.freedesktop.secrets \
@@ -91,8 +95,7 @@ jobs:
             --method org.freedesktop.Secret.Service.ReadAlias default || echo '<unavailable>')"
           cargo test -p magies-storage --test secret_store platform_store_obeys_secret_store_contract -- --ignored --nocapture
           SCRIPT
-          chmod +x "$RUNNER_TEMP/keyring-round-trip.sh"
-          dbus-run-session -- "$RUNNER_TEMP/keyring-round-trip.sh"
+          dbus-run-session -- bash "$RUNNER_TEMP/keyring-round-trip.sh"
       - name: Prepare Linux TUN smoke
         if: runner.os == 'Linux'
         run: |
