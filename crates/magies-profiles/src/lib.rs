@@ -1,6 +1,7 @@
 //! Node import and profile services for `MgClash`.
 
 mod credential_codec;
+mod diagnostics;
 mod dns_config;
 mod hysteria2;
 mod local_proxy_config;
@@ -16,6 +17,7 @@ mod tun_config;
 mod vmess;
 
 pub use credential_codec::{CredentialCodec, CredentialCodecError, StoredNodeCredential};
+pub use diagnostics::{DiagnosticRedactor, REDACTED};
 pub use dns_config::{
     DnsConfigError, DnsProfile, DnsRule, DnsServer, DnsStrategy, GeneratedDnsConfig,
     PlainDnsTransport, SingBoxDnsConfigGenerator,
