@@ -205,6 +205,27 @@ impl Default for WindowsSystemProxyAdapter {
     }
 }
 
+impl crate::system_proxy_recovery::SystemProxyControl for WindowsSystemProxyAdapter {
+    type Error = WindowsSystemProxyError;
+    type Snapshot = WindowsSystemProxySnapshot;
+
+    fn capture(&self) -> Result<Self::Snapshot, Self::Error> {
+        self.read_snapshot()
+    }
+
+    fn current(&self) -> Result<SystemProxyState, Self::Error> {
+        Self::read(self)
+    }
+
+    fn apply(&self, state: &SystemProxyState) -> Result<(), Self::Error> {
+        Self::apply(self, state)
+    }
+
+    fn restore(&self, snapshot: &Self::Snapshot) -> Result<(), Self::Error> {
+        self.apply_snapshot(snapshot)
+    }
+}
+
 #[derive(Default)]
 struct ProxyEndpoints {
     http: Option<ProxyEndpoint>,
@@ -634,6 +655,17 @@ mod tests {
 
     use super::*;
     use crate::system_proxy::{PacSetting, ProxyEndpoint, ProxySetting, SystemProxyState};
+    use crate::system_proxy_recovery::SystemProxyControl;
+
+    #[test]
+    fn adapter_satisfies_recovery_control_contract() {
+        fn assert_control<T: SystemProxyControl<Snapshot = WindowsSystemProxySnapshot>>(
+            _control: &T,
+        ) {
+        }
+
+        assert_control(&WindowsSystemProxyAdapter::new());
+    }
 
     #[derive(Clone, Debug, Eq, PartialEq)]
     struct RecordedCall {

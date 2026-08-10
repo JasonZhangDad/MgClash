@@ -2,9 +2,11 @@ use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 use crate::system_proxy::{PacSetting, ProxyEndpoint, ProxySetting, SystemProxyState};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum GnomeProxyMode {
     None,
     Manual,
@@ -32,7 +34,7 @@ impl GnomeProxyMode {
     }
 }
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 struct GnomeProxyEndpoint {
     host: String,
     port: u16,
@@ -79,7 +81,7 @@ impl Debug for GnomeProxyEndpoint {
     }
 }
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 struct GnomeHttpProxy {
     enabled: bool,
     endpoint: GnomeProxyEndpoint,
@@ -107,7 +109,7 @@ impl Debug for GnomeHttpProxy {
     }
 }
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LinuxSystemProxySnapshot {
     mode: GnomeProxyMode,
     autoconfig_url: String,
@@ -273,6 +275,27 @@ impl LinuxSystemProxyAdapter {
         let current = self.read_snapshot()?;
         let updated = current.with_state(state)?;
         self.apply_snapshot(&updated)
+    }
+}
+
+impl crate::system_proxy_recovery::SystemProxyControl for LinuxSystemProxyAdapter {
+    type Error = LinuxSystemProxyError;
+    type Snapshot = LinuxSystemProxySnapshot;
+
+    fn capture(&self) -> Result<Self::Snapshot, Self::Error> {
+        self.read_snapshot()
+    }
+
+    fn current(&self) -> Result<SystemProxyState, Self::Error> {
+        Self::read(self)
+    }
+
+    fn apply(&self, state: &SystemProxyState) -> Result<(), Self::Error> {
+        Self::apply(self, state)
+    }
+
+    fn restore(&self, snapshot: &Self::Snapshot) -> Result<(), Self::Error> {
+        self.apply_snapshot(snapshot)
     }
 }
 
@@ -605,6 +628,25 @@ mod tests {
 
     use super::*;
     use crate::system_proxy::{PacSetting, ProxyEndpoint, ProxySetting, SystemProxyState};
+    use crate::system_proxy_recovery::SystemProxyControl;
+
+    #[test]
+    fn adapter_satisfies_recovery_control_contract_and_snapshot_persistence() {
+        fn assert_control<T: SystemProxyControl<Snapshot = LinuxSystemProxySnapshot>>(
+            _control: &T,
+        ) {
+        }
+
+        let backend = RecordingBackend::new(snapshot(GnomeProxyMode::Auto));
+        let adapter = LinuxSystemProxyAdapter::with_backend(backend);
+        assert_control(&adapter);
+        let captured = snapshot(GnomeProxyMode::Auto);
+        let encoded = serde_json::to_string(&captured).unwrap();
+        assert_eq!(
+            serde_json::from_str::<LinuxSystemProxySnapshot>(&encoded).unwrap(),
+            captured
+        );
+    }
 
     struct RecordingBackend {
         snapshot: LinuxSystemProxySnapshot,

@@ -4,6 +4,8 @@ use std::io;
 use std::process::Command;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 use crate::system_proxy::{PacSetting, ProxyEndpoint, ProxySetting, SystemProxyState};
 
 const NETWORK_SETUP: &str = "networksetup";
@@ -11,6 +13,34 @@ const NETWORK_SETUP: &str = "networksetup";
 pub struct MacOsSystemProxyAdapter {
     network_service: String,
     executor: Arc<dyn CommandExecutor>,
+}
+
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MacOsSystemProxySnapshot {
+    network_service: String,
+    state: SystemProxyState,
+}
+
+impl MacOsSystemProxySnapshot {
+    #[must_use]
+    pub fn network_service(&self) -> &str {
+        &self.network_service
+    }
+
+    #[must_use]
+    pub const fn state(&self) -> &SystemProxyState {
+        &self.state
+    }
+}
+
+impl std::fmt::Debug for MacOsSystemProxySnapshot {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MacOsSystemProxySnapshot")
+            .field("network_service", &self.network_service)
+            .field("state", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl MacOsSystemProxyAdapter {
@@ -56,6 +86,18 @@ impl MacOsSystemProxyAdapter {
         Ok(SystemProxyState::new(http, https, socks, pac))
     }
 
+    /// Captures the configured network service and all managed proxy values.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed command or parse error.
+    pub fn read_snapshot(&self) -> Result<MacOsSystemProxySnapshot, MacOsSystemProxyError> {
+        Ok(MacOsSystemProxySnapshot {
+            network_service: self.network_service.clone(),
+            state: self.read()?,
+        })
+    }
+
     /// Applies HTTP, HTTPS, SOCKS, and PAC settings to the configured service.
     ///
     /// This operation is intentionally non-transactional. Callers that require
@@ -84,6 +126,19 @@ impl MacOsSystemProxyAdapter {
             MacOsProxyOperation::WriteSocks,
         )?;
         self.apply_pac(state.pac())
+    }
+
+    /// Restores the proxy values on the service captured in the snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns immediately when a `networksetup` command fails.
+    pub fn apply_snapshot(
+        &self,
+        snapshot: &MacOsSystemProxySnapshot,
+    ) -> Result<(), MacOsSystemProxyError> {
+        Self::with_executor(&snapshot.network_service, self.executor.clone())?
+            .apply(&snapshot.state)
     }
 
     fn read_proxy(
@@ -166,6 +221,27 @@ impl MacOsSystemProxyAdapter {
         }
 
         Ok(output.stdout)
+    }
+}
+
+impl crate::system_proxy_recovery::SystemProxyControl for MacOsSystemProxyAdapter {
+    type Error = MacOsSystemProxyError;
+    type Snapshot = MacOsSystemProxySnapshot;
+
+    fn capture(&self) -> Result<Self::Snapshot, Self::Error> {
+        self.read_snapshot()
+    }
+
+    fn current(&self) -> Result<SystemProxyState, Self::Error> {
+        Self::read(self)
+    }
+
+    fn apply(&self, state: &SystemProxyState) -> Result<(), Self::Error> {
+        Self::apply(self, state)
+    }
+
+    fn restore(&self, snapshot: &Self::Snapshot) -> Result<(), Self::Error> {
+        self.apply_snapshot(snapshot)
     }
 }
 
@@ -345,6 +421,47 @@ mod tests {
 
     use super::*;
     use crate::system_proxy::{PacSetting, ProxyEndpoint, ProxySetting, SystemProxyState};
+    use crate::system_proxy_recovery::SystemProxyControl;
+
+    #[test]
+    fn adapter_satisfies_recovery_control_contract() {
+        fn assert_control<T: SystemProxyControl<Snapshot = MacOsSystemProxySnapshot>>(
+            _control: &T,
+        ) {
+        }
+
+        let adapter = MacOsSystemProxyAdapter::new("Wi-Fi").unwrap();
+        assert_control(&adapter);
+    }
+
+    #[test]
+    fn recovery_snapshot_restores_the_original_network_service() {
+        let executor = RecordingExecutor::returning([
+            successful(""),
+            successful(""),
+            successful(""),
+            successful(""),
+        ]);
+        let adapter = MacOsSystemProxyAdapter::with_executor("Ethernet", executor.clone()).unwrap();
+        let snapshot = MacOsSystemProxySnapshot {
+            network_service: "Wi-Fi".to_owned(),
+            state: SystemProxyState::new(
+                ProxySetting::disabled(),
+                ProxySetting::disabled(),
+                ProxySetting::disabled(),
+                PacSetting::disabled(),
+            ),
+        };
+
+        SystemProxyControl::restore(&adapter, &snapshot).unwrap();
+
+        let commands = executor.calls();
+        assert_eq!(commands.len(), 4);
+        assert!(commands.iter().all(|(_, arguments)| {
+            arguments.iter().any(|argument| argument == "Wi-Fi")
+                && arguments.iter().all(|argument| argument != "Ethernet")
+        }));
+    }
 
     struct RecordingExecutor {
         calls: Mutex<Vec<(String, Vec<String>)>>,
