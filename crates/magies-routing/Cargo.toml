@@ -1,0 +1,16 @@
+[package]
+name = "magies-routing"
+description = "Ordered routing rules and Core route generation for MgClash"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+ipnet = "2"
+serde_json = "1"
+thiserror = "2"
+url = "2"
+
+[lints]
+workspace = true
