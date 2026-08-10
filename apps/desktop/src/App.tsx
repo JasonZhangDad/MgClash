@@ -10,6 +10,12 @@ import {
   type SessionStatus,
 } from "./session";
 
+/**
+ * Automatic network recovery can reconnect the session without the user acting,
+ * so the dashboard re-reads the status instead of trusting its last command.
+ */
+const REFRESH_INTERVAL_MS = 3_000;
+
 const TUN_LABEL: Record<PlatformSummary["tunAvailability"], string> = {
   requiresElevation: "需要管理员权限",
   unavailableInUnsignedBuild: "未签名版本不可用",
@@ -39,6 +45,20 @@ export default function App() {
       setError(describeFailure(failure)),
     );
   }, []);
+
+  useEffect(() => {
+    // Skip while a command is in flight: it owns the status it is about to set.
+    if (busy) {
+      return undefined;
+    }
+    const timer = setInterval(() => {
+      loadSessionStatus().then(setStatus, (failure: unknown) => {
+        // A background refresh must not replace an error the user is reading.
+        console.warn("session status refresh failed", failure);
+      });
+    }, REFRESH_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [busy]);
 
   const run = useCallback(async (command: () => Promise<SessionStatus>) => {
     setBusy(true);

@@ -4,6 +4,8 @@
 //! shared node model, saves the credential in the OS store, and drives
 //! [`DesktopSession`] for connect and disconnect.
 
+use std::time::Instant;
+
 use magies_domain::{CredentialRef, NodeModelError, ProxyNode, ProxyProtocol};
 use magies_profiles::{
     CredentialCodec, CredentialCodecError, DnsProfile, DnsServer, DnsStrategy, LocalHttpProfile,
@@ -11,7 +13,8 @@ use magies_profiles::{
 };
 use magies_routing::{RouteOutbound, RouteProfile, RoutingMode};
 use magies_session::{
-    CoreSessionControl, DesktopSession, DesktopSessionError, DesktopSessionProfile,
+    CoreSessionControl, DesktopSession, DesktopSessionError, DesktopSessionProfile, NetworkEvent,
+    NetworkRecoveryPolicy, RecoveryError, RecoveryOutcome, SessionHealthProbe,
     SystemProxySessionControl,
 };
 use magies_storage::{SecretStore, SecretStoreError};
@@ -108,6 +111,7 @@ pub struct SessionService<S, C, P> {
     session: DesktopSession<S, C, P>,
     defaults: SessionDefaults,
     node: Option<ProxyNode>,
+    recovery: NetworkRecoveryPolicy,
 }
 
 impl<S, C, P> SessionService<S, C, P>
@@ -117,12 +121,40 @@ where
     P: SystemProxySessionControl,
 {
     #[must_use]
-    pub const fn new(session: DesktopSession<S, C, P>, defaults: SessionDefaults) -> Self {
+    pub fn new(session: DesktopSession<S, C, P>, defaults: SessionDefaults) -> Self {
         Self {
             session,
             defaults,
             node: None,
+            recovery: NetworkRecoveryPolicy::default(),
         }
+    }
+
+    /// Records a network change or wake so the next [`Self::recover`] pass can
+    /// act on it once the debounce window closes.
+    pub fn observe_network(&mut self, event: NetworkEvent, now: Instant) {
+        self.recovery.observe(event, now);
+    }
+
+    /// When the pending network event becomes actionable, if one is pending.
+    #[must_use]
+    pub const fn recovery_due_at(&self) -> Option<Instant> {
+        self.recovery.due_at()
+    }
+
+    /// Runs one recovery pass, restarting the session only if `probe` says the
+    /// Core stopped answering.
+    ///
+    /// # Errors
+    ///
+    /// Returns the recovery policy's typed error when the session could not be
+    /// stopped or could not be restarted within its attempt budget.
+    pub fn recover(
+        &mut self,
+        now: Instant,
+        probe: &impl SessionHealthProbe,
+    ) -> Result<RecoveryOutcome, RecoveryError<C::Error, P::Error>> {
+        self.recovery.recover(now, &mut self.session, probe)
     }
 
     /// Parses a sharing URI, saves its credential, and selects the node.
