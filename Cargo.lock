@@ -2147,6 +2147,7 @@ dependencies = [
  "magies-domain",
  "magies-platform",
  "magies-routing",
+ "magies-storage",
  "percent-encoding",
  "reqwest",
  "rusqlite",
