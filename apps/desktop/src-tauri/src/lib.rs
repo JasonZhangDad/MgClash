@@ -32,7 +32,7 @@ pub fn platform_summary_for(
     })?;
     let tun_availability = match target.unsigned_tun_availability() {
         TunAvailability::UnavailableInUnsignedBuild => "unavailableInUnsignedBuild",
-        TunAvailability::PendingPlatformValidation => "pendingPlatformValidation",
+        TunAvailability::RequiresElevation => "requiresElevation",
     };
 
     Ok(PlatformSummary {

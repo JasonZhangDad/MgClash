@@ -76,6 +76,10 @@ pub struct GeneratedCoreConfig {
 }
 
 impl GeneratedCoreConfig {
+    pub(crate) const fn from_json(core_type: CoreType, json: Value) -> Self {
+        Self { core_type, json }
+    }
+
     #[must_use]
     pub const fn core_type(&self) -> CoreType {
         self.core_type
@@ -97,7 +101,7 @@ impl LocalSocksConfigGenerator {
             CoreType::Xray => xray_config(&xray_socks_inbound(*profile)),
             CoreType::SingBox => sing_box_config(&sing_box_socks_inbound(*profile)),
         };
-        GeneratedCoreConfig { core_type, json }
+        GeneratedCoreConfig::from_json(core_type, json)
     }
 }
 
@@ -111,7 +115,7 @@ impl LocalHttpConfigGenerator {
             CoreType::Xray => xray_config(&xray_http_inbound(*profile)),
             CoreType::SingBox => sing_box_config(&sing_box_http_inbound(*profile)),
         };
-        GeneratedCoreConfig { core_type, json }
+        GeneratedCoreConfig::from_json(core_type, json)
     }
 }
 

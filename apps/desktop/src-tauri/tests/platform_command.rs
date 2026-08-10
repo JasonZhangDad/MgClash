@@ -9,6 +9,15 @@ fn returns_an_unsigned_macos_intel_summary() {
 }
 
 #[test]
+fn reports_elevated_tun_for_windows_and_linux() {
+    for os in ["windows", "linux"] {
+        let summary = platform_summary_for(os, "x86_64").unwrap();
+
+        assert_eq!(summary.tun_availability, "requiresElevation");
+    }
+}
+
+#[test]
 fn returns_a_typed_error_for_an_unsupported_target() {
     let error = platform_summary_for("windows", "aarch64").unwrap_err();
 
