@@ -1,0 +1,21 @@
+[package]
+name = "magies-session"
+description = "Desktop proxy session orchestration for MgClash"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+magies-core-runtime = { path = "../magies-core-runtime" }
+magies-domain = { path = "../magies-domain" }
+magies-platform = { path = "../magies-platform" }
+magies-profiles = { path = "../magies-profiles" }
+magies-routing = { path = "../magies-routing" }
+magies-storage = { path = "../magies-storage" }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,418 @@
+use std::error::Error;
+use std::fmt::{Display, Formatter};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+use magies_domain::{CredentialRef, ProxyProtocol};
+use magies_platform::{OperatingSystem, system_proxy::SystemProxyState};
+use magies_profiles::{
+    CredentialCodec, DnsProfile, DnsServer, DnsStrategy, LocalHttpProfile, LocalSocksProfile,
+    ShadowsocksParser, StoredNodeCredential, TunProfile,
+};
+use magies_routing::{RouteOutbound, RouteProfile, RoutingMode};
+use magies_session::{
+    CoreSessionControl, DesktopSession, DesktopSessionError, DesktopSessionProfile,
+    SystemProxySessionControl,
+};
+use magies_storage::{MemorySecretStore, SecretStore};
+use uuid::Uuid;
+
+#[test]
+fn starts_core_before_system_proxy_and_restores_in_reverse_order() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let core = FakeCore::new(events.clone());
+    let proxy = FakeProxy::new(events.clone());
+    let store = MemorySecretStore::default();
+    let profile = profile_with_stored_credential(&store).with_system_proxy(true);
+    let runtime = RuntimeDirectory::new("happy-session");
+    let mut session = DesktopSession::new(store, core, proxy, runtime.path());
+
+    let output = session.start(&profile).unwrap();
+
+    assert_eq!(output, "core-output");
+    assert!(session.is_running());
+    let config_path = session.config_path().unwrap().to_path_buf();
+    assert!(
+        fs::read_to_string(&config_path)
+            .unwrap()
+            .contains("runtime-secret")
+    );
+    session.stop().unwrap();
+    assert!(!session.is_running());
+    assert!(!config_path.exists());
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        ["core_start", "proxy_enable", "proxy_stop", "core_stop"]
+    );
+}
+
+#[test]
+fn missing_secret_stops_before_config_or_core_changes() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let runtime = RuntimeDirectory::new("missing-secret");
+    let store = MemorySecretStore::default();
+    let profile = profile_without_stored_credential();
+    let mut session = DesktopSession::new(
+        store,
+        FakeCore::new(events.clone()),
+        FakeProxy::new(events.clone()),
+        runtime.path(),
+    );
+
+    assert!(matches!(
+        session.start(&profile),
+        Err(DesktopSessionError::Secret { .. })
+    ));
+    assert!(events.lock().unwrap().is_empty());
+    assert!(fs::read_dir(runtime.path()).unwrap().next().is_none());
+}
+
+#[test]
+fn core_start_failure_removes_runtime_config_without_touching_proxy() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut core = FakeCore::new(events.clone());
+    core.fail_start = true;
+    let store = MemorySecretStore::default();
+    let profile = profile_with_stored_credential(&store).with_system_proxy(true);
+    let runtime = RuntimeDirectory::new("core-start-failure");
+    let mut session =
+        DesktopSession::new(store, core, FakeProxy::new(events.clone()), runtime.path());
+
+    assert!(matches!(
+        session.start(&profile),
+        Err(DesktopSessionError::CoreStart { .. })
+    ));
+    assert_eq!(events.lock().unwrap().as_slice(), ["core_start"]);
+    assert!(fs::read_dir(runtime.path()).unwrap().next().is_none());
+}
+
+#[test]
+fn proxy_enable_failure_stops_core_and_removes_runtime_config() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut proxy = FakeProxy::new(events.clone());
+    proxy.fail_enable = true;
+    let store = MemorySecretStore::default();
+    let profile = profile_with_stored_credential(&store).with_system_proxy(true);
+    let runtime = RuntimeDirectory::new("proxy-enable-failure");
+    let mut session =
+        DesktopSession::new(store, FakeCore::new(events.clone()), proxy, runtime.path());
+
+    assert!(matches!(
+        session.start(&profile),
+        Err(DesktopSessionError::ProxyEnable { .. })
+    ));
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        ["core_start", "proxy_enable", "core_stop"]
+    );
+    assert!(!session.is_running());
+    assert!(fs::read_dir(runtime.path()).unwrap().next().is_none());
+}
+
+#[test]
+fn failed_core_rollback_keeps_a_stoppable_active_session() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut core = FakeCore::new(events.clone());
+    core.fail_stop_count = 1;
+    let mut proxy = FakeProxy::new(events.clone());
+    proxy.fail_enable = true;
+    let store = MemorySecretStore::default();
+    let profile = profile_with_stored_credential(&store).with_system_proxy(true);
+    let runtime = RuntimeDirectory::new("rollback-failure");
+    let mut session = DesktopSession::new(store, core, proxy, runtime.path());
+
+    assert!(matches!(
+        session.start(&profile),
+        Err(DesktopSessionError::ProxyEnableAndCoreRollback { .. })
+    ));
+    assert!(session.is_running());
+    session.stop().unwrap();
+    assert!(!session.is_running());
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        [
+            "core_start",
+            "proxy_enable",
+            "core_stop",
+            "proxy_stop",
+            "core_stop"
+        ]
+    );
+}
+
+#[test]
+fn failed_proxy_restore_keeps_core_running_for_a_retry() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut proxy = FakeProxy::new(events.clone());
+    proxy.fail_stop_count = 1;
+    let store = MemorySecretStore::default();
+    let profile = profile_with_stored_credential(&store).with_system_proxy(true);
+    let runtime = RuntimeDirectory::new("proxy-restore-failure");
+    let mut session =
+        DesktopSession::new(store, FakeCore::new(events.clone()), proxy, runtime.path());
+    session.start(&profile).unwrap();
+
+    assert!(matches!(
+        session.stop(),
+        Err(DesktopSessionError::ProxyStop { .. })
+    ));
+    assert!(session.is_running());
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        ["core_start", "proxy_enable", "proxy_stop"]
+    );
+    session.stop().unwrap();
+    assert!(!session.is_running());
+}
+
+#[test]
+fn rejects_duplicate_start_and_conflicting_network_modes() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let store = MemorySecretStore::default();
+    let profile = profile_with_stored_credential(&store);
+    let runtime = RuntimeDirectory::new("invalid-session-state");
+    let mut session = DesktopSession::new(
+        store,
+        FakeCore::new(events),
+        FakeProxy::default(),
+        runtime.path(),
+    );
+    session.start(&profile).unwrap();
+    assert!(matches!(
+        session.start(&profile),
+        Err(DesktopSessionError::AlreadyRunning)
+    ));
+    session.stop().unwrap();
+
+    let tun = TunProfile::new(OperatingSystem::Windows, false, 1_500, true, true).unwrap();
+    let conflicting = profile.with_system_proxy(true).with_tun(tun, true);
+    assert!(matches!(
+        session.start(&conflicting),
+        Err(DesktopSessionError::ConflictingNetworkModes)
+    ));
+}
+
+#[test]
+fn custom_local_ports_work_without_enabling_system_proxy() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let store = MemorySecretStore::default();
+    let profile = profile_with_stored_credential(&store).with_local_proxies(
+        LocalSocksProfile::new(12_080).unwrap(),
+        LocalHttpProfile::new(12_081).unwrap(),
+    );
+    let runtime = RuntimeDirectory::new("custom-local-ports");
+    let mut session = DesktopSession::new(
+        store,
+        FakeCore::new(events.clone()),
+        FakeProxy::new(events.clone()),
+        runtime.path(),
+    );
+
+    session.start(&profile).unwrap();
+    let config = fs::read_to_string(session.config_path().unwrap()).unwrap();
+    assert!(config.contains("12080"));
+    assert!(config.contains("12081"));
+    session.stop().unwrap();
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        ["core_start", "core_stop"]
+    );
+}
+
+#[test]
+fn failed_core_stop_retains_the_session_for_a_retry() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut core = FakeCore::new(events.clone());
+    core.fail_stop_count = 1;
+    let store = MemorySecretStore::default();
+    let profile = profile_with_stored_credential(&store);
+    let runtime = RuntimeDirectory::new("core-stop-retry");
+    let mut session = DesktopSession::new(store, core, FakeProxy::default(), runtime.path());
+    session.start(&profile).unwrap();
+
+    assert!(matches!(
+        session.stop(),
+        Err(DesktopSessionError::CoreStop { .. })
+    ));
+    assert!(session.is_running());
+    session.stop().unwrap();
+    assert!(!session.is_running());
+}
+
+fn profile_with_stored_credential(store: &MemorySecretStore) -> DesktopSessionProfile {
+    let parsed = ShadowsocksParser
+        .parse("ss://aes-128-gcm:runtime-secret@edge.example.com:443")
+        .unwrap();
+    let credential_ref = CredentialRef::new("secret://nodes/session-test").unwrap();
+    store
+        .put(
+            &credential_ref,
+            &CredentialCodec::encode(&StoredNodeCredential::from(parsed.credential())).unwrap(),
+        )
+        .unwrap();
+    let node = parsed.into_proxy_node(Uuid::nil(), credential_ref).unwrap();
+    DesktopSessionProfile::new(node, system_dns(), global_route())
+}
+
+fn profile_without_stored_credential() -> DesktopSessionProfile {
+    let parsed = ShadowsocksParser
+        .parse("ss://aes-128-gcm:missing-secret@edge.example.com:443")
+        .unwrap();
+    let node = parsed
+        .into_proxy_node(
+            Uuid::nil(),
+            CredentialRef::new("secret://nodes/missing").unwrap(),
+        )
+        .unwrap();
+    DesktopSessionProfile::new(node, system_dns(), global_route())
+}
+
+fn system_dns() -> DnsProfile {
+    DnsProfile::new(
+        vec![DnsServer::system("system").unwrap()],
+        Vec::new(),
+        "system",
+        DnsStrategy::PreferIpv4,
+        false,
+        false,
+    )
+    .unwrap()
+}
+
+fn global_route() -> RouteProfile {
+    RouteProfile::new(RoutingMode::Global, Vec::new(), RouteOutbound::Proxy).unwrap()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FakeError(&'static str);
+
+impl Display for FakeError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl Error for FakeError {}
+
+struct FakeCore {
+    events: Arc<Mutex<Vec<&'static str>>>,
+    fail_start: bool,
+    fail_stop_count: usize,
+}
+
+impl FakeCore {
+    fn new(events: Arc<Mutex<Vec<&'static str>>>) -> Self {
+        Self {
+            events,
+            fail_start: false,
+            fail_stop_count: 0,
+        }
+    }
+}
+
+impl CoreSessionControl for FakeCore {
+    type Error = FakeError;
+    type Output = &'static str;
+
+    fn start(&mut self, config_path: &Path) -> Result<Self::Output, Self::Error> {
+        self.events.lock().unwrap().push("core_start");
+        assert!(
+            fs::read_to_string(config_path)
+                .unwrap()
+                .contains("runtime-secret")
+        );
+        if self.fail_start {
+            Err(FakeError("core start failed"))
+        } else {
+            Ok("core-output")
+        }
+    }
+
+    fn stop(&mut self) -> Result<(), Self::Error> {
+        self.events.lock().unwrap().push("core_stop");
+        if self.fail_stop_count > 0 {
+            self.fail_stop_count -= 1;
+            Err(FakeError("core stop failed"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Default)]
+struct FakeProxy {
+    events: Arc<Mutex<Vec<&'static str>>>,
+    fail_enable: bool,
+    fail_stop_count: usize,
+}
+
+impl FakeProxy {
+    fn new(events: Arc<Mutex<Vec<&'static str>>>) -> Self {
+        Self {
+            events,
+            fail_enable: false,
+            fail_stop_count: 0,
+        }
+    }
+}
+
+impl SystemProxySessionControl for FakeProxy {
+    type Error = FakeError;
+
+    fn enable(&mut self, state: &SystemProxyState) -> Result<(), Self::Error> {
+        self.events.lock().unwrap().push("proxy_enable");
+        assert_eq!(state.http().endpoint().unwrap().port(), 10_809);
+        assert_eq!(state.https().endpoint().unwrap().port(), 10_809);
+        assert_eq!(state.socks().endpoint().unwrap().port(), 10_808);
+        if self.fail_enable {
+            Err(FakeError("proxy enable failed"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn stop(&mut self) -> Result<(), Self::Error> {
+        self.events.lock().unwrap().push("proxy_stop");
+        if self.fail_stop_count > 0 {
+            self.fail_stop_count -= 1;
+            Err(FakeError("proxy stop failed"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+struct RuntimeDirectory(PathBuf);
+
+impl RuntimeDirectory {
+    fn new(name: &str) -> Self {
+        let path =
+            std::env::temp_dir().join(format!("magies-session-{}-{name}", std::process::id()));
+        fs::create_dir(&path).unwrap();
+        Self(path)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for RuntimeDirectory {
+    fn drop(&mut self) {
+        if let Err(error) = fs::remove_dir_all(&self.0) {
+            eprintln!(
+                "failed to remove session test directory {}: {error}",
+                self.0.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn profile_protocol_is_the_expected_test_protocol() {
+    assert_eq!(
+        profile_without_stored_credential().node().protocol_type,
+        ProxyProtocol::Shadowsocks
+    );
+}

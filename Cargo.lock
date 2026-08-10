@@ -2172,6 +2172,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "magies-session"
+version = "0.1.0"
+dependencies = [
+ "magies-core-runtime",
+ "magies-domain",
+ "magies-platform",
+ "magies-profiles",
+ "magies-routing",
+ "magies-storage",
+ "serde_json",
+ "thiserror 2.0.20",
+ "uuid",
+]
+
+[[package]]
 name = "magies-storage"
 version = "0.1.0"
 dependencies = [
