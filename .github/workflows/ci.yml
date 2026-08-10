@@ -37,6 +37,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes \
+            dbus-x11 \
+            gnome-keyring \
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libssl-dev \
@@ -63,6 +65,18 @@ jobs:
         env:
           GSETTINGS_BACKEND: memory
         run: cargo test -p magies-platform --test linux_system_proxy_real -- --ignored --nocapture
+      - name: Verify macOS and Windows credential store round trip
+        if: runner.os == 'macOS' || runner.os == 'Windows'
+        run: cargo test -p magies-storage --test secret_store platform_store_obeys_secret_store_contract -- --ignored --nocapture
+      - name: Verify Linux Secret Service round trip
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          dbus-run-session -- bash -euo pipefail -c '
+            eval "$(printf "" | gnome-keyring-daemon --login)"
+            eval "$(gnome-keyring-daemon --start --components=secrets)"
+            cargo test -p magies-storage --test secret_store platform_store_obeys_secret_store_contract -- --ignored --nocapture
+          '
       - name: Prepare Linux TUN smoke
         if: runner.os == 'Linux'
         run: |
