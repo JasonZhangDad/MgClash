@@ -221,7 +221,7 @@ impl LinuxSystemProxyAdapter {
     pub fn new() -> Result<Self, LinuxSystemProxyError> {
         #[cfg(target_os = "linux")]
         {
-            return Ok(Self::with_backend(Arc::new(GnomeSettingsBackend::new()?)));
+            Ok(Self::with_backend(Arc::new(GnomeSettingsBackend::new()?)))
         }
         #[cfg(not(target_os = "linux"))]
         {
