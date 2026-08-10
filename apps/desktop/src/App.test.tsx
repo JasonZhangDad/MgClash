@@ -73,6 +73,7 @@ describe("App", () => {
     });
     loadSessionStatusMock.mockResolvedValue(IDLE);
 
+    localStorage.clear();
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -109,6 +110,67 @@ describe("App", () => {
     }
     return found;
   }
+
+  it("warns on first run that this build is unsigned", async () => {
+    await render();
+
+    const notice = container.querySelector("[role='note']");
+    expect(notice?.textContent).toContain("未签名");
+    expect(notice?.textContent).toContain("Gatekeeper");
+  });
+
+  it("names the capability an unsigned macOS build gives up", async () => {
+    await render();
+
+    expect(container.querySelector("[role='note']")?.textContent).toContain(
+      "TUN",
+    );
+  });
+
+  it("stops warning once the notice is dismissed", async () => {
+    await render();
+
+    await act(async () => button("我知道了").click());
+
+    expect(container.querySelector("[role='note']")).toBeNull();
+  });
+
+  it("keeps the notice dismissed on the next launch", async () => {
+    await render();
+    await act(async () => button("我知道了").click());
+
+    act(() => root.unmount());
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await render();
+
+    expect(container.querySelector("[role='note']")).toBeNull();
+  });
+
+  it("still starts, and still warns, when storage is unavailable", async () => {
+    const getItem = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation(() => {
+        throw new Error("storage disabled");
+      });
+    const setItem = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(() => {
+        throw new Error("storage disabled");
+      });
+    try {
+      await render();
+      expect(container.querySelector("[role='note']")).not.toBeNull();
+
+      await act(async () => button("我知道了").click());
+
+      expect(container.querySelector("[role='note']")).toBeNull();
+    } finally {
+      getItem.mockRestore();
+      setItem.mockRestore();
+    }
+  });
 
   it("shows an idle dashboard before a node is imported", async () => {
     await render();

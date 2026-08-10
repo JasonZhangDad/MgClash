@@ -22,6 +22,28 @@ const TUN_LABEL: Record<PlatformSummary["tunAvailability"], string> = {
   unavailableInUnsignedBuild: "未签名版本不可用",
 };
 
+/**
+ * PRD V1.1 DoD 6 requires the unsigned-build risk to be visible on first
+ * launch, not only on the download page.
+ */
+const UNSIGNED_NOTICE_KEY = "mgclash.unsignedNoticeDismissed";
+
+const TUN_NOTICE: Record<PlatformSummary["tunAvailability"], string> = {
+  requiresElevation: "TUN 需要管理员权限才能启用。",
+  unavailableInUnsignedBuild:
+    "TUN 在未签名版本中不可用：它需要 Apple 签发的 Network Extension entitlement。本机可用的是本地 HTTP/SOCKS 代理与系统代理。",
+};
+
+function noticeWasDismissed(): boolean {
+  try {
+    return localStorage.getItem(UNSIGNED_NOTICE_KEY) === "1";
+  } catch {
+    // A webview with storage disabled should still start; showing the notice
+    // again is the safe direction to fail.
+    return false;
+  }
+}
+
 /** Command rejections are typed values from Rust, not `Error` instances. */
 function describeFailure(error: unknown): string {
   if (isCommandError(error)) {
@@ -38,6 +60,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [exportedTo, setExportedTo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [noticeDismissed, setNoticeDismissed] = useState(noticeWasDismissed);
 
   useEffect(() => {
     loadPlatformSummary().then(setPlatform, (failure: unknown) =>
@@ -88,6 +111,15 @@ export default function App() {
     }
   }, []);
 
+  const dismissNotice = useCallback(() => {
+    try {
+      localStorage.setItem(UNSIGNED_NOTICE_KEY, "1");
+    } catch {
+      // Dismissal still applies to this launch even if it cannot be stored.
+    }
+    setNoticeDismissed(true);
+  }, []);
+
   const onImport = useCallback(() => {
     const sharingUri = uri.trim();
     if (sharingUri === "") {
@@ -107,6 +139,21 @@ export default function App() {
       </header>
 
       <section className="content">
+        {!noticeDismissed && (
+          <div className="notice" role="note">
+            <p>
+              这是<strong>未签名</strong>版本：macOS Gatekeeper 与 Windows
+              SmartScreen 会在首次打开时提示，需要你手动确认后才能运行。
+            </p>
+            <p>{platform ? TUN_NOTICE[platform.tunAvailability] : ""}</p>
+            <div className="actions">
+              <button type="button" onClick={dismissNotice}>
+                我知道了
+              </button>
+            </div>
+          </div>
+        )}
+
         <h2>连接</h2>
 
         <dl>
