@@ -2112,10 +2112,18 @@ dependencies = [
 name = "magies-desktop"
 version = "0.1.0"
 dependencies = [
+ "magies-core-runtime",
+ "magies-domain",
  "magies-platform",
+ "magies-profiles",
+ "magies-routing",
+ "magies-session",
+ "magies-storage",
  "serde",
  "tauri",
  "tauri-build",
+ "thiserror 2.0.20",
+ "uuid",
 ]
 
 [[package]]

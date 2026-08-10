@@ -351,6 +351,11 @@ impl RouteProfile {
             final_outbound,
         })
     }
+
+    #[must_use]
+    pub const fn mode(&self) -> RoutingMode {
+        self.mode
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

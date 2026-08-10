@@ -9,6 +9,9 @@ fn generates_global_and_direct_modes_without_user_rules() {
     let global = RouteProfile::new(RoutingMode::Global, Vec::new(), RouteOutbound::Proxy).unwrap();
     let direct = RouteProfile::new(RoutingMode::Direct, Vec::new(), RouteOutbound::Direct).unwrap();
 
+    assert_eq!(global.mode(), RoutingMode::Global);
+    assert_eq!(direct.mode(), RoutingMode::Direct);
+
     assert_eq!(
         SingBoxRouteConfigGenerator::generate(&global).json(),
         &json!({
