@@ -1,5 +1,6 @@
 //! Target platform and build capability model.
 
+pub mod linux_system_proxy;
 pub mod macos_system_proxy;
 pub mod system_proxy;
 pub mod windows_system_proxy;
