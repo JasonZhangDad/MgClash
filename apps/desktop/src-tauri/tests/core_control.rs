@@ -14,6 +14,12 @@ use magies_session::CoreSessionControl;
 
 const HEALTH_TIMEOUT: Duration = Duration::from_millis(5);
 
+/// The lookup under test appends `EXE_SUFFIX`, so a fixture named plain
+/// `sing-box` is invisible to it on Windows.
+fn core_file_name() -> String {
+    format!("sing-box{}", std::env::consts::EXE_SUFFIX)
+}
+
 #[test]
 fn stopping_before_the_first_start_leaves_the_core_untouched() {
     let mut control = control(Err(CoreSettingsError::MissingBinaryPath));
@@ -119,7 +125,7 @@ fn every_core_failure_carries_a_stable_code_and_a_readable_cause() {
 #[test]
 fn finds_a_core_shipped_beside_the_executable() {
     let layout = Layout::new("beside");
-    let core = layout.write(&["sing-box"]);
+    let core = layout.write(&[&core_file_name()]);
 
     assert_eq!(bundled_core_in(layout.path()), Some(core));
 }
@@ -128,7 +134,7 @@ fn finds_a_core_shipped_beside_the_executable() {
 fn finds_a_core_in_the_macos_app_resources_directory() {
     // MgClash.app/Contents/MacOS/<exe> resolves the Core from ../Resources.
     let layout = Layout::new("resources");
-    let core = layout.write(&["..", "Resources", "sing-box"]);
+    let core = layout.write(&["..", "Resources", &core_file_name()]);
 
     assert_eq!(bundled_core_in(layout.path()), Some(core));
 }
@@ -143,7 +149,7 @@ fn reports_no_bundled_core_when_the_artifact_ships_without_one() {
 #[test]
 fn a_runtime_override_wins_over_the_bundled_core() {
     let layout = Layout::new("override");
-    layout.write(&["sing-box"]);
+    layout.write(&[&core_file_name()]);
 
     let settings = CoreSettings::resolve_from(
         Some(PathBuf::from("/opt/other-sing-box")),
@@ -159,7 +165,7 @@ fn a_runtime_override_wins_over_the_bundled_core() {
 #[test]
 fn a_bundled_core_uses_the_digest_pinned_at_build_time() {
     let layout = Layout::new("pinned");
-    let core = layout.write(&["sing-box"]);
+    let core = layout.write(&[&core_file_name()]);
 
     let settings = CoreSettings::resolve_from(
         None,
@@ -176,7 +182,7 @@ fn a_bundled_core_uses_the_digest_pinned_at_build_time() {
 #[test]
 fn a_bundled_core_without_a_pinned_digest_is_refused() {
     let layout = Layout::new("unpinned");
-    layout.write(&["sing-box"]);
+    layout.write(&[&core_file_name()]);
 
     assert!(matches!(
         CoreSettings::resolve_from(None, None, layout.path(), None),
