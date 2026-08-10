@@ -1,11 +1,13 @@
 //! Desktop proxy session orchestration for `MgClash`.
 
 mod network_recovery;
+mod network_watcher;
 
 pub use network_recovery::{
     DEFAULT_DEBOUNCE, MAX_RECOVERY_ATTEMPTS, NetworkEvent, NetworkRecoveryPolicy, RecoveryError,
     RecoveryOutcome, SessionHealthProbe, TcpHealthProbe,
 };
+pub use network_watcher::NetworkWatcher;
 
 use std::error::Error;
 use std::net::SocketAddr;
