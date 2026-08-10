@@ -1,7 +1,9 @@
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ProxyEndpoint {
     host: String,
     port: u16,
@@ -39,7 +41,7 @@ impl ProxyEndpoint {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ProxySetting {
     enabled: bool,
     endpoint: Option<ProxyEndpoint>,
@@ -81,7 +83,7 @@ impl ProxySetting {
     }
 }
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PacSetting {
     enabled: bool,
     url: Option<String>,
@@ -134,7 +136,7 @@ impl Debug for PacSetting {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SystemProxyState {
     http: ProxySetting,
     https: ProxySetting,
