@@ -1,0 +1,61 @@
+name: Release (unsigned)
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-x86_64
+            runner: macos-15-intel
+          - target: macos-aarch64
+            runner: macos-15
+          - target: windows-x86_64
+            runner: windows-2022
+          - target: linux-x86_64
+            runner: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+          node-version: 22.17.1
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+      # The Intel runner must not silently produce an arm64 artifact.
+      - name: Show compiler target
+        run: rustc --version --verbose
+      - name: Package the unsigned artifact
+        shell: bash
+        run: scripts/package-unsigned.sh "${{ github.workspace }}/dist"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mgclash-${{ matrix.target }}-unsigned
+          if-no-files-found: error
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256

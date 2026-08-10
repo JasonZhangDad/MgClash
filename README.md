@@ -24,5 +24,40 @@ npm test
 npm run tauri -- build --no-bundle
 ```
 
-Release artifacts are intentionally unsigned during the current development
-phase. See the V1.1 addendum for the resulting platform limitations.
+## Releases are unsigned — read this before downloading
+
+Every artifact is **unsigned**. No Apple Developer ID, no notarization, no
+Microsoft Authenticode, no Linux repository or GPG signature. This is a
+deliberate decision for the current phase (see ADR 0001/0002), not an oversight,
+and it has consequences you should understand before running a build:
+
+- **macOS** — Gatekeeper blocks the app on first launch. You must open it
+  explicitly (right-click → Open, or System Settings → Privacy & Security).
+  **TUN mode is unavailable**: `NEPacketTunnelProvider` requires an Apple-issued
+  `com.apple.developer.networking.networkextension` entitlement that an unsigned
+  build cannot carry. Local HTTP/SOCKS and System Proxy do work.
+- **Windows** — SmartScreen warns on first run and needs "More info → Run
+  anyway". TUN requires administrator rights.
+- **Linux** — the tarball is not installed from a signed repository. TUN
+  requires `CAP_NET_ADMIN`.
+
+Because nothing is signed, **verify the SHA-256 yourself**. Every artifact ships
+with a `.sha256` next to it:
+
+```sh
+shasum -a 256 -c mgclash-0.1.0-macos-aarch64-unsigned.tar.gz.sha256
+```
+
+The same warning is shown inside the app on first launch.
+
+### Artifact names
+
+`mgclash-<version>-<os>-<cpu>-unsigned.<ext>`, for example
+`mgclash-0.1.0-linux-x86_64-unsigned.tar.gz`. macOS ships a `.app` in a
+tarball, Windows a portable ZIP, Linux a tarball.
+
+Build one locally with:
+
+```sh
+scripts/package-unsigned.sh
+```
