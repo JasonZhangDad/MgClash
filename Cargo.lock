@@ -1792,6 +1792,10 @@ dependencies = [
 [[package]]
 name = "magies-platform"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "magies-profiles"

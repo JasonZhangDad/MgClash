@@ -2,6 +2,7 @@
 
 pub mod macos_system_proxy;
 pub mod system_proxy;
+pub mod windows_system_proxy;
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
