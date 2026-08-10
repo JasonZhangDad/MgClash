@@ -1,5 +1,6 @@
 //! Node import and profile services for `MgClash`.
 
+mod dns_config;
 mod hysteria2;
 mod local_proxy_config;
 mod node_dedup;
@@ -10,6 +11,10 @@ mod trojan;
 mod tun_config;
 mod vmess;
 
+pub use dns_config::{
+    DnsConfigError, DnsProfile, DnsRule, DnsServer, DnsStrategy, GeneratedDnsConfig,
+    PlainDnsTransport, SingBoxDnsConfigGenerator,
+};
 pub use hysteria2::{
     Hysteria2Credential, Hysteria2Obfuscation, Hysteria2ObfuscationMethod, Hysteria2ParseError,
     Hysteria2Parser, ParsedHysteria2Node,

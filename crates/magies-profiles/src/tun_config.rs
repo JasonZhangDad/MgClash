@@ -5,7 +5,7 @@ use magies_domain::CoreType;
 use magies_platform::OperatingSystem;
 use serde_json::{Value, json};
 
-use crate::GeneratedCoreConfig;
+use crate::{DnsProfile, GeneratedCoreConfig, SingBoxDnsConfigGenerator};
 
 const IPV4_ADDRESS: &str = "172.19.0.1/30";
 const IPV6_ADDRESS: &str = "fdfe:dcba:9876::1/126";
@@ -18,6 +18,7 @@ pub struct TunProfile {
     auto_route: bool,
     strict_route: bool,
     routes: TunRouteSettings,
+    dns: Option<TunDnsSettings>,
 }
 
 impl TunProfile {
@@ -50,6 +51,7 @@ impl TunProfile {
             auto_route,
             strict_route,
             routes: TunRouteSettings::default(),
+            dns: None,
         })
     }
 
@@ -73,6 +75,18 @@ impl TunProfile {
         self.routes = routes;
         Ok(self)
     }
+
+    #[must_use]
+    pub fn with_dns(mut self, profile: DnsProfile, hijack: bool) -> Self {
+        self.dns = Some(TunDnsSettings { profile, hijack });
+        self
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TunDnsSettings {
+    profile: DnsProfile,
+    hijack: bool,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -169,15 +183,28 @@ impl SingBoxTunConfigGenerator {
                     .collect::<Vec<_>>()
             );
         }
-        GeneratedCoreConfig::from_json(
-            CoreType::SingBox,
-            json!({
-                "log": { "level": "warn" },
-                "inbounds": [inbound],
-                "outbounds": [{ "type": "direct", "tag": "direct" }],
-                "route": { "auto_detect_interface": true, "final": "direct" }
-            }),
-        )
+        let mut route = json!({ "auto_detect_interface": true, "final": "direct" });
+        if let Some(dns) = &profile.dns {
+            route["default_domain_resolver"] = Value::String(dns.profile.final_server().to_owned());
+            if dns.hijack {
+                route["rules"] = json!([
+                    { "action": "sniff" },
+                    { "protocol": "dns", "action": "hijack-dns" }
+                ]);
+            }
+        }
+        let mut config = json!({
+            "log": { "level": "warn" },
+            "inbounds": [inbound],
+            "outbounds": [{ "type": "direct", "tag": "direct" }],
+            "route": route
+        });
+        if let Some(dns) = &profile.dns {
+            config["dns"] = SingBoxDnsConfigGenerator::generate(&dns.profile)
+                .json()
+                .clone();
+        }
+        GeneratedCoreConfig::from_json(CoreType::SingBox, config)
     }
 }
 
