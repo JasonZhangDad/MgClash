@@ -175,6 +175,13 @@ where
         self.active.is_some()
     }
 
+    /// Borrows the injected store so callers can save a node's credential
+    /// before starting a session with it.
+    #[must_use]
+    pub const fn secret_store(&self) -> &S {
+        &self.secret_store
+    }
+
     #[must_use]
     pub fn config_path(&self) -> Option<&Path> {
         self.active

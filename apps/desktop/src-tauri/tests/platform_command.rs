@@ -1,4 +1,4 @@
-use magies_desktop_lib::{PlatformCommandError, platform_summary_for};
+use magies_desktop_lib::{CommandError, platform_summary_for};
 
 #[test]
 fn returns_an_unsigned_macos_intel_summary() {
@@ -23,7 +23,7 @@ fn returns_a_typed_error_for_an_unsupported_target() {
 
     assert_eq!(
         error,
-        PlatformCommandError {
+        CommandError {
             code: "unsupported_target",
             message: "unsupported target: windows-aarch64".to_owned(),
         }
