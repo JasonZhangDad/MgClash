@@ -143,6 +143,10 @@ jobs:
       - name: Verify complete runtime end-to-end
         if: runner.os == 'Windows' || runner.os == 'Linux'
         run: cargo test -p magies-profiles --test sing_box_runtime_e2e -- --ignored --nocapture
+      - name: Verify the host default-route fingerprint
+        run: cargo test -p magies-platform --test network_path -- --ignored --nocapture
+      - name: Smoke the stability soak harness
+        run: cargo test -p magies-session --test soak -- --ignored --nocapture
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Run Clippy
