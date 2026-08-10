@@ -1,9 +1,14 @@
 //! Desktop proxy session orchestration for `MgClash`.
 
 use std::error::Error;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use magies_core_runtime::{AtomicRuntimeConfig, RuntimeConfigFile, RuntimeConfigFileError};
+use magies_core_runtime::{
+    AtomicRuntimeConfig, CoreHealthError, CoreOutput, CoreRuntime, CoreRuntimeError, CoreState,
+    RuntimeConfigFile, RuntimeConfigFileError, SingBoxAdapter, SingBoxAdapterError,
+};
 use magies_domain::ProxyNode;
 use magies_platform::system_proxy::{PacSetting, ProxyEndpoint, ProxySetting, SystemProxyState};
 use magies_platform::system_proxy_recovery::{
@@ -350,4 +355,84 @@ where
         #[source]
         source: C,
     },
+}
+
+pub struct SingBoxCoreControl {
+    adapter: SingBoxAdapter,
+    runtime: CoreRuntime,
+    health_address: SocketAddr,
+    health_timeout: Duration,
+}
+
+impl SingBoxCoreControl {
+    #[must_use]
+    pub fn new(
+        adapter: SingBoxAdapter,
+        health_address: SocketAddr,
+        health_timeout: Duration,
+    ) -> Self {
+        Self {
+            adapter,
+            runtime: CoreRuntime::default(),
+            health_address,
+            health_timeout,
+        }
+    }
+
+    fn stop_running_core(&mut self) -> Result<(), CoreRuntimeError> {
+        if self.runtime.poll()? == CoreState::Running {
+            self.runtime.stop()?;
+        }
+        Ok(())
+    }
+}
+
+impl CoreSessionControl for SingBoxCoreControl {
+    type Error = SingBoxCoreSessionError;
+    type Output = CoreOutput;
+
+    fn start(&mut self, config_path: &Path) -> Result<Self::Output, Self::Error> {
+        let config = self
+            .adapter
+            .validate_config(config_path)
+            .map_err(SingBoxCoreSessionError::Validate)?;
+        let output = self
+            .runtime
+            .start(&self.adapter.process_spec(&config))
+            .map_err(SingBoxCoreSessionError::Start)?;
+        if let Err(health) = self
+            .runtime
+            .wait_for_tcp_health(self.health_address, self.health_timeout)
+        {
+            return match self.stop_running_core() {
+                Ok(()) => Err(SingBoxCoreSessionError::Health(health)),
+                Err(rollback) => {
+                    Err(SingBoxCoreSessionError::HealthAndRollback { health, rollback })
+                }
+            };
+        }
+        Ok(output)
+    }
+
+    fn stop(&mut self) -> Result<(), Self::Error> {
+        self.stop_running_core()
+            .map_err(SingBoxCoreSessionError::Stop)
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum SingBoxCoreSessionError {
+    #[error("sing-box configuration validation failed")]
+    Validate(#[source] SingBoxAdapterError),
+    #[error("sing-box process failed to start")]
+    Start(#[source] CoreRuntimeError),
+    #[error("sing-box process failed its health check")]
+    Health(#[source] CoreHealthError),
+    #[error("sing-box health check and process rollback both failed")]
+    HealthAndRollback {
+        health: CoreHealthError,
+        rollback: CoreRuntimeError,
+    },
+    #[error("sing-box process failed to stop")]
+    Stop(#[source] CoreRuntimeError),
 }
