@@ -5,6 +5,7 @@ use std::fs::{remove_file, write};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::thread::spawn;
 use std::time::Duration;
 
 use magies_core_runtime::{
@@ -12,7 +13,9 @@ use magies_core_runtime::{
 };
 use magies_domain::CoreType;
 use magies_platform::CpuArchitecture;
-use magies_profiles::{LocalSocksConfigGenerator, LocalSocksProfile};
+use magies_profiles::{
+    LocalHttpConfigGenerator, LocalHttpProfile, LocalSocksConfigGenerator, LocalSocksProfile,
+};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 const XRAY_SHA256: &str = "afd0eaebb77994a18f29b00c5f50a4f7fbb77da06e24352d43035f3cad3c3786";
@@ -22,7 +25,7 @@ const SING_BOX_SHA256: &str = "6e9749a4b40821bf07d301f099e75d871ea435861c9f5f0ac
 #[ignore = "requires MAGIES_XRAY_BIN pointing to official Xray 26.3.27 darwin/amd64"]
 fn generated_xray_config_opens_a_socks5_listener() {
     let port = available_port();
-    let config_path = generated_config(CoreType::Xray, port);
+    let config_path = generated_socks_config(CoreType::Xray, port);
     let binary = validated_binary("MAGIES_XRAY_BIN", XRAY_SHA256);
     let adapter = XrayAdapter::new(binary);
     assert_eq!(adapter.version().unwrap().as_str(), "26.3.27");
@@ -39,7 +42,7 @@ fn generated_xray_config_opens_a_socks5_listener() {
 #[ignore = "requires MAGIES_SING_BOX_BIN pointing to official sing-box 1.13.18 darwin/amd64"]
 fn generated_sing_box_config_opens_a_socks5_listener() {
     let port = available_port();
-    let config_path = generated_config(CoreType::SingBox, port);
+    let config_path = generated_socks_config(CoreType::SingBox, port);
     let binary = validated_binary("MAGIES_SING_BOX_BIN", SING_BOX_SHA256);
     let adapter = SingBoxAdapter::new(binary);
     assert_eq!(adapter.version().unwrap().as_str(), "1.13.18");
@@ -48,6 +51,38 @@ fn generated_sing_box_config_opens_a_socks5_listener() {
     let _output = runtime.start(&adapter.process_spec(&config)).unwrap();
 
     assert_socks5_handshake(&mut runtime, port);
+    runtime.stop().unwrap();
+    remove_file(config_path).unwrap();
+}
+
+#[test]
+#[ignore = "requires MAGIES_XRAY_BIN pointing to official Xray 26.3.27 darwin/amd64"]
+fn generated_xray_config_proxies_an_http_request() {
+    let port = available_port();
+    let config_path = generated_http_config(CoreType::Xray, port);
+    let binary = validated_binary("MAGIES_XRAY_BIN", XRAY_SHA256);
+    let adapter = XrayAdapter::new(binary);
+    let config = adapter.validate_config(&config_path).unwrap();
+    let mut runtime = CoreRuntime::default();
+    let _output = runtime.start(&adapter.process_spec(&config)).unwrap();
+
+    assert_http_proxy_request(&mut runtime, port);
+    runtime.stop().unwrap();
+    remove_file(config_path).unwrap();
+}
+
+#[test]
+#[ignore = "requires MAGIES_SING_BOX_BIN pointing to official sing-box 1.13.18 darwin/amd64"]
+fn generated_sing_box_config_proxies_an_http_request() {
+    let port = available_port();
+    let config_path = generated_http_config(CoreType::SingBox, port);
+    let binary = validated_binary("MAGIES_SING_BOX_BIN", SING_BOX_SHA256);
+    let adapter = SingBoxAdapter::new(binary);
+    let config = adapter.validate_config(&config_path).unwrap();
+    let mut runtime = CoreRuntime::default();
+    let _output = runtime.start(&adapter.process_spec(&config)).unwrap();
+
+    assert_http_proxy_request(&mut runtime, port);
     runtime.stop().unwrap();
     remove_file(config_path).unwrap();
 }
@@ -63,14 +98,54 @@ fn assert_socks5_handshake(runtime: &mut CoreRuntime, port: u16) {
     assert_eq!(response, [5, 0]);
 }
 
-fn generated_config(core_type: CoreType, port: u16) -> PathBuf {
+fn assert_http_proxy_request(runtime: &mut CoreRuntime, proxy_port: u16) {
+    let proxy_address = SocketAddr::from(([127, 0, 0, 1], proxy_port));
+    runtime.wait_for_tcp_health(proxy_address, TIMEOUT).unwrap();
+
+    let origin = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let origin_port = origin.local_addr().unwrap().port();
+    let origin_thread = spawn(move || {
+        let (mut stream, _) = origin.accept().unwrap();
+        stream.set_read_timeout(Some(TIMEOUT)).unwrap();
+        let mut request = [0_u8; 512];
+        let length = stream.read(&mut request).unwrap();
+        assert!(String::from_utf8_lossy(&request[..length]).starts_with("GET /health "));
+        stream
+            .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .unwrap();
+    });
+
+    let mut proxy = TcpStream::connect_timeout(&proxy_address, TIMEOUT).unwrap();
+    proxy.set_read_timeout(Some(TIMEOUT)).unwrap();
+    write!(
+        proxy,
+        "GET http://127.0.0.1:{origin_port}/health HTTP/1.1\r\nHost: 127.0.0.1:{origin_port}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut response = Vec::new();
+    proxy.read_to_end(&mut response).unwrap();
+    assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 204"));
+    origin_thread.join().unwrap();
+}
+
+fn generated_socks_config(core_type: CoreType, port: u16) -> PathBuf {
     let profile = LocalSocksProfile::new(u32::from(port)).unwrap();
     let config = LocalSocksConfigGenerator::generate(core_type, &profile);
+    write_generated_config(core_type, "socks", config.json())
+}
+
+fn generated_http_config(core_type: CoreType, port: u16) -> PathBuf {
+    let profile = LocalHttpProfile::new(u32::from(port)).unwrap();
+    let config = LocalHttpConfigGenerator::generate(core_type, &profile);
+    write_generated_config(core_type, "http", config.json())
+}
+
+fn write_generated_config(core_type: CoreType, kind: &str, json: &serde_json::Value) -> PathBuf {
     let path = std::env::temp_dir().join(format!(
-        "mgclash-local-socks-{core_type:?}-{}.json",
+        "mgclash-local-{kind}-{core_type:?}-{}.json",
         std::process::id()
     ));
-    write(&path, serde_json::to_vec_pretty(config.json()).unwrap()).unwrap();
+    write(&path, serde_json::to_vec_pretty(json).unwrap()).unwrap();
     path
 }
 

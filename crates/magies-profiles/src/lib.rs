@@ -14,8 +14,8 @@ pub use hysteria2::{
     Hysteria2Parser, ParsedHysteria2Node,
 };
 pub use local_proxy_config::{
-    DEFAULT_SOCKS_PORT, GeneratedCoreConfig, LocalProxyConfigError, LocalSocksConfigGenerator,
-    LocalSocksProfile,
+    DEFAULT_HTTP_PORT, DEFAULT_SOCKS_PORT, GeneratedCoreConfig, LocalHttpConfigGenerator,
+    LocalHttpProfile, LocalProxyConfigError, LocalSocksConfigGenerator, LocalSocksProfile,
 };
 pub use node_dedup::{
     CredentialIdentity, NodeDedupCandidate, NodeDedupResult, NodeDedupSummary, NodeDeduplicator,
