@@ -34,7 +34,7 @@ handshake, and stopped the process.
 ```text
 env MAGIES_XRAY_BIN=/absolute/path/to/xray \
     MAGIES_SING_BOX_BIN=/absolute/path/to/sing-box \
-    cargo test -p magies-profiles --test local_socks_core_smoke \
+    cargo test -p magies-profiles --test local_proxy_core_smoke \
     -- --ignored --nocapture
 ```
 
