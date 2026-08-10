@@ -1,5 +1,8 @@
 //! Target platform and build capability model.
 
+pub mod macos_system_proxy;
+pub mod system_proxy;
+
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
