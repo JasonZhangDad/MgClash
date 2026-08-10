@@ -7,6 +7,7 @@ mod local_proxy_ports;
 mod output;
 mod recovery;
 mod sing_box;
+mod tun_runtime;
 mod xray;
 
 use std::error::Error;
@@ -31,6 +32,7 @@ pub use recovery::{
 pub use sing_box::{
     SingBoxAdapter, SingBoxAdapterError, SingBoxOperation, SingBoxVersion, ValidatedSingBoxConfig,
 };
+pub use tun_runtime::{TunFailure, TunRuntime, TunRuntimeError, TunStart, TunState};
 pub use xray::{ValidatedXrayConfig, XrayAdapter, XrayAdapterError, XrayOperation, XrayVersion};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
