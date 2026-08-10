@@ -61,19 +61,28 @@ MAGIES_SOAK_CORE_BIN=/path/to/sing-box MAGIES_SOAK_DURATION_SECS=259200 \
 
 ## Result so far
 
-macOS aarch64, fixture Core:
+Real macOS Intel hardware (`x86_64-apple-darwin`, Core i7-9750H), fixture Core:
 
 ```text
+# 20 s default
 soak: ticks=77 healthy=77 failed=0 reconnects=9 max_reconnect_attempts=1 max_runtime_files=1
-soak duration: 20.22s
+
+# MAGIES_SOAK_DURATION_SECS=300
+soak: ticks=1140 healthy=1140 failed=0 reconnects=142 max_reconnect_attempts=1 max_runtime_files=1
+soak duration: 300.21s
 ```
+
+142 stop/start cycles without a single reconnect needing a retry, without a
+probe failing, and without a runtime config surviving its session. That is the
+shape a passing 72-hour run should have; it is not a substitute for one.
 
 ## Remaining work
 
 - **The 72-hour run has not been performed.** Only short runs have. The V0.1
   acceptance item stays open until a 72-hour result exists per platform.
-- The harness has only run on macOS aarch64 and only against the fixture Core;
-  no run against a pinned sing-box has been done.
+- The harness has only run on macOS Intel and only against the fixture Core; no
+  run against a pinned sing-box has been done, and macOS Apple Silicon, Windows,
+  and Linux are unverified.
 - The harness does not sample RSS or file-descriptor counts. `CoreOutput` is an
   unbounded channel, so a caller that *holds* it without draining would grow
   without bound over 72 hours — the desktop app drops it, and the reader thread

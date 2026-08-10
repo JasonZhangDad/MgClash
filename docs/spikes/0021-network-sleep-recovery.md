@@ -70,12 +70,15 @@ cargo test -p magies-platform --test network_path -- --ignored --nocapture
 ```
 
 The `--ignored` test runs the host's real route command and asserts the
-fingerprint is non-empty and stable across two reads. It was verified on macOS
-aarch64; Windows and Linux are covered by the same test in their CI jobs.
+fingerprint is non-empty and stable across two reads. It was verified on real
+macOS Intel hardware (`x86_64-apple-darwin`, Core i7-9750H), which is the
+platform PRD V1.1 DoD 4 requires a non-cross-compiled result for. Windows and
+Linux are covered by the same test in their CI jobs.
 
 ## Remaining work
 
-- The real command has only been exercised on macOS. The Windows and Linux
-  fingerprints are unverified against a live host.
+- The real command has only been exercised on macOS Intel. The Windows and
+  Linux fingerprints are unverified against a live host, and macOS Apple
+  Silicon is unverified.
 - The recovery loop holds the session mutex for the duration of a reconnect, so
   a Tauri command issued during recovery waits rather than failing fast.
