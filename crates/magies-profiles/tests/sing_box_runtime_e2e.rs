@@ -15,7 +15,13 @@ use magies_routing::{RouteOutbound, RouteProfile, RoutingMode, RoutingRule};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+/// Budget for one socket read once everything is running.
 const TIMEOUT: Duration = Duration::from_secs(5);
+/// Budget for a freshly spawned sing-box to bind its listener. Process startup
+/// and a socket read are different things: a cold Windows runner scanning a
+/// just-downloaded binary regularly needs more than the read budget, which is
+/// what made this test fail there while passing everywhere else.
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[test]
 #[ignore = "requires MAGIES_SING_BOX_CONFIG_BIN pointing to official sing-box 1.13.18"]
@@ -144,14 +150,14 @@ fn available_ports(count: usize) -> Vec<u16> {
 }
 
 fn wait_for_port(port: u16) {
-    let deadline = Instant::now() + TIMEOUT;
+    let deadline = Instant::now() + STARTUP_TIMEOUT;
     while Instant::now() < deadline {
         if TcpStream::connect(("127.0.0.1", port)).is_ok() {
             return;
         }
         sleep(Duration::from_millis(25));
     }
-    panic!("sing-box did not open 127.0.0.1:{port}");
+    panic!("sing-box did not open 127.0.0.1:{port} within {STARTUP_TIMEOUT:?}");
 }
 
 struct CoreProcess(Child);
