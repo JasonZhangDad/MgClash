@@ -6,6 +6,7 @@ use magies_domain::{
     CredentialRef, NodeModelError, NodeName, ProxyNode, ProxyProtocol, ServerAddress,
     TransportConfig,
 };
+use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
@@ -78,6 +79,7 @@ impl ShadowsocksParser {
     }
 }
 
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ShadowsocksCredential {
     method: String,
     password: String,
