@@ -5,11 +5,13 @@ pub mod platform_proxy;
 pub mod session;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::{Mutex, PoisonError};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime};
 
+use magies_platform::network_path::NetworkPathReader;
 use magies_platform::{TargetPlatform, TunAvailability};
-use magies_session::DesktopSession;
+use magies_session::{DesktopSession, NetworkWatcher, TcpHealthProbe};
 use magies_storage::PlatformSecretStore;
 use serde::Serialize;
 use tauri::{Manager, State};
@@ -20,6 +22,19 @@ use crate::session::{SessionCommandError, SessionDefaults, SessionService, Sessi
 
 /// How long a started Core has to accept connections on its local SOCKS port.
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long the recovery probe waits for the Core's local proxy port.
+const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// How often the recovery loop re-reads the host's default network path.
+///
+/// Polling is the price of `unsafe_code = "forbid"`: `NWPathMonitor` and its
+/// Windows/Linux equivalents all need FFI. The loop skips the read entirely
+/// while no session is running, so an idle app spawns no subprocesses.
+const PATH_TICK: Duration = Duration::from_secs(5);
+
+/// A wall-clock gap this much larger than `PATH_TICK` means the machine slept.
+const SLEEP_THRESHOLD: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,14 +82,50 @@ fn platform_summary() -> Result<PlatformSummary, CommandError> {
 type HostSessionService =
     SessionService<PlatformSecretStore, LazySingBoxControl, PlatformProxyControl>;
 
-struct AppState(Mutex<HostSessionService>);
+struct AppState(Arc<Mutex<HostSessionService>>);
 
 impl AppState {
-    /// A poisoned lock means an earlier command panicked; the session state
-    /// itself stays valid, so recover it rather than break every later command.
-    fn service(&self) -> std::sync::MutexGuard<'_, HostSessionService> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    fn service(&self) -> MutexGuard<'_, HostSessionService> {
+        lock(&self.0)
     }
+}
+
+/// A poisoned lock means an earlier command panicked; the session state itself
+/// stays valid, so recover it rather than break every later command.
+fn lock(service: &Mutex<HostSessionService>) -> MutexGuard<'_, HostSessionService> {
+    service.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Watches for network changes and wakes, and reconnects when the Core stopped
+/// answering. Runs for the lifetime of the app.
+fn spawn_recovery_loop(service: Arc<Mutex<HostSessionService>>, probe: TcpHealthProbe) {
+    thread::spawn(move || {
+        let reader = NetworkPathReader::for_host();
+        let mut watcher = NetworkWatcher::new(PATH_TICK, SLEEP_THRESHOLD);
+        loop {
+            thread::sleep(watcher.tick_interval());
+
+            let connected = lock(&service).status().connected;
+            let fingerprint = if connected {
+                reader.fingerprint()
+            } else {
+                None
+            };
+            if let Some(event) = watcher.tick(SystemTime::now(), fingerprint.as_deref()) {
+                lock(&service).observe_network(event, Instant::now());
+            }
+
+            let now = Instant::now();
+            let due = lock(&service)
+                .recovery_due_at()
+                .is_some_and(|due_at| now >= due_at);
+            if due {
+                if let Err(error) = lock(&service).recover(now, &probe) {
+                    eprintln!("network recovery failed: {}", describe(&error));
+                }
+            }
+        }
+    });
 }
 
 /// Keeps the developer-facing cause chain out of the UI's control flow: the UI
@@ -159,7 +210,12 @@ pub fn run() {
                 PlatformProxyControl::for_host(data_directory.join("system-proxy-recovery.json")),
                 runtime_directory,
             );
-            app.manage(AppState(Mutex::new(SessionService::new(session, defaults))));
+            let service = Arc::new(Mutex::new(SessionService::new(session, defaults)));
+            spawn_recovery_loop(
+                service.clone(),
+                TcpHealthProbe::new(health_address, PROBE_TIMEOUT),
+            );
+            app.manage(AppState(service));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

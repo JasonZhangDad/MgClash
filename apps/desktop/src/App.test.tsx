@@ -183,6 +183,78 @@ describe("App", () => {
     expect(container.textContent).toContain("未连接");
   });
 
+  it("picks up a reconnect that automatic recovery performed", async () => {
+    vi.useFakeTimers();
+    loadSessionStatusMock
+      .mockResolvedValueOnce(SELECTED)
+      .mockResolvedValue(CONNECTED);
+    try {
+      await render();
+      expect(container.textContent).toContain("未连接");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000);
+      });
+
+      expect(container.textContent).toContain("已连接");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not refresh over an in-flight command", async () => {
+    vi.useFakeTimers();
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    let release = (_: SessionStatus) => {};
+    connectSessionMock.mockReturnValue(
+      new Promise<SessionStatus>((resolve) => {
+        release = resolve;
+      }),
+    );
+    try {
+      await render();
+      await act(async () => button("连接").click());
+
+      const before = loadSessionStatusMock.mock.calls.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(9000);
+      });
+      expect(loadSessionStatusMock.mock.calls.length).toBe(before);
+
+      await act(async () => release(CONNECTED));
+      expect(container.textContent).toContain("已连接");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a visible error when a background refresh fails", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    loadSessionStatusMock.mockResolvedValueOnce(SELECTED);
+    connectSessionMock.mockRejectedValue({
+      code: "core_not_configured",
+      message: "the pinned sing-box binary is not configured",
+    });
+    try {
+      await render();
+      await act(async () => button("连接").click());
+      loadSessionStatusMock.mockRejectedValue(new Error("refresh failed"));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000);
+      });
+
+      expect(container.querySelector("[role='alert']")?.textContent).toContain(
+        "the pinned sing-box binary is not configured",
+      );
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("shows the typed message when a command fails", async () => {
     loadSessionStatusMock.mockResolvedValue(SELECTED);
     connectSessionMock.mockRejectedValue({

@@ -3,21 +3,25 @@ use std::fmt::{Display, Formatter};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::id;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use magies_desktop_lib::session::{SessionCommandError, SessionDefaults, SessionService};
 use magies_domain::ProxyProtocol;
 use magies_platform::system_proxy::SystemProxyState;
 use magies_profiles::{LocalHttpProfile, LocalSocksProfile};
-use magies_session::{CoreSessionControl, DesktopSession, SystemProxySessionControl};
+use magies_session::{
+    CoreSessionControl, DesktopSession, NetworkEvent, RecoveryOutcome, SessionHealthProbe,
+    SystemProxySessionControl,
+};
 use magies_storage::MemorySecretStore;
 
 const SHADOWSOCKS_LINK: &str = "ss://aes-128-gcm:runtime-secret@edge.example.com:8388#Tokyo%20Edge";
 
 #[test]
 fn reports_an_idle_status_before_a_node_is_imported() {
-    let (service, _runtime) = service();
+    let (service, _runtime, _fail_start) = service();
     let status = service.status();
 
     assert!(!status.connected);
@@ -31,7 +35,7 @@ fn reports_an_idle_status_before_a_node_is_imported() {
 
 #[test]
 fn importing_a_share_link_stores_the_credential_and_selects_the_node() {
-    let (mut service, _runtime) = service();
+    let (mut service, _runtime, _fail_start) = service();
 
     let status = service.import_node(SHADOWSOCKS_LINK).unwrap();
 
@@ -45,7 +49,7 @@ fn importing_a_share_link_stores_the_credential_and_selects_the_node() {
 
 #[test]
 fn importing_a_second_link_replaces_the_selected_node() {
-    let (mut service, _runtime) = service();
+    let (mut service, _runtime, _fail_start) = service();
     service.import_node(SHADOWSOCKS_LINK).unwrap();
 
     let status = service
@@ -58,7 +62,7 @@ fn importing_a_second_link_replaces_the_selected_node() {
 
 #[test]
 fn rejects_an_unsupported_share_link_without_selecting_a_node() {
-    let (mut service, _runtime) = service();
+    let (mut service, _runtime, _fail_start) = service();
 
     assert!(matches!(
         service.import_node("tuic://token@edge.example.com:443"),
@@ -70,7 +74,7 @@ fn rejects_an_unsupported_share_link_without_selecting_a_node() {
 #[test]
 fn connecting_starts_the_core_and_the_system_proxy() {
     let events = Arc::new(Mutex::new(Vec::new()));
-    let (mut service, runtime) = service_with_events(&events);
+    let (mut service, runtime, _fail_start) = service_with_events(&events);
     service.import_node(SHADOWSOCKS_LINK).unwrap();
 
     let status = service.connect().unwrap();
@@ -96,7 +100,7 @@ fn connecting_starts_the_core_and_the_system_proxy() {
 #[test]
 fn connecting_without_an_imported_node_fails_before_touching_the_core() {
     let events = Arc::new(Mutex::new(Vec::new()));
-    let (mut service, _runtime) = service_with_events(&events);
+    let (mut service, _runtime, _fail_start) = service_with_events(&events);
 
     assert!(matches!(
         service.connect(),
@@ -109,8 +113,7 @@ fn connecting_without_an_imported_node_fails_before_touching_the_core() {
 fn surfaces_a_failing_core_start_as_a_session_error() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let runtime = RuntimeDirectory::new("core-start-failure");
-    let mut core = FakeCore::new(events.clone());
-    core.fail_start = true;
+    let core = FakeCore::new(events.clone(), Arc::new(AtomicBool::new(true)));
     let mut service = SessionService::new(
         DesktopSession::new(
             MemorySecretStore::default(),
@@ -132,7 +135,7 @@ fn surfaces_a_failing_core_start_as_a_session_error() {
 
 #[test]
 fn disconnecting_an_idle_session_reports_a_session_error() {
-    let (mut service, _runtime) = service();
+    let (mut service, _runtime, _fail_start) = service();
 
     assert!(matches!(
         service.disconnect(),
@@ -140,35 +143,74 @@ fn disconnecting_an_idle_session_reports_a_session_error() {
     ));
 }
 
-fn service() -> (
-    SessionService<MemorySecretStore, FakeCore, FakeProxy>,
-    RuntimeDirectory,
-) {
+type TestService = SessionService<MemorySecretStore, FakeCore, FakeProxy>;
+
+fn service() -> (TestService, RuntimeDirectory, Arc<AtomicBool>) {
     service_with_events(&Arc::new(Mutex::new(Vec::new())))
 }
 
 fn service_with_events(
     events: &Arc<Mutex<Vec<&'static str>>>,
-) -> (
-    SessionService<MemorySecretStore, FakeCore, FakeProxy>,
-    RuntimeDirectory,
-) {
+) -> (TestService, RuntimeDirectory, Arc<AtomicBool>) {
     let runtime = RuntimeDirectory::new("session-service");
+    let fail_start = Arc::new(AtomicBool::new(false));
     let service = SessionService::new(
         DesktopSession::new(
             MemorySecretStore::default(),
-            FakeCore::new(events.clone()),
+            FakeCore::new(events.clone(), fail_start.clone()),
             FakeProxy::new(events.clone()),
             runtime.path(),
         ),
         SessionDefaults::v01(),
     );
-    (service, runtime)
+    (service, runtime, fail_start)
+}
+
+#[test]
+fn a_network_event_reconnects_a_dead_core_without_the_user_acting() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let (mut service, _runtime, _fail_start) = service_with_events(&events);
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    service.connect().unwrap();
+    events.lock().unwrap().clear();
+
+    let now = Instant::now();
+    assert_eq!(service.recovery_due_at(), None);
+    service.observe_network(NetworkEvent::Woke, now);
+    let due_at = service.recovery_due_at().expect("an event is pending");
+
+    let outcome = service.recover(due_at, &AlwaysUnhealthy).unwrap();
+
+    assert_eq!(outcome, RecoveryOutcome::Reconnected { attempts: 1 });
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        ["proxy_stop", "core_stop", "core_start", "proxy_enable"]
+    );
+    assert!(service.status().connected);
+}
+
+#[test]
+fn a_network_event_leaves_a_healthy_core_alone() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let (mut service, _runtime, _fail_start) = service_with_events(&events);
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    service.connect().unwrap();
+    events.lock().unwrap().clear();
+
+    let now = Instant::now();
+    service.observe_network(NetworkEvent::PathChanged, now);
+    let due_at = service.recovery_due_at().unwrap();
+
+    assert_eq!(
+        service.recover(due_at, &AlwaysHealthy).unwrap(),
+        RecoveryOutcome::Healthy
+    );
+    assert!(events.lock().unwrap().is_empty());
 }
 
 #[test]
 fn every_session_failure_carries_a_stable_code_for_the_ui() {
-    let (mut service, _runtime) = service();
+    let (mut service, _runtime, _fail_start) = service();
 
     assert_eq!(service.connect().unwrap_err().code(), "no_selected_node");
     assert_eq!(
@@ -231,15 +273,28 @@ impl Error for FakeError {}
 
 struct FakeCore {
     events: Arc<Mutex<Vec<&'static str>>>,
-    fail_start: bool,
+    fail_start: Arc<AtomicBool>,
 }
 
 impl FakeCore {
-    fn new(events: Arc<Mutex<Vec<&'static str>>>) -> Self {
-        Self {
-            events,
-            fail_start: false,
-        }
+    fn new(events: Arc<Mutex<Vec<&'static str>>>, fail_start: Arc<AtomicBool>) -> Self {
+        Self { events, fail_start }
+    }
+}
+
+struct AlwaysHealthy;
+
+impl SessionHealthProbe for AlwaysHealthy {
+    fn is_healthy(&self) -> bool {
+        true
+    }
+}
+
+struct AlwaysUnhealthy;
+
+impl SessionHealthProbe for AlwaysUnhealthy {
+    fn is_healthy(&self) -> bool {
+        false
     }
 }
 
@@ -254,7 +309,7 @@ impl CoreSessionControl for FakeCore {
                 .unwrap()
                 .contains("runtime-secret")
         );
-        if self.fail_start {
+        if self.fail_start.load(Ordering::Relaxed) {
             Err(FakeError("core start failed"))
         } else {
             Ok(())
