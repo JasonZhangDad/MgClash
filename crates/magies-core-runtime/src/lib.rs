@@ -6,6 +6,7 @@ mod health;
 mod local_proxy_ports;
 mod output;
 mod recovery;
+mod runtime_config_file;
 mod sing_box;
 mod tun_runtime;
 mod xray;
@@ -29,6 +30,7 @@ pub use output::{CoreOutput, CoreOutputEvent, CoreOutputStream};
 pub use recovery::{
     CoreRecovery, CoreRecoveryError, CoreRecoveryFailure, MAX_CRASH_RECOVERY_ATTEMPTS,
 };
+pub use runtime_config_file::{AtomicRuntimeConfig, RuntimeConfigFile, RuntimeConfigFileError};
 pub use sing_box::{
     SingBoxAdapter, SingBoxAdapterError, SingBoxOperation, SingBoxVersion, ValidatedSingBoxConfig,
 };
