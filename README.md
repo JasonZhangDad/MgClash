@@ -61,3 +61,16 @@ Build one locally with:
 ```sh
 scripts/package-unsigned.sh
 ```
+
+### The Core is not bundled yet
+
+A downloaded build starts and shows its dashboard, but connecting reports
+`core_not_configured` until a sing-box binary is supplied. Point the app at one:
+
+```sh
+export MAGIES_SING_BOX_BIN=/path/to/sing-box
+export MAGIES_SING_BOX_SHA256=$(shasum -a 256 /path/to/sing-box | cut -d' ' -f1)
+```
+
+See [ADR 0003](docs/adr/0003-unsigned-release-artifacts.md) for why the artifact
+does not ship one yet.

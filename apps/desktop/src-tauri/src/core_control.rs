@@ -21,6 +21,16 @@ use thiserror::Error;
 pub const BINARY_PATH_VARIABLE: &str = "MAGIES_SING_BOX_BIN";
 pub const SHA256_VARIABLE: &str = "MAGIES_SING_BOX_SHA256";
 
+/// The Core file name an artifact ships, if it ships one.
+const BUNDLED_CORE_STEM: &str = "sing-box";
+
+/// The digest baked in when the release build set `MAGIES_SING_BOX_SHA256`.
+///
+/// Reading the pin from a file next to the Core would be no pin at all —
+/// anything that can replace the binary can replace the file beside it. Baking
+/// it into this executable at build time is what makes the check meaningful.
+const BUILD_TIME_SHA256: Option<&str> = option_env!("MAGIES_SING_BOX_SHA256");
+
 /// The pinned sing-box binary this build is allowed to run.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CoreSettings {
@@ -36,10 +46,37 @@ impl CoreSettings {
     /// Returns a typed error when either variable is missing or the digest is
     /// not 32 hex-encoded bytes.
     pub fn from_env() -> Result<Self, CoreSettingsError> {
-        Self::from_values(
+        let executable_directory = std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(Path::to_path_buf))
+            .unwrap_or_default();
+        Self::resolve_from(
             std::env::var_os(BINARY_PATH_VARIABLE).map(PathBuf::from),
             std::env::var(SHA256_VARIABLE).ok(),
+            &executable_directory,
+            BUILD_TIME_SHA256,
         )
+    }
+
+    /// Resolves the Core from an explicit override, falling back to one shipped
+    /// inside the artifact with a digest pinned at build time.
+    ///
+    /// The runtime override wins so a developer can point a packaged build at a
+    /// different Core without rebuilding.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when no Core can be located, when a located Core
+    /// has no digest to check it against, or when a digest is malformed.
+    pub fn resolve_from(
+        binary: Option<PathBuf>,
+        sha256: Option<String>,
+        executable_directory: &Path,
+        build_time_sha256: Option<&str>,
+    ) -> Result<Self, CoreSettingsError> {
+        let binary = binary.or_else(|| bundled_core_in(executable_directory));
+        let sha256 = sha256.or_else(|| build_time_sha256.map(str::to_owned));
+        Self::from_values(binary, sha256)
     }
 
     /// Validates an already-read Core location and digest.
@@ -172,6 +209,24 @@ impl LazySingBoxError {
             Self::Session(_) => "core_session_failed",
         }
     }
+}
+
+/// Locates a Core shipped inside the artifact, relative to the executable.
+///
+/// Windows and Linux put it beside the executable; a macOS `.app` puts it in
+/// `Contents/Resources`, which is `../Resources` from `Contents/MacOS`.
+#[must_use]
+pub fn bundled_core_in(executable_directory: &Path) -> Option<PathBuf> {
+    let file_name = format!("{BUNDLED_CORE_STEM}{}", std::env::consts::EXE_SUFFIX);
+    [
+        executable_directory.join(&file_name),
+        executable_directory
+            .join("..")
+            .join("Resources")
+            .join(&file_name),
+    ]
+    .into_iter()
+    .find(|candidate| candidate.is_file())
 }
 
 /// Renders an error and every cause behind it for the developer-facing log.

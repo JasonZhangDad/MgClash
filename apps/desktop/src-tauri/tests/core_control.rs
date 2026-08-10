@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use magies_core_runtime::Sha256Hash;
 use magies_desktop_lib::core_control::{
-    CoreSettings, CoreSettingsError, LazySingBoxControl, LazySingBoxError, describe,
+    CoreSettings, CoreSettingsError, LazySingBoxControl, LazySingBoxError, bundled_core_in,
+    describe,
 };
 use magies_session::CoreSessionControl;
 
@@ -115,6 +116,74 @@ fn every_core_failure_carries_a_stable_code_and_a_readable_cause() {
     );
 }
 
+#[test]
+fn finds_a_core_shipped_beside_the_executable() {
+    let layout = Layout::new("beside");
+    let core = layout.write(&["sing-box"]);
+
+    assert_eq!(bundled_core_in(layout.path()), Some(core));
+}
+
+#[test]
+fn finds_a_core_in_the_macos_app_resources_directory() {
+    // MgClash.app/Contents/MacOS/<exe> resolves the Core from ../Resources.
+    let layout = Layout::new("resources");
+    let core = layout.write(&["..", "Resources", "sing-box"]);
+
+    assert_eq!(bundled_core_in(layout.path()), Some(core));
+}
+
+#[test]
+fn reports_no_bundled_core_when_the_artifact_ships_without_one() {
+    let layout = Layout::new("empty");
+
+    assert_eq!(bundled_core_in(layout.path()), None);
+}
+
+#[test]
+fn a_runtime_override_wins_over_the_bundled_core() {
+    let layout = Layout::new("override");
+    layout.write(&["sing-box"]);
+
+    let settings = CoreSettings::resolve_from(
+        Some(PathBuf::from("/opt/other-sing-box")),
+        Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".to_owned()),
+        layout.path(),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(settings.binary, PathBuf::from("/opt/other-sing-box"));
+}
+
+#[test]
+fn a_bundled_core_uses_the_digest_pinned_at_build_time() {
+    let layout = Layout::new("pinned");
+    let core = layout.write(&["sing-box"]);
+
+    let settings = CoreSettings::resolve_from(
+        None,
+        None,
+        layout.path(),
+        Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+    )
+    .unwrap();
+
+    assert_eq!(settings.binary, core);
+    assert_eq!(settings.sha256, Sha256Hash::digest(b"abc"));
+}
+
+#[test]
+fn a_bundled_core_without_a_pinned_digest_is_refused() {
+    let layout = Layout::new("unpinned");
+    layout.write(&["sing-box"]);
+
+    assert!(matches!(
+        CoreSettings::resolve_from(None, None, layout.path(), None),
+        Err(CoreSettingsError::MissingSha256)
+    ));
+}
+
 fn control(settings: Result<CoreSettings, CoreSettingsError>) -> LazySingBoxControl {
     LazySingBoxControl::new(
         settings,
@@ -124,6 +193,51 @@ fn control(settings: Result<CoreSettings, CoreSettingsError>) -> LazySingBoxCont
 }
 
 static FIXTURE_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+
+/// A throwaway artifact layout used to exercise bundled-Core discovery.
+///
+/// The executable directory is nested one level inside the sandbox root, so the
+/// `../Resources` candidate stays within this layout instead of reaching into
+/// the shared temp directory and colliding with another test.
+struct Layout {
+    root: PathBuf,
+    executable_directory: PathBuf,
+}
+
+impl Layout {
+    fn new(name: &str) -> Self {
+        let sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mgclash-layout-{name}-{}-{sequence}", id()));
+        let executable_directory = root.join("MacOS");
+        std::fs::create_dir_all(&executable_directory).unwrap();
+        Self {
+            root,
+            executable_directory,
+        }
+    }
+
+    fn path(&self) -> &PathBuf {
+        &self.executable_directory
+    }
+
+    fn write(&self, segments: &[&str]) -> PathBuf {
+        let mut path = self.executable_directory.clone();
+        for segment in segments {
+            path.push(segment);
+        }
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        write(&path, b"not a real sing-box").unwrap();
+        path
+    }
+}
+
+impl Drop for Layout {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir_all(&self.root) {
+            eprintln!("failed to remove layout {}: {error}", self.root.display());
+        }
+    }
+}
 
 struct Fixture {
     path: PathBuf,
