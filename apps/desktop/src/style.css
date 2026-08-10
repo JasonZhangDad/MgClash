@@ -74,6 +74,41 @@ dd {
   overflow-wrap: anywhere;
 }
 
+dd.connected {
+  color: #1a7f37;
+  font-weight: 600;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin: 16px 0 24px;
+}
+
+button {
+  padding: 6px 16px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  background: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  color: #8c959f;
+  cursor: not-allowed;
+}
+
+textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 13px;
+  resize: vertical;
+}
+
 .error {
   color: #cf222e;
 }
