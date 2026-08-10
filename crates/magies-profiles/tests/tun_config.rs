@@ -1,6 +1,6 @@
 use magies_domain::CoreType;
 use magies_platform::OperatingSystem;
-use magies_profiles::{SingBoxTunConfigGenerator, TunProfile, TunProfileError};
+use magies_profiles::{SingBoxTunConfigGenerator, TunProfile, TunProfileError, TunRouteSettings};
 use serde_json::json;
 
 #[test]
@@ -65,5 +65,62 @@ fn validates_platform_mtu_and_strict_route() {
     assert_eq!(
         TunProfile::new(OperatingSystem::Windows, false, 1500, false, true),
         Err(TunProfileError::StrictRouteRequiresAutoRoute)
+    );
+}
+
+#[test]
+fn emits_include_and_exclude_routes_without_reordering() {
+    let routes = TunRouteSettings::new(
+        vec!["0.0.0.0/1".to_owned(), "128.0.0.0/1".to_owned()],
+        vec!["10.0.0.0/8".to_owned(), "192.168.0.0/16".to_owned()],
+    )
+    .unwrap();
+    let profile = TunProfile::new(OperatingSystem::Windows, false, 1500, true, true)
+        .unwrap()
+        .with_routes(routes)
+        .unwrap();
+
+    let config = SingBoxTunConfigGenerator::generate(&profile);
+    let inbound = &config.json()["inbounds"][0];
+
+    assert_eq!(
+        inbound["route_address"],
+        json!(["0.0.0.0/1", "128.0.0.0/1"])
+    );
+    assert_eq!(
+        inbound["route_exclude_address"],
+        json!(["10.0.0.0/8", "192.168.0.0/16"])
+    );
+}
+
+#[test]
+fn rejects_invalid_conflicting_and_disabled_family_routes() {
+    assert_eq!(
+        TunRouteSettings::new(vec!["not-a-cidr".to_owned()], Vec::new()),
+        Err(TunProfileError::InvalidRoute {
+            value: "not-a-cidr".to_owned()
+        })
+    );
+    assert_eq!(
+        TunRouteSettings::new(vec!["10.0.0.0/8".to_owned()], vec!["10.0.0.0/8".to_owned()]),
+        Err(TunProfileError::ConflictingRoute {
+            cidr: "10.0.0.0/8".to_owned()
+        })
+    );
+
+    let ipv6_route = TunRouteSettings::new(vec!["2001:db8::/32".to_owned()], Vec::new()).unwrap();
+    let ipv4_only = TunProfile::new(OperatingSystem::Linux, false, 1500, true, true).unwrap();
+    assert_eq!(
+        ipv4_only.with_routes(ipv6_route),
+        Err(TunProfileError::Ipv6RouteRequiresIpv6 {
+            cidr: "2001:db8::/32".to_owned()
+        })
+    );
+
+    let routes = TunRouteSettings::new(vec!["10.0.0.0/8".to_owned()], Vec::new()).unwrap();
+    let no_auto_route = TunProfile::new(OperatingSystem::Linux, false, 1500, false, false).unwrap();
+    assert_eq!(
+        no_auto_route.with_routes(routes),
+        Err(TunProfileError::RoutesRequireAutoRoute)
     );
 }

@@ -34,7 +34,7 @@ pub use subscription_transaction::{
     SubscriptionUpdate,
 };
 pub use trojan::{ParsedTrojanNode, TrojanCredential, TrojanParseError, TrojanParser};
-pub use tun_config::{SingBoxTunConfigGenerator, TunProfile, TunProfileError};
+pub use tun_config::{SingBoxTunConfigGenerator, TunProfile, TunProfileError, TunRouteSettings};
 pub use vmess::{ParsedVmessNode, VmessCredential, VmessParseError, VmessParser, VmessSecurity};
 
 use std::collections::BTreeMap;
