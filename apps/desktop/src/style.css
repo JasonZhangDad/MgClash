@@ -109,6 +109,24 @@ textarea {
   resize: vertical;
 }
 
+.notice {
+  margin: 0 0 24px;
+  padding: 12px 16px;
+  border: 1px solid #d4a72c;
+  border-radius: 6px;
+  background: #fff8c5;
+}
+
+.notice p {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.notice .actions {
+  margin: 0;
+}
+
 .hint {
   margin: 0 0 12px;
   color: #64748b;
