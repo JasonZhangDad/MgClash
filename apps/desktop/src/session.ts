@@ -54,3 +54,8 @@ export function connectSession(): Promise<SessionStatus> {
 export function disconnectSession(): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_disconnect");
 }
+
+/** Writes a redacted diagnostic bundle and resolves with its path. */
+export function exportDiagnostics(): Promise<string> {
+  return invoke<string>("export_diagnostics");
+}

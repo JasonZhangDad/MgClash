@@ -4,6 +4,7 @@ import { loadPlatformSummary, type PlatformSummary } from "./platform";
 import {
   connectSession,
   disconnectSession,
+  exportDiagnostics,
   importNode,
   isCommandError,
   loadSessionStatus,
@@ -35,6 +36,7 @@ export default function App() {
   const [status, setStatus] = useState<SessionStatus | null>(null);
   const [uri, setUri] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [exportedTo, setExportedTo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -63,8 +65,22 @@ export default function App() {
   const run = useCallback(async (command: () => Promise<SessionStatus>) => {
     setBusy(true);
     setError(null);
+    setExportedTo(null);
     try {
       setStatus(await command());
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const onExport = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    setExportedTo(null);
+    try {
+      setExportedTo(await exportDiagnostics());
     } catch (failure: unknown) {
       setError(describeFailure(failure));
     } finally {
@@ -174,6 +190,24 @@ export default function App() {
             导入
           </button>
         </div>
+
+        <h2>诊断</h2>
+
+        <p className="hint">
+          导出的诊断包已按 PRD 25.3 脱敏：凭据字段一律替换为 [REDACTED]。
+        </p>
+
+        <div className="actions">
+          <button type="button" disabled={busy} onClick={() => void onExport()}>
+            导出诊断
+          </button>
+        </div>
+
+        {exportedTo !== null && (
+          <p className="success" role="status">
+            已导出到 {exportedTo}
+          </p>
+        )}
 
         {error !== null && (
           <p className="error" role="alert">

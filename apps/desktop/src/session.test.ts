@@ -7,6 +7,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 import {
   connectSession,
   disconnectSession,
+  exportDiagnostics,
   importNode,
   isCommandError,
   loadSessionStatus,
@@ -48,6 +49,15 @@ describe("session commands", () => {
 
     expect(invokeMock).toHaveBeenNthCalledWith(1, "session_connect");
     expect(invokeMock).toHaveBeenNthCalledWith(2, "session_disconnect");
+  });
+
+  it("exports diagnostics through its own command", async () => {
+    invokeMock.mockResolvedValue("/data/mgclash-diagnostics-1.json");
+
+    await expect(exportDiagnostics()).resolves.toBe(
+      "/data/mgclash-diagnostics-1.json",
+    );
+    expect(invokeMock).toHaveBeenCalledWith("export_diagnostics");
   });
 
   it("surfaces command failures", async () => {

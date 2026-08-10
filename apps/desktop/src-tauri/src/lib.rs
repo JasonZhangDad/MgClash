@@ -1,10 +1,12 @@
 //! `MgClash` Tauri desktop shell.
 
 pub mod core_control;
+pub mod diagnostics;
 pub mod platform_proxy;
 pub mod session;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -17,6 +19,7 @@ use serde::Serialize;
 use tauri::{Manager, State};
 
 use crate::core_control::{LazySingBoxControl, describe};
+use crate::diagnostics::DiagnosticBundle;
 use crate::platform_proxy::PlatformProxyControl;
 use crate::session::{SessionCommandError, SessionDefaults, SessionService, SessionStatus};
 
@@ -82,11 +85,15 @@ fn platform_summary() -> Result<PlatformSummary, CommandError> {
 type HostSessionService =
     SessionService<PlatformSecretStore, LazySingBoxControl, PlatformProxyControl>;
 
-struct AppState(Arc<Mutex<HostSessionService>>);
+struct AppState {
+    service: Arc<Mutex<HostSessionService>>,
+    /// Where an exported diagnostic bundle is written.
+    export_directory: PathBuf,
+}
 
 impl AppState {
     fn service(&self) -> MutexGuard<'_, HostSessionService> {
-        lock(&self.0)
+        lock(&self.service)
     }
 }
 
@@ -189,6 +196,24 @@ fn session_disconnect(state: State<'_, AppState>) -> Result<SessionStatus, Comma
         .map_err(|error| command_error(&error))
 }
 
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State by value"
+)]
+fn export_diagnostics(state: State<'_, AppState>) -> Result<PathBuf, CommandError> {
+    let bundle = {
+        let service = state.service();
+        DiagnosticBundle::collect(&service.status(), service.runtime_config_path())
+    };
+    bundle
+        .write_to(&state.export_directory)
+        .map_err(|error| CommandError {
+            code: error.code(),
+            message: describe(&error),
+        })
+}
+
 /// Starts the desktop application event loop.
 ///
 /// # Panics
@@ -215,7 +240,10 @@ pub fn run() {
                 service.clone(),
                 TcpHealthProbe::new(health_address, PROBE_TIMEOUT),
             );
-            app.manage(AppState(service));
+            app.manage(AppState {
+                service,
+                export_directory: data_directory,
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -223,7 +251,8 @@ pub fn run() {
             session_status,
             session_import_node,
             session_connect,
-            session_disconnect
+            session_disconnect,
+            export_diagnostics
         ])
         .run(tauri::generate_context!())
         .expect("failed to run MgClash desktop shell");

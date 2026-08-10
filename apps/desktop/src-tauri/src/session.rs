@@ -4,6 +4,7 @@
 //! shared node model, saves the credential in the OS store, and drives
 //! [`DesktopSession`] for connect and disconnect.
 
+use std::path::Path;
 use std::time::Instant;
 
 use magies_domain::{CredentialRef, NodeModelError, ProxyNode, ProxyProtocol};
@@ -219,6 +220,12 @@ where
     pub fn disconnect(&mut self) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
         self.session.stop().map_err(SessionCommandError::Session)?;
         Ok(self.status())
+    }
+
+    /// The running session's on-disk config, for the diagnostic bundle.
+    #[must_use]
+    pub fn runtime_config_path(&self) -> Option<&Path> {
+        self.session.config_path()
     }
 
     #[must_use]

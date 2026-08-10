@@ -9,6 +9,7 @@ const loadSessionStatusMock = vi.hoisted(() => vi.fn());
 const importNodeMock = vi.hoisted(() => vi.fn());
 const connectSessionMock = vi.hoisted(() => vi.fn());
 const disconnectSessionMock = vi.hoisted(() => vi.fn());
+const exportDiagnosticsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./platform", () => ({
   loadPlatformSummary: loadPlatformSummaryMock,
@@ -19,6 +20,7 @@ vi.mock("./session", async () => {
   return {
     connectSession: connectSessionMock,
     disconnectSession: disconnectSessionMock,
+    exportDiagnostics: exportDiagnosticsMock,
     importNode: importNodeMock,
     isCommandError: actual.isCommandError,
     loadSessionStatus: loadSessionStatusMock,
@@ -63,6 +65,7 @@ describe("App", () => {
     importNodeMock.mockReset();
     connectSessionMock.mockReset();
     disconnectSessionMock.mockReset();
+    exportDiagnosticsMock.mockReset();
 
     loadPlatformSummaryMock.mockResolvedValue({
       artifactIdentifier: "macos-x86_64",
@@ -253,6 +256,33 @@ describe("App", () => {
       warn.mockRestore();
       vi.useRealTimers();
     }
+  });
+
+  it("exports a diagnostic bundle and shows where it went", async () => {
+    exportDiagnosticsMock.mockResolvedValue("/data/mgclash-diagnostics-1.json");
+    await render();
+
+    await act(async () => button("导出诊断").click());
+
+    expect(exportDiagnosticsMock).toHaveBeenCalledOnce();
+    expect(container.querySelector("[role='status']")?.textContent).toContain(
+      "/data/mgclash-diagnostics-1.json",
+    );
+  });
+
+  it("shows a failed export as an error", async () => {
+    exportDiagnosticsMock.mockRejectedValue({
+      code: "diagnostics_write_failed",
+      message: "failed to write the diagnostic bundle",
+    });
+    await render();
+
+    await act(async () => button("导出诊断").click());
+
+    expect(container.querySelector("[role='alert']")?.textContent).toContain(
+      "failed to write the diagnostic bundle",
+    );
+    expect(container.querySelector("[role='status']")).toBeNull();
   });
 
   it("shows the typed message when a command fails", async () => {

@@ -21,6 +21,7 @@ magies-routing = { path = "../../../crates/magies-routing" }
 magies-session = { path = "../../../crates/magies-session" }
 magies-storage = { path = "../../../crates/magies-storage" }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tauri = { version = "=2.11.5", features = [] }
 thiserror = "2"
 uuid = { version = "1", features = ["v4"] }

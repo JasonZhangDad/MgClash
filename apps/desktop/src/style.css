@@ -109,6 +109,17 @@ textarea {
   resize: vertical;
 }
 
+.hint {
+  margin: 0 0 12px;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.success {
+  color: #1a7f37;
+  overflow-wrap: anywhere;
+}
+
 .error {
   color: #cf222e;
 }
