@@ -15,9 +15,9 @@
         "label": "main",
         "title": "MgClash",
         "width": 720,
-        "height": 480,
+        "height": 800,
         "minWidth": 560,
-        "minHeight": 360
+        "minHeight": 480
       }
     ]
   },
