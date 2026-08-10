@@ -72,18 +72,27 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          # A headless runner has no keyrings at all. Starting the daemon is not
-          # enough: the Secret Service resolves the `default` collection through
-          # an alias, and with no alias the lookup returns nothing, which
-          # surfaced as `NoStorageAccess(NoResult)` on the first `put`. Point the
-          # alias at the login keyring the daemon is about to create.
-          mkdir -p "$HOME/.local/share/keyrings"
-          printf 'login' > "$HOME/.local/share/keyrings/default"
-          dbus-run-session -- bash -euo pipefail -c '
-            eval "$(printf "" | gnome-keyring-daemon --login)"
-            eval "$(gnome-keyring-daemon --start --components=secrets)"
-            cargo test -p magies-storage --test secret_store platform_store_obeys_secret_store_contract -- --ignored --nocapture
-          '
+          # A headless runner has no keyring collections at all. Starting the
+          # daemon is not enough: the Secret Service resolves `default` through
+          # an alias, and with none set ReadAlias returns "/", which the client
+          # reports as NoStorageAccess(NoResult) on the first put. Create the
+          # collection and claim the alias explicitly, then print what the alias
+          # resolves to so a future failure is diagnosable from the log.
+          cat > "$RUNNER_TEMP/keyring-round-trip.sh" <<'SCRIPT'
+          set -euo pipefail
+          eval "$(printf '' | gnome-keyring-daemon --unlock --components=secrets)"
+          gdbus call --session --dest org.freedesktop.secrets \
+            --object-path /org/freedesktop/secrets \
+            --method org.freedesktop.Secret.Service.CreateCollection \
+            "{'org.freedesktop.Secret.Collection.Label': <'default'>}" default || true
+          echo "default alias resolves to: $(gdbus call --session \
+            --dest org.freedesktop.secrets \
+            --object-path /org/freedesktop/secrets \
+            --method org.freedesktop.Secret.Service.ReadAlias default || echo '<unavailable>')"
+          cargo test -p magies-storage --test secret_store platform_store_obeys_secret_store_contract -- --ignored --nocapture
+          SCRIPT
+          chmod +x "$RUNNER_TEMP/keyring-round-trip.sh"
+          dbus-run-session -- "$RUNNER_TEMP/keyring-round-trip.sh"
       - name: Prepare Linux TUN smoke
         if: runner.os == 'Linux'
         run: |
