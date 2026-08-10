@@ -1793,6 +1793,7 @@ dependencies = [
 name = "magies-platform"
 version = "0.1.0"
 dependencies = [
+ "gio",
  "serde",
  "serde_json",
 ]

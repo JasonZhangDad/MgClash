@@ -58,6 +58,11 @@ jobs:
       - name: Verify Windows System Proxy round trip
         if: runner.os == 'Windows'
         run: cargo test -p magies-platform --test windows_system_proxy_real -- --ignored --nocapture
+      - name: Verify Linux System Proxy round trip
+        if: runner.os == 'Linux'
+        env:
+          GSETTINGS_BACKEND: memory
+        run: cargo test -p magies-platform --test linux_system_proxy_real -- --ignored --nocapture
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Run Clippy
