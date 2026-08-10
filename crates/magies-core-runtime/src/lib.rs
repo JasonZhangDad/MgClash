@@ -21,8 +21,8 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 pub use binary::{
-    CoreBinaryError, CoreBinaryFormat, CoreBinaryRequirement, Sha256Hash, ValidatedCoreBinary,
-    locate_core_binary,
+    CoreBinaryError, CoreBinaryFormat, CoreBinaryRequirement, Sha256Hash, Sha256HashParseError,
+    ValidatedCoreBinary, locate_core_binary,
 };
 pub use health::{CoreHealth, CoreHealthError};
 pub use local_proxy_ports::{LocalProxyPortChecker, LocalProxyPortError, LocalProxyPortKind};

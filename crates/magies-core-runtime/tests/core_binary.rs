@@ -4,7 +4,8 @@ use std::process::id;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use magies_core_runtime::{
-    CoreBinaryError, CoreBinaryFormat, CoreBinaryRequirement, Sha256Hash, locate_core_binary,
+    CoreBinaryError, CoreBinaryFormat, CoreBinaryRequirement, Sha256Hash, Sha256HashParseError,
+    locate_core_binary,
 };
 use magies_platform::CpuArchitecture;
 
@@ -217,6 +218,40 @@ fn formats_sha256_as_lowercase_hex() {
         Sha256Hash::from_bytes([0xab; 32]).to_string(),
         "abababababababababababababababababababababababababababababababab"
     );
+}
+
+#[test]
+fn parses_pinned_sha256_from_lowercase_hex() {
+    let expected = Sha256Hash::digest(b"abc");
+
+    assert_eq!(
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+            .parse::<Sha256Hash>()
+            .unwrap(),
+        expected
+    );
+    assert_eq!(
+        "  BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD  "
+            .parse::<Sha256Hash>()
+            .unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn rejects_pinned_sha256_that_is_not_32_hex_bytes() {
+    assert!(matches!(
+        "abcd".parse::<Sha256Hash>(),
+        Err(Sha256HashParseError::InvalidLength { length: 4 })
+    ));
+    assert!(matches!(
+        "zz7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".parse::<Sha256Hash>(),
+        Err(Sha256HashParseError::InvalidHexDigit { position: 0 })
+    ));
+    assert!(matches!(
+        "+a7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".parse::<Sha256Hash>(),
+        Err(Sha256HashParseError::InvalidHexDigit { position: 0 })
+    ));
 }
 
 fn requirement(architecture: CpuArchitecture, contents: &[u8]) -> CoreBinaryRequirement {

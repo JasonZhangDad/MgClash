@@ -2,9 +2,11 @@ use std::fmt::{Display, Formatter};
 use std::fs::{canonicalize, read};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use magies_platform::CpuArchitecture;
 use sha2::{Digest, Sha256};
+use thiserror::Error;
 
 const MACHO_X86_64: u32 = 0x0100_0007;
 const MACHO_AARCH64: u32 = 0x0100_000c;
@@ -33,6 +35,38 @@ impl Sha256Hash {
     pub fn digest(contents: &[u8]) -> Self {
         Self(Sha256::digest(contents).into())
     }
+}
+
+impl FromStr for Sha256Hash {
+    type Err = Sha256HashParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let value = value.trim();
+        let length = value.len();
+        if length != 64 {
+            return Err(Sha256HashParseError::InvalidLength { length });
+        }
+
+        if let Some(position) = value.find(|digit: char| !digit.is_ascii_hexdigit()) {
+            return Err(Sha256HashParseError::InvalidHexDigit { position });
+        }
+
+        let mut bytes = [0_u8; 32];
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            let position = index * 2;
+            *byte = u8::from_str_radix(&value[position..position + 2], 16)
+                .expect("both characters are validated ASCII hex digits");
+        }
+        Ok(Self(bytes))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum Sha256HashParseError {
+    #[error("pinned SHA-256 must be 64 hex characters, found {length}")]
+    InvalidLength { length: usize },
+    #[error("pinned SHA-256 has a non-hex character at position {position}")]
+    InvalidHexDigit { position: usize },
 }
 
 impl Display for Sha256Hash {
