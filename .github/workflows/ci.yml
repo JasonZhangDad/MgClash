@@ -106,6 +106,9 @@ jobs:
       - name: Verify generated P0 outbounds
         if: runner.os == 'Windows' || runner.os == 'Linux'
         run: cargo test -p magies-profiles --test sing_box_outbound_smoke -- --ignored --nocapture
+      - name: Verify complete runtime end-to-end
+        if: runner.os == 'Windows' || runner.os == 'Linux'
+        run: cargo test -p magies-profiles --test sing_box_runtime_e2e -- --ignored --nocapture
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Run Clippy

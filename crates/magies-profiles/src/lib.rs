@@ -6,6 +6,7 @@ mod local_proxy_config;
 mod node_dedup;
 mod shadowsocks;
 mod sing_box_outbound;
+mod sing_box_runtime_config;
 mod subscription;
 mod subscription_transaction;
 mod trojan;
@@ -33,6 +34,9 @@ pub use shadowsocks::{
 };
 pub use sing_box_outbound::{
     GeneratedSingBoxOutbound, NodeCredential, OutboundConfigError, SingBoxOutboundConfigGenerator,
+};
+pub use sing_box_runtime_config::{
+    RuntimeConfigError, SingBoxRuntimeConfigGenerator, SingBoxRuntimeProfile,
 };
 pub use subscription::{
     SubscriptionFetchError, SubscriptionFetchOptions, SubscriptionFetchResult, SubscriptionFetcher,

@@ -1,3 +1,4 @@
+use std::fmt::{Debug, Formatter};
 use std::num::NonZeroU16;
 
 use magies_domain::CoreType;
@@ -69,10 +70,20 @@ impl Default for LocalSocksProfile {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct GeneratedCoreConfig {
     core_type: CoreType,
     json: Value,
+}
+
+impl Debug for GeneratedCoreConfig {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GeneratedCoreConfig")
+            .field("core_type", &self.core_type)
+            .field("json", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl GeneratedCoreConfig {
