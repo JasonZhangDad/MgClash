@@ -3,6 +3,7 @@
 mod adapter;
 mod binary;
 mod health;
+mod local_proxy_ports;
 mod output;
 mod recovery;
 mod sing_box;
@@ -22,6 +23,7 @@ pub use binary::{
     locate_core_binary,
 };
 pub use health::{CoreHealth, CoreHealthError};
+pub use local_proxy_ports::{LocalProxyPortChecker, LocalProxyPortError, LocalProxyPortKind};
 pub use output::{CoreOutput, CoreOutputEvent, CoreOutputStream};
 pub use recovery::{
     CoreRecovery, CoreRecoveryError, CoreRecoveryFailure, MAX_CRASH_RECOVERY_ATTEMPTS,
