@@ -1,5 +1,12 @@
 //! Desktop proxy session orchestration for `MgClash`.
 
+mod network_recovery;
+
+pub use network_recovery::{
+    DEFAULT_DEBOUNCE, MAX_RECOVERY_ATTEMPTS, NetworkEvent, NetworkRecoveryPolicy, RecoveryError,
+    RecoveryOutcome, SessionHealthProbe, TcpHealthProbe,
+};
+
 use std::error::Error;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -138,6 +145,7 @@ impl DesktopSessionProfile {
 struct ActiveSession {
     runtime_config: RuntimeConfigFile,
     system_proxy: bool,
+    profile: DesktopSessionProfile,
 }
 
 pub struct DesktopSession<S, C, P> {
@@ -187,6 +195,13 @@ where
         self.active
             .as_ref()
             .map(|active| active.runtime_config.path())
+    }
+
+    /// Borrows the profile the running session started from, so a recovery can
+    /// restart it without the caller re-assembling it.
+    #[must_use]
+    pub fn active_profile(&self) -> Option<&DesktopSessionProfile> {
+        self.active.as_ref().map(|active| &active.profile)
     }
 
     /// Loads the node secret, generates and writes the configuration, starts
@@ -247,6 +262,7 @@ where
                         self.active = Some(ActiveSession {
                             runtime_config,
                             system_proxy: true,
+                            profile: profile.clone(),
                         });
                         Err(DesktopSessionError::ProxyEnableAndCoreRollback { proxy, core })
                     }
@@ -257,6 +273,7 @@ where
         self.active = Some(ActiveSession {
             runtime_config,
             system_proxy: profile.system_proxy,
+            profile: profile.clone(),
         });
         Ok(output)
     }
