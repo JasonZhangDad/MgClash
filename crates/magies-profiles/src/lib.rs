@@ -5,6 +5,7 @@ mod hysteria2;
 mod local_proxy_config;
 mod node_dedup;
 mod shadowsocks;
+mod sing_box_outbound;
 mod subscription;
 mod subscription_transaction;
 mod trojan;
@@ -29,6 +30,9 @@ pub use node_dedup::{
 };
 pub use shadowsocks::{
     ParsedShadowsocksNode, ShadowsocksCredential, ShadowsocksParseError, ShadowsocksParser,
+};
+pub use sing_box_outbound::{
+    GeneratedSingBoxOutbound, NodeCredential, OutboundConfigError, SingBoxOutboundConfigGenerator,
 };
 pub use subscription::{
     SubscriptionFetchError, SubscriptionFetchOptions, SubscriptionFetchResult, SubscriptionFetcher,

@@ -75,6 +75,7 @@ jobs:
           test -c /dev/net/tun
           echo "MAGIES_SING_BOX_TUN_BIN=$RUNNER_TEMP/sing-box-1.13.18-linux-amd64/sing-box" >> "$GITHUB_ENV"
           echo "MAGIES_SING_BOX_DNS_BIN=$RUNNER_TEMP/sing-box-1.13.18-linux-amd64/sing-box" >> "$GITHUB_ENV"
+          echo "MAGIES_SING_BOX_CONFIG_BIN=$RUNNER_TEMP/sing-box-1.13.18-linux-amd64/sing-box" >> "$GITHUB_ENV"
       - name: Prepare Windows TUN smoke
         if: runner.os == 'Windows'
         shell: pwsh
@@ -95,12 +96,16 @@ jobs:
           Copy-Item $wintunDll (Join-Path $binaryDirectory "wintun.dll")
           "MAGIES_SING_BOX_TUN_BIN=$(Join-Path $binaryDirectory 'sing-box.exe')" | Out-File -FilePath $env:GITHUB_ENV -Append
           "MAGIES_SING_BOX_DNS_BIN=$(Join-Path $binaryDirectory 'sing-box.exe')" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "MAGIES_SING_BOX_CONFIG_BIN=$(Join-Path $binaryDirectory 'sing-box.exe')" | Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Verify Windows and Linux TUN device creation
         if: runner.os == 'Windows' || runner.os == 'Linux'
         run: cargo test -p magies-profiles --test tun_smoke -- --ignored --nocapture
       - name: Verify generated DNS configuration
         if: runner.os == 'Windows' || runner.os == 'Linux'
         run: cargo test -p magies-profiles --test dns_smoke -- --ignored --nocapture
+      - name: Verify generated P0 outbounds
+        if: runner.os == 'Windows' || runner.os == 'Linux'
+        run: cargo test -p magies-profiles --test sing_box_outbound_smoke -- --ignored --nocapture
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Run Clippy
