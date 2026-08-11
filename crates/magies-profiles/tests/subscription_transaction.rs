@@ -137,11 +137,12 @@ fn persists_a_committed_update_when_the_database_is_reopened() {
         store
             .apply_update(&update(
                 subscription.id,
-                vec![persisted_node],
+                vec![persisted_node.clone()],
                 "\"disk\"",
                 100,
             ))
             .unwrap();
+        store.select_node(persisted_node.id).unwrap();
     }
 
     let reopened = SqliteSubscriptionStore::open(&path).unwrap();
@@ -158,8 +159,85 @@ fn persists_a_committed_update_when_the_database_is_reopened() {
             .etag(),
         Some("\"disk\"")
     );
+    let mut expected_selected = persisted_node;
+    expected_selected.subscription_id = Some(subscription.id);
+    assert_eq!(reopened.selected_node().unwrap(), Some(expected_selected));
     drop(reopened);
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn lists_and_selects_only_enabled_subscription_nodes() {
+    let mut store = SqliteSubscriptionStore::open_in_memory().unwrap();
+    let active = subscription("018f78b5-2cd0-7000-a9a6-3bccf60951e8", "Active");
+    let mut disabled = subscription("018f78b5-2cd0-7000-a9a6-3bccf60951ef", "Disabled");
+    disabled.enabled = false;
+    store.insert_subscription(&active).unwrap();
+    store.insert_subscription(&disabled).unwrap();
+
+    let active_node = node(
+        "018f78b5-2cd0-7000-a9a6-3bccf60951e9",
+        ProxyProtocol::Vless,
+        "active.example.com",
+        "keychain://node/active-secret",
+    );
+    let mut disabled_node = node(
+        "018f78b5-2cd0-7000-a9a6-3bccf60951ea",
+        ProxyProtocol::Trojan,
+        "disabled-node.example.com",
+        "keychain://node/disabled-secret",
+    );
+    disabled_node.enabled = false;
+    let disabled_subscription_node = node(
+        "018f78b5-2cd0-7000-a9a6-3bccf60951eb",
+        ProxyProtocol::Vmess,
+        "disabled-subscription.example.com",
+        "keychain://node/disabled-subscription-secret",
+    );
+    store
+        .apply_update(&update(
+            active.id,
+            vec![active_node.clone(), disabled_node.clone()],
+            "\"active\"",
+            100,
+        ))
+        .unwrap();
+    store
+        .apply_update(&update(
+            disabled.id,
+            vec![disabled_subscription_node.clone()],
+            "\"disabled\"",
+            100,
+        ))
+        .unwrap();
+
+    let mut expected_active = active_node.clone();
+    expected_active.subscription_id = Some(active.id);
+    assert_eq!(store.active_nodes().unwrap(), vec![expected_active.clone()]);
+    assert_eq!(store.selected_node().unwrap(), None);
+
+    assert_eq!(store.select_node(active_node.id).unwrap(), expected_active);
+    assert_eq!(store.selected_node().unwrap(), Some(expected_active));
+    assert!(matches!(
+        store.select_node(disabled_node.id),
+        Err(SubscriptionTransactionError::NodeNotFound { id }) if id == disabled_node.id
+    ));
+    assert!(matches!(
+        store.select_node(disabled_subscription_node.id),
+        Err(SubscriptionTransactionError::NodeNotFound { id })
+            if id == disabled_subscription_node.id
+    ));
+
+    let mut disabled_after_selection = store.subscription(active.id).unwrap().unwrap();
+    disabled_after_selection.enabled = false;
+    store
+        .update_subscription_settings(&disabled_after_selection)
+        .unwrap();
+    assert!(store.active_nodes().unwrap().is_empty());
+    assert_eq!(store.selected_node().unwrap(), None);
+
+    store.clear_selected_node().unwrap();
+    assert_eq!(store.selected_node().unwrap(), None);
 }
 
 #[test]
