@@ -2119,11 +2119,13 @@ dependencies = [
  "magies-routing",
  "magies-session",
  "magies-storage",
+ "reqwest",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "thiserror 2.0.20",
+ "url",
  "uuid",
 ]
 

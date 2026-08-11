@@ -51,7 +51,7 @@ pub use sing_box_runtime_config::{
 };
 pub use subscription::{
     SubscriptionFetchError, SubscriptionFetchOptions, SubscriptionFetchResult, SubscriptionFetcher,
-    SubscriptionValidators,
+    SubscriptionValidators, ensure_rustls_crypto_provider,
 };
 pub use subscription_content::{
     ParsedSubscriptionNode, SubscriptionContentError, SubscriptionContentParser,

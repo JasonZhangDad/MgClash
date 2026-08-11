@@ -259,6 +259,23 @@ fn connecting_starts_the_core_and_the_system_proxy() {
 }
 
 #[test]
+fn exposes_a_url_test_target_only_while_connected() {
+    let (mut service, _runtime, _fail_start) = service();
+    let node = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
+
+    assert_eq!(
+        service.url_test_target().unwrap_err().code(),
+        "session_inactive"
+    );
+
+    service.connect().unwrap();
+    let target = service.url_test_target().unwrap();
+
+    assert_eq!(target.node_id, node.id);
+    assert_eq!(target.http_port, 10_809);
+}
+
+#[test]
 fn connecting_without_an_imported_node_fails_before_touching_the_core() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let (mut service, _runtime, _fail_start) = service_with_events(&events);

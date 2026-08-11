@@ -116,6 +116,12 @@ pub struct SessionStatus {
     pub http_port: u16,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UrlTestTarget {
+    pub node_id: Uuid,
+    pub http_port: u16,
+}
+
 /// Owns the selected node and the orchestrated session behind the commands.
 pub struct SessionService<S, C, P> {
     session: DesktopSession<S, C, P>,
@@ -432,6 +438,28 @@ where
             http_port: self.defaults.http.port().get(),
         }
     }
+
+    /// Returns the selected node and local HTTP proxy for a real URL test.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed inactive-session error until the Core and its local
+    /// proxy are running.
+    pub fn url_test_target(
+        &self,
+    ) -> Result<UrlTestTarget, SessionCommandError<C::Error, P::Error>> {
+        if !self.session.is_running() {
+            return Err(SessionCommandError::SessionInactive);
+        }
+        Ok(UrlTestTarget {
+            node_id: self
+                .node
+                .as_ref()
+                .ok_or(SessionCommandError::NoSelectedNode)?
+                .id,
+            http_port: self.defaults.http.port().get(),
+        })
+    }
 }
 
 #[derive(Debug, Error)]
@@ -473,6 +501,8 @@ where
     DeleteSecret(#[source] SecretStoreError),
     #[error("nodes cannot be changed while the session is connected")]
     SessionActive,
+    #[error("the URL test requires a running proxy session")]
+    SessionInactive,
     #[error("failed to change the desktop proxy session")]
     Session(#[source] DesktopSessionError<C, P>),
 }
@@ -500,6 +530,7 @@ where
             | Self::SubscriptionNodeStore(_) => "node_store_failed",
             Self::SubscriptionNodeReadOnly { .. } => "subscription_node_read_only",
             Self::SessionActive => "session_active",
+            Self::SessionInactive => "session_inactive",
             Self::Session(_) => "session_failed",
         }
     }

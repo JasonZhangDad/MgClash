@@ -46,7 +46,7 @@ impl SubscriptionFetcher {
             return Err(SubscriptionFetchError::InvalidBodyLimit);
         }
 
-        ensure_crypto_provider();
+        ensure_rustls_crypto_provider();
         let redirect_policy = if options.max_redirects == 0 {
             Policy::none()
         } else {
@@ -302,7 +302,9 @@ fn map_request_error(source: reqwest::Error) -> SubscriptionFetchError {
     }
 }
 
-fn ensure_crypto_provider() {
+/// Installs `MgClash`'s process-wide rustls provider once before building an
+/// HTTPS client. Concurrent callers safely share the first installed provider.
+pub fn ensure_rustls_crypto_provider() {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
         let provider = rustls::crypto::ring::default_provider();
         if let Err(unused_provider) = provider.install_default() {
