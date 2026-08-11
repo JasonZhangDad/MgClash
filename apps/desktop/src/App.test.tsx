@@ -71,6 +71,7 @@ const IDLE: SessionStatus = {
 const SELECTED: SessionStatus = {
   ...IDLE,
   node: {
+    deletable: true,
     id: "00000000-0000-0000-0000-000000000001",
     name: "Tokyo Edge",
     port: 8388,
@@ -357,6 +358,7 @@ describe("App", () => {
   it("lists persisted nodes and changes the selection", async () => {
     const osaka = {
       id: "00000000-0000-0000-0000-000000000002",
+      deletable: true,
       name: "Osaka",
       port: 9000,
       protocol: "shadowsocks" as const,
@@ -398,6 +400,23 @@ describe("App", () => {
     expect(deleteNodeMock).toHaveBeenCalledWith(SELECTED.node?.id);
     expect(container.querySelector("[aria-label='节点列表']")).toBeNull();
     expect(container.textContent).toContain("尚未导入节点");
+  });
+
+  it("keeps subscription-owned nodes read-only", async () => {
+    const managed = {
+      ...SELECTED.node,
+      deletable: false,
+      name: "Managed Tokyo",
+    };
+    loadNodesMock.mockResolvedValue([managed]);
+    await render();
+
+    const remove = container.querySelector<HTMLButtonElement>(
+      "[aria-label='删除 Managed Tokyo']",
+    );
+
+    expect(remove?.disabled).toBe(true);
+    expect(remove?.textContent).toBe("订阅管理");
   });
 
   it("adds a subscription without exposing its URL in the list", async () => {
@@ -468,7 +487,13 @@ describe("App", () => {
   });
 
   it("refreshes and deletes a subscription", async () => {
+    const managedNode = {
+      ...SELECTED.node,
+      deletable: false,
+      name: "Subscription Tokyo",
+    };
     loadSubscriptionsMock.mockResolvedValue([SUBSCRIPTION]);
+    loadNodesMock.mockResolvedValueOnce([]).mockResolvedValue([managedNode]);
     refreshSubscriptionMock.mockResolvedValue({
       ...SUBSCRIPTION,
       lastUpdatedAt: 1_723_456_789,
@@ -485,6 +510,8 @@ describe("App", () => {
     }
     await act(async () => refresh.click());
     expect(refreshSubscriptionMock).toHaveBeenCalledWith(SUBSCRIPTION.id);
+    expect(loadNodesMock).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("Subscription Tokyo");
     expect(container.textContent).toContain("4");
 
     const remove = container.querySelector<HTMLButtonElement>(
@@ -496,6 +523,19 @@ describe("App", () => {
     await act(async () => remove.click());
     expect(deleteSubscriptionMock).toHaveBeenCalledWith(SUBSCRIPTION.id);
     expect(container.querySelector("[aria-label='订阅列表']")).toBeNull();
+  });
+
+  it("waits for disconnect before mutating a subscription", async () => {
+    loadSessionStatusMock.mockResolvedValue(CONNECTED);
+    loadSubscriptionsMock.mockResolvedValue([SUBSCRIPTION]);
+    await render();
+
+    for (const label of ["编辑 Airport", "刷新 Airport", "删除订阅 Airport"]) {
+      const action = container.querySelector<HTMLButtonElement>(
+        `[aria-label='${label}']`,
+      );
+      expect(action?.disabled).toBe(true);
+    }
   });
 
   it("refuses to import a blank sharing URI", async () => {

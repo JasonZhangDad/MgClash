@@ -191,6 +191,17 @@ fn ensure_system_proxy_ready(status: SystemProxyStartupStatus) -> Result<(), Com
     }
 }
 
+fn ensure_subscription_mutation_ready(connected: bool) -> Result<(), CommandError> {
+    if connected {
+        Err(CommandError {
+            code: "session_active",
+            message: "disconnect before changing or refreshing subscriptions".to_owned(),
+        })
+    } else {
+        Ok(())
+    }
+}
+
 #[tauri::command]
 #[expect(
     clippy::needless_pass_by_value,
@@ -403,8 +414,9 @@ fn subscription_update(
     url: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<DesktopSubscriptionSummary, CommandError> {
+    ensure_subscription_mutation_ready(state.service().status().connected)?;
     let id = parse_subscription_id(&id)?;
-    state
+    let summary = state
         .subscriptions
         .update(
             id,
@@ -414,7 +426,12 @@ fn subscription_update(
             enabled,
             url.as_deref(),
         )
-        .map_err(|error| subscription_error(&error))
+        .map_err(|error| subscription_error(&error))?;
+    state
+        .service()
+        .sync_selected_node()
+        .map_err(|error| command_error(&error))?;
+    Ok(summary)
 }
 
 #[tauri::command]
@@ -423,11 +440,17 @@ fn subscription_update(
     reason = "Tauri commands receive State and deserialized arguments by value"
 )]
 fn subscription_delete(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
+    ensure_subscription_mutation_ready(state.service().status().connected)?;
     let id = parse_subscription_id(&id)?;
     state
         .subscriptions
         .delete(id)
-        .map_err(|error| subscription_error(&error))
+        .map_err(|error| subscription_error(&error))?;
+    state
+        .service()
+        .sync_selected_node()
+        .map_err(|error| command_error(&error))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -435,15 +458,23 @@ async fn subscription_refresh(
     id: String,
     state: State<'_, AppState>,
 ) -> Result<DesktopSubscriptionSummary, CommandError> {
+    ensure_subscription_mutation_ready(state.service().status().connected)?;
     let id = parse_subscription_id(&id)?;
     let subscriptions = Arc::clone(&state.subscriptions);
-    tauri::async_runtime::spawn_blocking(move || subscriptions.refresh(id, current_timestamp()))
-        .await
-        .map_err(|error| CommandError {
-            code: "subscription_task_failed",
-            message: error.to_string(),
-        })?
-        .map_err(|error| subscription_error(&error))
+    let summary = tauri::async_runtime::spawn_blocking(move || {
+        subscriptions.refresh(id, current_timestamp())
+    })
+    .await
+    .map_err(|error| CommandError {
+        code: "subscription_task_failed",
+        message: error.to_string(),
+    })?
+    .map_err(|error| subscription_error(&error))?;
+    state
+        .service()
+        .sync_selected_node()
+        .map_err(|error| command_error(&error))?;
+    Ok(summary)
 }
 
 fn parse_subscription_id(id: &str) -> Result<Uuid, CommandError> {
@@ -482,7 +513,12 @@ pub fn run() {
                 SqliteSubscriptionStore::open(&node_database)?,
                 PlatformSecretStore,
             ));
-            let service = Arc::new(Mutex::new(SessionService::new(session, defaults, nodes)?));
+            let service = Arc::new(Mutex::new(SessionService::new(
+                session,
+                defaults,
+                nodes,
+                SqliteSubscriptionStore::open(&node_database)?,
+            )?));
             spawn_recovery_loop(
                 service.clone(),
                 TcpHealthProbe::new(health_address, PROBE_TIMEOUT),
@@ -521,7 +557,8 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_system_proxy_ready, parse_node_id, parse_subscription_id, platform_summary,
+        ensure_subscription_mutation_ready, ensure_system_proxy_ready, parse_node_id,
+        parse_subscription_id, platform_summary,
     };
     use crate::platform_proxy::SystemProxyStartupStatus;
 
@@ -551,5 +588,14 @@ mod tests {
         let error = parse_subscription_id("not-a-uuid").unwrap_err();
 
         assert_eq!(error.code, "invalid_subscription_id");
+    }
+
+    #[test]
+    fn subscription_mutations_wait_for_disconnect() {
+        ensure_subscription_mutation_ready(false).unwrap();
+
+        let error = ensure_subscription_mutation_ready(true).unwrap_err();
+
+        assert_eq!(error.code, "session_active");
     }
 }

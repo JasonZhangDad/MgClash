@@ -216,6 +216,15 @@ export default function App() {
     setSubscriptionEnabled(true);
   }, []);
 
+  const syncNodes = useCallback(async () => {
+    const [nextNodes, nextStatus] = await Promise.all([
+      loadNodes(),
+      loadSessionStatus(),
+    ]);
+    setNodes(nextNodes);
+    setStatus(nextStatus);
+  }, []);
+
   const onSaveSubscription = useCallback(async () => {
     const name = subscriptionName.trim();
     const url = subscriptionUrl.trim();
@@ -255,6 +264,7 @@ export default function App() {
         }
         return current.map((item) => (item.id === saved.id ? saved : item));
       });
+      await syncNodes();
       resetSubscriptionForm();
     } catch (failure: unknown) {
       setError(describeFailure(failure));
@@ -269,6 +279,7 @@ export default function App() {
     subscriptionInterval,
     subscriptionName,
     subscriptionUrl,
+    syncNodes,
   ]);
 
   const onEditSubscription = useCallback((item: SubscriptionSummary) => {
@@ -288,12 +299,13 @@ export default function App() {
       setSubscriptions((current) =>
         current.map((item) => (item.id === id ? refreshed : item)),
       );
+      await syncNodes();
     } catch (failure: unknown) {
       setError(describeFailure(failure));
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [syncNodes]);
 
   const onDeleteSubscription = useCallback(
     async (id: string) => {
@@ -304,6 +316,7 @@ export default function App() {
         setSubscriptions((current) =>
           current.filter((item) => item.id !== id),
         );
+        await syncNodes();
         if (editingSubscriptionId === id) {
           resetSubscriptionForm();
         }
@@ -313,7 +326,7 @@ export default function App() {
         setBusy(false);
       }
     },
-    [editingSubscriptionId, resetSubscriptionForm],
+    [editingSubscriptionId, resetSubscriptionForm, syncNodes],
   );
 
   const connected = status?.connected ?? false;
@@ -474,10 +487,10 @@ export default function App() {
                       <button
                         type="button"
                         aria-label={`删除 ${candidate.name}`}
-                        disabled={busy || connected}
+                        disabled={busy || connected || !candidate.deletable}
                         onClick={() => void onDeleteNode(candidate.id)}
                       >
-                        删除
+                        {candidate.deletable ? "删除" : "订阅管理"}
                       </button>
                     </td>
                   </tr>
@@ -511,7 +524,7 @@ export default function App() {
                     <button
                       type="button"
                       aria-label={`编辑 ${item.name}`}
-                      disabled={busy}
+                      disabled={busy || connected}
                       onClick={() => onEditSubscription(item)}
                     >
                       编辑
@@ -519,7 +532,7 @@ export default function App() {
                     <button
                       type="button"
                       aria-label={`刷新 ${item.name}`}
-                      disabled={busy || !item.enabled}
+                      disabled={busy || connected || !item.enabled}
                       onClick={() => void onRefreshSubscription(item.id)}
                     >
                       刷新
@@ -527,7 +540,7 @@ export default function App() {
                     <button
                       type="button"
                       aria-label={`删除订阅 ${item.name}`}
-                      disabled={busy}
+                      disabled={busy || connected}
                       onClick={() => void onDeleteSubscription(item.id)}
                     >
                       删除

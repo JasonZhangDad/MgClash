@@ -8,6 +8,7 @@ export type ProxyProtocol =
   | "vmess";
 
 export interface NodeSummary {
+  deletable: boolean;
   id: string;
   name: string;
   port: number;
