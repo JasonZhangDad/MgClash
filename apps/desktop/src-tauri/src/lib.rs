@@ -309,14 +309,8 @@ fn spawn_recovery_loop(service: Arc<Mutex<HostSessionService>>, probe: TcpHealth
                 lock(&service).observe_network(event, Instant::now());
             }
 
-            let now = Instant::now();
-            let due = lock(&service)
-                .recovery_due_at()
-                .is_some_and(|due_at| now >= due_at);
-            if due {
-                if let Err(error) = lock(&service).recover(now, &probe) {
-                    eprintln!("network recovery failed: {}", describe(&error));
-                }
+            if let Err(error) = lock(&service).monitor_recovery(Instant::now(), &probe) {
+                eprintln!("session recovery failed: {}", describe(&error));
             }
         }
     });

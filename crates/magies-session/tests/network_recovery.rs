@@ -86,6 +86,69 @@ fn a_healthy_core_is_never_restarted_after_a_path_change() {
 }
 
 #[test]
+fn periodic_monitor_leaves_a_healthy_core_alone_without_a_network_event() {
+    let start = Instant::now();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let (mut session, _runtime, _fail_start) = session_with_events(&events);
+    session.start(&profile(session.secret_store())).unwrap();
+    events.lock().unwrap().clear();
+
+    let probe = FakeProbe::healthy();
+    let mut policy = NetworkRecoveryPolicy::new(DEBOUNCE);
+
+    assert_eq!(
+        policy.monitor(start, &mut session, &probe).unwrap(),
+        RecoveryOutcome::Idle
+    );
+    assert_eq!(probe.checks(), 1);
+    assert!(events.lock().unwrap().is_empty());
+    assert!(session.is_running());
+}
+
+#[test]
+fn periodic_monitor_recovers_an_unhealthy_core_without_a_network_event() {
+    let start = Instant::now();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let (mut session, _runtime, _fail_start) = session_with_events(&events);
+    session.start(&profile(session.secret_store())).unwrap();
+    events.lock().unwrap().clear();
+
+    let probe = FakeProbe::unhealthy();
+    let mut policy = NetworkRecoveryPolicy::new(DEBOUNCE);
+
+    assert_eq!(
+        policy.monitor(start, &mut session, &probe).unwrap(),
+        RecoveryOutcome::Reconnected { attempts: 1 }
+    );
+    assert_eq!(probe.checks(), 2);
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        ["proxy_stop", "core_stop", "core_start", "proxy_enable"]
+    );
+    assert!(session.is_running());
+}
+
+#[test]
+fn periodic_monitor_never_resurrects_a_user_stopped_session() {
+    let start = Instant::now();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let (mut session, _runtime, _fail_start) = session_with_events(&events);
+    session.start(&profile(session.secret_store())).unwrap();
+    session.stop().unwrap();
+    events.lock().unwrap().clear();
+
+    let probe = FakeProbe::unhealthy();
+    let mut policy = NetworkRecoveryPolicy::new(DEBOUNCE);
+
+    assert_eq!(
+        policy.monitor(start, &mut session, &probe).unwrap(),
+        RecoveryOutcome::Idle
+    );
+    assert_eq!(probe.checks(), 0);
+    assert!(events.lock().unwrap().is_empty());
+}
+
+#[test]
 fn an_unhealthy_core_is_restarted_in_the_prd_order() {
     let start = Instant::now();
     let events = Arc::new(Mutex::new(Vec::new()));

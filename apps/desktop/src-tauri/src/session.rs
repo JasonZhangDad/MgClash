@@ -212,6 +212,19 @@ where
         self.recovery.recover(now, &mut self.session, probe)
     }
 
+    /// Runs a due network recovery or detects and recovers a crashed Core.
+    ///
+    /// # Errors
+    ///
+    /// Returns the recovery policy's typed stop or bounded-restart error.
+    pub fn monitor_recovery(
+        &mut self,
+        now: Instant,
+        probe: &impl SessionHealthProbe,
+    ) -> Result<RecoveryOutcome, RecoveryError<C::Error, P::Error>> {
+        self.recovery.monitor(now, &mut self.session, probe)
+    }
+
     /// Parses a sharing URI, saves its credential, and selects the node.
     ///
     /// # Errors
