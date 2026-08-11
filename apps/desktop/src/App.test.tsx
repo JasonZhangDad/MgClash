@@ -18,6 +18,7 @@ const connectSessionMock = vi.hoisted(() => vi.fn());
 const disconnectSessionMock = vi.hoisted(() => vi.fn());
 const setRoutingModeMock = vi.hoisted(() => vi.fn());
 const setDnsSettingsMock = vi.hoisted(() => vi.fn());
+const setRouteSettingsMock = vi.hoisted(() => vi.fn());
 const exportDiagnosticsMock = vi.hoisted(() => vi.fn());
 const loadSystemProxyStartupStatusMock = vi.hoisted(() => vi.fn());
 const recoverSystemProxyMock = vi.hoisted(() => vi.fn());
@@ -51,6 +52,7 @@ vi.mock("./session", async () => {
     selectNode: selectNodeMock,
     setRoutingMode: setRoutingModeMock,
     setDnsSettings: setDnsSettingsMock,
+    setRouteSettings: setRouteSettingsMock,
     testAllNodes: testAllNodesMock,
     testNode: testNodeMock,
     testUrl: testUrlMock,
@@ -87,6 +89,10 @@ const IDLE: SessionStatus = {
   },
   httpPort: 10809,
   mode: "global",
+  route: {
+    finalOutbound: "proxy",
+    rules: [],
+  },
   node: null,
   socksPort: 10808,
   systemProxy: true,
@@ -138,6 +144,7 @@ describe("App", () => {
     disconnectSessionMock.mockReset();
     setRoutingModeMock.mockReset();
     setDnsSettingsMock.mockReset();
+    setRouteSettingsMock.mockReset();
     exportDiagnosticsMock.mockReset();
     loadSystemProxyStartupStatusMock.mockReset();
     recoverSystemProxyMock.mockReset();
@@ -927,6 +934,78 @@ describe("App", () => {
     expect(button("保存 DNS").disabled).toBe(true);
     expect(
       container.querySelector<HTMLSelectElement>("select[aria-label='DNS 模式']")
+        ?.disabled,
+    ).toBe(true);
+  });
+
+  it("shows runtime order and saves compact route settings", async () => {
+    const rules = [
+      {
+        enabled: true,
+        kind: "domainSuffix" as const,
+        outbound: "direct" as const,
+        value: "cn",
+      },
+      {
+        enabled: true,
+        kind: "geoIp" as const,
+        outbound: "direct" as const,
+        value: "cn",
+      },
+    ];
+    const saved: SessionStatus = {
+      ...IDLE,
+      route: { finalOutbound: "direct", rules },
+    };
+    setRouteSettingsMock.mockResolvedValue(saved);
+    await render();
+
+    const kind = container.querySelector<HTMLSelectElement>(
+      "select[aria-label='规则类型']",
+    );
+    const value = container.querySelector<HTMLInputElement>(
+      "input[aria-label='规则值']",
+    );
+    const outbound = container.querySelector<HTMLSelectElement>(
+      "select[aria-label='规则出口']",
+    );
+    expect(kind).not.toBeNull();
+    expect(value).not.toBeNull();
+    expect(outbound).not.toBeNull();
+    await act(async () => {
+      selectValue("geoIp", kind!);
+      selectValue("direct", outbound!);
+      typeInput("cn", value!);
+    });
+    await act(async () => button("添加规则").click());
+    await act(async () => {
+      selectValue("domainSuffix", kind!);
+      typeInput("cn", value!);
+    });
+    await act(async () => button("添加规则").click());
+    const finalOutbound = container.querySelector<HTMLSelectElement>(
+      "select[aria-label='默认出口']",
+    );
+    await act(async () => selectValue("direct", finalOutbound!));
+
+    const rows = container.querySelectorAll("[aria-label='路由规则列表'] tbody tr");
+    expect(rows[0]?.textContent).toContain("域名后缀");
+    expect(rows[1]?.textContent).toContain("GeoIP");
+    await act(async () => button("保存路由").click());
+
+    expect(setRouteSettingsMock).toHaveBeenCalledWith({
+      finalOutbound: "direct",
+      rules,
+    });
+  });
+
+  it("locks route settings while connected", async () => {
+    loadSessionStatusMock.mockResolvedValue(CONNECTED);
+    await render();
+
+    expect(button("保存路由").disabled).toBe(true);
+    expect(
+      container.querySelector<HTMLSelectElement>("select[aria-label='规则类型']")
         ?.disabled,
     ).toBe(true);
   });

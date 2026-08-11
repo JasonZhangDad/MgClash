@@ -10,6 +10,9 @@ use std::time::Instant;
 use magies_desktop_lib::dns_settings::{
     DesktopDnsStrategy, DnsMode, DnsSettings, SqliteDnsSettingsStore,
 };
+use magies_desktop_lib::route_settings::{
+    DesktopRouteOutbound, RouteRuleKind, RouteRuleSetting, RouteSettings, SqliteRouteSettingsStore,
+};
 use magies_desktop_lib::routing_mode::SqliteRoutingModeStore;
 use magies_desktop_lib::session::{SessionCommandError, SessionDefaults, SessionService};
 use magies_domain::{CredentialRef, ProxyProtocol, Subscription, TimestampMillis};
@@ -38,6 +41,7 @@ fn reports_an_idle_status_before_a_node_is_imported() {
     assert_eq!(status.core, "sing-box");
     assert_eq!(status.dns, DnsSettings::default());
     assert_eq!(status.mode, "global");
+    assert_eq!(status.route, RouteSettings::default());
     assert!(status.system_proxy);
     assert_eq!(status.socks_port, 10_808);
     assert_eq!(status.http_port, 10_809);
@@ -254,6 +258,67 @@ fn refuses_to_change_the_route_while_connected() {
 }
 
 #[test]
+fn changes_route_rules_and_uses_them_for_the_next_connection() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    service.set_routing_mode(RoutingMode::Rule).unwrap();
+    let settings = RouteSettings {
+        rules: vec![RouteRuleSetting {
+            kind: RouteRuleKind::DomainSuffix,
+            value: "cn".to_owned(),
+            outbound: DesktopRouteOutbound::Direct,
+            enabled: true,
+        }],
+        final_outbound: DesktopRouteOutbound::Proxy,
+    };
+
+    let status = service.set_route_settings(settings.clone()).unwrap();
+
+    assert_eq!(status.route, settings);
+    service.connect().unwrap();
+    let config: serde_json::Value =
+        serde_json::from_slice(&fs::read(service.runtime_config_path().unwrap()).unwrap()).unwrap();
+    assert_eq!(config["route"]["rules"][1]["domain_suffix"][0], ".cn");
+    assert_eq!(config["route"]["rules"][1]["outbound"], "direct");
+    assert_eq!(config["route"]["final"], "proxy");
+}
+
+#[test]
+fn rejects_invalid_route_settings_without_changing_the_current_settings() {
+    let (mut service, _runtime, _fail_start) = service();
+
+    let error = service
+        .set_route_settings(RouteSettings {
+            rules: vec![RouteRuleSetting {
+                kind: RouteRuleKind::Port,
+                value: "zero".to_owned(),
+                outbound: DesktopRouteOutbound::Proxy,
+                enabled: true,
+            }],
+            ..RouteSettings::default()
+        })
+        .unwrap_err();
+
+    assert_eq!(error.code(), "invalid_route_settings");
+    assert_eq!(service.status().route, RouteSettings::default());
+}
+
+#[test]
+fn refuses_to_change_route_settings_while_connected() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    service.connect().unwrap();
+
+    assert_eq!(
+        service
+            .set_route_settings(RouteSettings::default())
+            .unwrap_err()
+            .code(),
+        "session_active"
+    );
+}
+
+#[test]
 fn changes_dns_while_disconnected_and_uses_it_for_the_next_connection() {
     let (mut service, _runtime, _fail_start) = service();
     service.import_node(SHADOWSOCKS_LINK).unwrap();
@@ -413,6 +478,7 @@ fn surfaces_a_failing_core_start_as_a_session_error() {
         SqliteManualNodeStore::open_in_memory().unwrap(),
         SqliteSubscriptionStore::open_in_memory().unwrap(),
         SqliteRoutingModeStore::open_in_memory().unwrap(),
+        SqliteRouteSettingsStore::open_in_memory().unwrap(),
         SqliteDnsSettingsStore::open_in_memory().unwrap(),
     )
     .unwrap();
@@ -458,6 +524,7 @@ fn service_with_events(
         SqliteManualNodeStore::open_in_memory().unwrap(),
         SqliteSubscriptionStore::open_in_memory().unwrap(),
         SqliteRoutingModeStore::open_in_memory().unwrap(),
+        SqliteRouteSettingsStore::open_in_memory().unwrap(),
         SqliteDnsSettingsStore::open_in_memory().unwrap(),
     )
     .unwrap();
@@ -515,6 +582,7 @@ fn service_with_subscription_node() -> (TestService, Uuid, RuntimeDirectory) {
         SqliteManualNodeStore::open(&database).unwrap(),
         subscriptions,
         SqliteRoutingModeStore::open(&database).unwrap(),
+        SqliteRouteSettingsStore::open(&database).unwrap(),
         SqliteDnsSettingsStore::open(&database).unwrap(),
     )
     .unwrap();

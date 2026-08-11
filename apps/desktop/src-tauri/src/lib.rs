@@ -5,6 +5,7 @@ pub mod diagnostics;
 pub mod dns_settings;
 pub mod node_latency;
 pub mod platform_proxy;
+pub mod route_settings;
 pub mod routing_mode;
 pub mod session;
 mod subscriptions;
@@ -35,6 +36,7 @@ use crate::diagnostics::DiagnosticBundle;
 use crate::dns_settings::{DnsSettings, SqliteDnsSettingsStore};
 use crate::node_latency::{TcpLatencyError, probe_tcp};
 use crate::platform_proxy::{PlatformProxyControl, PlatformProxyError, SystemProxyStartupStatus};
+use crate::route_settings::{RouteSettings, SqliteRouteSettingsStore};
 use crate::routing_mode::{SqliteRoutingModeStore, parse_routing_mode};
 use crate::session::{SessionCommandError, SessionDefaults, SessionService, SessionStatus};
 use crate::subscriptions::{
@@ -603,6 +605,21 @@ fn session_set_routing_mode(
     clippy::needless_pass_by_value,
     reason = "Tauri commands receive State and deserialized arguments by value"
 )]
+fn session_set_route_settings(
+    settings: RouteSettings,
+    state: State<'_, AppState>,
+) -> Result<SessionStatus, CommandError> {
+    state
+        .service()
+        .set_route_settings(settings)
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
 fn session_set_dns_settings(
     settings: DnsSettings,
     state: State<'_, AppState>,
@@ -999,6 +1016,7 @@ pub fn run() {
                 nodes,
                 SqliteSubscriptionStore::open(&node_database)?,
                 SqliteRoutingModeStore::open(&node_database)?,
+                SqliteRouteSettingsStore::open(&node_database)?,
                 SqliteDnsSettingsStore::open(&node_database)?,
             )?));
             let initial_tray_model = {
@@ -1016,10 +1034,8 @@ pub fn run() {
                 allow_exit: AtomicBool::new(false),
                 exit_in_progress: AtomicBool::new(false),
             });
-            spawn_recovery_loop(
-                service.clone(),
-                TcpHealthProbe::new(health_address, PROBE_TIMEOUT),
-            );
+            let probe = TcpHealthProbe::new(health_address, PROBE_TIMEOUT);
+            spawn_recovery_loop(service.clone(), probe);
             spawn_subscription_update_loop(subscriptions.clone(), service.clone());
             spawn_traffic_loop(service.clone(), traffic);
             spawn_tray_refresh_loop(app.handle().clone());
@@ -1039,6 +1055,7 @@ pub fn run() {
             platform_summary,
             session_status,
             session_set_routing_mode,
+            session_set_route_settings,
             session_set_dns_settings,
             session_import_node,
             session_nodes,
