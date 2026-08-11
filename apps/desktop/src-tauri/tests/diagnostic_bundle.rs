@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use magies_desktop_lib::diagnostics::{DiagnosticBundle, DiagnosticBundleError};
 use magies_desktop_lib::dns_settings::DnsSettings;
+use magies_desktop_lib::route_settings::RouteSettings;
 use magies_desktop_lib::session::{NodeSummary, SessionStatus};
 use magies_domain::ProxyProtocol;
 use magies_profiles::REDACTED;
@@ -27,6 +28,7 @@ fn status() -> SessionStatus {
         core: "sing-box",
         dns: DnsSettings::default(),
         mode: "global",
+        route: RouteSettings::default(),
         system_proxy: true,
         socks_port: 10_808,
         http_port: 10_809,

@@ -252,6 +252,7 @@ pub fn action_for_menu_id(id: &str) -> Option<TrayAction> {
 #[cfg(test)]
 mod tests {
     use crate::dns_settings::DnsSettings;
+    use crate::route_settings::RouteSettings;
     use magies_domain::ProxyProtocol;
     use magies_routing::RoutingMode;
     use uuid::Uuid;
@@ -344,6 +345,7 @@ mod tests {
             core: "sing-box",
             dns: DnsSettings::default(),
             mode: "global",
+            route: RouteSettings::default(),
             system_proxy: connected,
             socks_port: 1080,
             http_port: 1081,

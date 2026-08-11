@@ -27,6 +27,9 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::dns_settings::{DnsSettings, DnsSettingsStoreError, SqliteDnsSettingsStore};
+use crate::route_settings::{
+    RouteSettings, RouteSettingsError, RouteSettingsStoreError, SqliteRouteSettingsStore,
+};
 use crate::routing_mode::{
     RoutingModeStoreError, SqliteRoutingModeStore, route_profile_for, routing_mode_name,
 };
@@ -110,6 +113,7 @@ pub struct SessionStatus {
     pub core: &'static str,
     pub dns: DnsSettings,
     pub mode: &'static str,
+    pub route: RouteSettings,
     pub system_proxy: bool,
     pub socks_port: u16,
     pub http_port: u16,
@@ -129,6 +133,8 @@ pub struct SessionService<S, C, P> {
     manual_nodes: SqliteManualNodeStore,
     subscription_nodes: SqliteSubscriptionStore,
     routing_mode: SqliteRoutingModeStore,
+    route_settings: SqliteRouteSettingsStore,
+    current_route_settings: RouteSettings,
     dns_settings: SqliteDnsSettingsStore,
     current_dns_settings: DnsSettings,
     recovery: NetworkRecoveryPolicy,
@@ -152,13 +158,16 @@ where
         manual_nodes: SqliteManualNodeStore,
         subscription_nodes: SqliteSubscriptionStore,
         routing_mode: SqliteRoutingModeStore,
+        route_settings: SqliteRouteSettingsStore,
         dns_settings: SqliteDnsSettingsStore,
     ) -> Result<Self, SessionInitializationError> {
         let node = subscription_nodes
             .selected_node()?
             .or(manual_nodes.selected_node()?);
         let mut defaults = defaults;
-        defaults.route = route_profile_for(routing_mode.load()?);
+        let mode = routing_mode.load()?;
+        let current_route_settings = route_settings.load()?;
+        defaults.route = current_route_settings.profile(mode)?;
         let current_dns_settings = dns_settings.load()?;
         defaults.dns = current_dns_settings.profile()?;
         Ok(Self {
@@ -168,6 +177,8 @@ where
             manual_nodes,
             subscription_nodes,
             routing_mode,
+            route_settings,
+            current_route_settings,
             dns_settings,
             current_dns_settings,
             recovery: NetworkRecoveryPolicy::default(),
@@ -345,10 +356,40 @@ where
         if self.session.is_running() {
             return Err(SessionCommandError::SessionActive);
         }
+        let profile = self
+            .current_route_settings
+            .profile(mode)
+            .map_err(SessionCommandError::InvalidRouteSettings)?;
         self.routing_mode
             .save(mode)
             .map_err(SessionCommandError::RoutingModeStore)?;
-        self.defaults.route = route_profile_for(mode);
+        self.defaults.route = profile;
+        Ok(self.status())
+    }
+
+    /// Saves the ordered route rules used by the next connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed active-session, validation, or persistence error.
+    pub fn set_route_settings(
+        &mut self,
+        settings: RouteSettings,
+    ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
+        if self.session.is_running() {
+            return Err(SessionCommandError::SessionActive);
+        }
+        settings
+            .profile(RoutingMode::Rule)
+            .map_err(SessionCommandError::InvalidRouteSettings)?;
+        let profile = settings
+            .profile(self.defaults.route.mode())
+            .map_err(SessionCommandError::InvalidRouteSettings)?;
+        self.route_settings
+            .save(&settings)
+            .map_err(SessionCommandError::RouteSettingsStore)?;
+        self.defaults.route = profile;
+        self.current_route_settings = settings;
         Ok(self.status())
     }
 
@@ -488,6 +529,7 @@ where
             core: CORE_NAME,
             dns: self.current_dns_settings.clone(),
             mode: self.defaults.mode(),
+            route: self.current_route_settings.clone(),
             system_proxy: self.defaults.system_proxy,
             socks_port: self.defaults.socks.port().get(),
             http_port: self.defaults.http.port().get(),
@@ -542,6 +584,10 @@ pub enum SessionInitializationError {
     SubscriptionNodeStore(#[from] SubscriptionTransactionError),
     #[error("failed to load the routing mode")]
     RoutingModeStore(#[from] RoutingModeStoreError),
+    #[error("failed to load the route settings")]
+    RouteSettingsStore(#[from] RouteSettingsStoreError),
+    #[error("the saved route settings are invalid")]
+    RouteSettings(#[from] RouteSettingsError),
     #[error("failed to load the DNS settings")]
     DnsSettingsStore(#[from] DnsSettingsStoreError),
     #[error("the saved DNS settings are invalid")]
@@ -570,6 +616,10 @@ where
     SubscriptionNodeStore(#[source] SubscriptionTransactionError),
     #[error("failed to save the routing mode")]
     RoutingModeStore(#[source] RoutingModeStoreError),
+    #[error("invalid route settings")]
+    InvalidRouteSettings(#[source] RouteSettingsError),
+    #[error("failed to save the route settings")]
+    RouteSettingsStore(#[source] RouteSettingsStoreError),
     #[error("invalid DNS settings")]
     InvalidDnsSettings(#[source] DnsConfigError),
     #[error("failed to save the DNS settings")]
@@ -614,6 +664,8 @@ where
             | Self::SubscriptionNodeStore(_) => "node_store_failed",
             Self::SubscriptionNodeReadOnly { .. } => "subscription_node_read_only",
             Self::RoutingModeStore(_) => "routing_mode_store_failed",
+            Self::InvalidRouteSettings(_) => "invalid_route_settings",
+            Self::RouteSettingsStore(_) => "route_settings_store_failed",
             Self::InvalidDnsSettings(_) => "invalid_dns_settings",
             Self::DnsSettingsStore(_) => "dns_settings_store_failed",
             Self::SessionActive => "session_active",

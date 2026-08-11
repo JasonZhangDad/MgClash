@@ -16,6 +16,7 @@ import {
   recoverSystemProxy,
   selectNode,
   setDnsSettings,
+  setRouteSettings,
   setRoutingMode,
   testAllNodes,
   testNode,
@@ -25,6 +26,9 @@ import {
   type DnsMode,
   type DnsSettings,
   type DnsStrategy,
+  type RouteOutbound,
+  type RouteRuleKind,
+  type RouteSettings,
   type SessionStatus,
   type RoutingMode,
   type SystemProxyStartupStatus,
@@ -66,6 +70,32 @@ const TUN_LABEL: Record<PlatformSummary["tunAvailability"], string> = {
 const UNSIGNED_NOTICE_KEY = "mgclash.unsignedNoticeDismissed";
 const URL_TEST_ADDRESS_KEY = "mgclash.urlTestAddress";
 const DEFAULT_URL_TEST_ADDRESS = "https://www.gstatic.com/generate_204";
+
+const ROUTE_KIND_LABEL: Record<RouteRuleKind, string> = {
+  domain: "域名",
+  domainSuffix: "域名后缀",
+  domainKeyword: "域名关键字",
+  ipCidr: "IPv4 CIDR",
+  ipCidr6: "IPv6 CIDR",
+  geoIp: "GeoIP",
+  geoSite: "GeoSite",
+  port: "端口",
+  network: "网络",
+};
+
+function isGeoRule(kind: RouteRuleKind): boolean {
+  return kind === "geoIp" || kind === "geoSite";
+}
+
+function runtimeOrderedRoute(settings: RouteSettings): RouteSettings {
+  return {
+    ...settings,
+    rules: [
+      ...settings.rules.filter((rule) => !isGeoRule(rule.kind)),
+      ...settings.rules.filter((rule) => isGeoRule(rule.kind)),
+    ],
+  };
+}
 
 const TUN_NOTICE: Record<PlatformSummary["tunAvailability"], string> = {
   requiresElevation: "TUN 需要管理员权限才能启用。",
@@ -120,6 +150,12 @@ export default function App() {
   const [status, setStatus] = useState<SessionStatus | null>(null);
   const [dnsDraft, setDnsDraft] = useState<DnsSettings | null>(null);
   const [dnsDirty, setDnsDirty] = useState(false);
+  const [routeDraft, setRouteDraft] = useState<RouteSettings | null>(null);
+  const [routeDirty, setRouteDirty] = useState(false);
+  const [routeRuleKind, setRouteRuleKind] = useState<RouteRuleKind>("domainSuffix");
+  const [routeRuleValue, setRouteRuleValue] = useState("");
+  const [routeRuleOutbound, setRouteRuleOutbound] =
+    useState<RouteOutbound>("proxy");
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
   const [subscriptions, setSubscriptions] = useState<SubscriptionSummary[]>([]);
   const [uri, setUri] = useState("");
@@ -173,6 +209,12 @@ export default function App() {
       setDnsDraft(status.dns);
     }
   }, [dnsDirty, status]);
+
+  useEffect(() => {
+    if (status !== null && !routeDirty) {
+      setRouteDraft(runtimeOrderedRoute(status.route));
+    }
+  }, [routeDirty, status]);
 
   useEffect(() => {
     // Skip while a command is in flight: it owns the status it is about to set.
@@ -292,6 +334,70 @@ export default function App() {
       setBusy(false);
     }
   }, [dnsDraft]);
+
+  const onAddRouteRule = useCallback(() => {
+    const value = routeRuleValue.trim();
+    if (routeDraft === null || value === "") {
+      setError("请填写规则值");
+      return;
+    }
+    const rule = {
+      enabled: true,
+      kind: routeRuleKind,
+      outbound: routeRuleOutbound,
+      value,
+    };
+    const rules = [...routeDraft.rules];
+    if (isGeoRule(rule.kind)) {
+      rules.push(rule);
+    } else {
+      const firstGeo = rules.findIndex((candidate) => isGeoRule(candidate.kind));
+      rules.splice(firstGeo === -1 ? rules.length : firstGeo, 0, rule);
+    }
+    setRouteDraft({ ...routeDraft, rules });
+    setRouteDirty(true);
+    setRouteRuleValue("");
+  }, [routeDraft, routeRuleKind, routeRuleOutbound, routeRuleValue]);
+
+  const onMoveRouteRule = useCallback(
+    (index: number, offset: -1 | 1) => {
+      if (routeDraft === null) {
+        return;
+      }
+      const target = index + offset;
+      if (
+        target < 0 ||
+        target >= routeDraft.rules.length ||
+        isGeoRule(routeDraft.rules[index].kind) !==
+          isGeoRule(routeDraft.rules[target].kind)
+      ) {
+        return;
+      }
+      const rules = [...routeDraft.rules];
+      [rules[index], rules[target]] = [rules[target], rules[index]];
+      setRouteDraft({ ...routeDraft, rules });
+      setRouteDirty(true);
+    },
+    [routeDraft],
+  );
+
+  const onSaveRoute = useCallback(async () => {
+    if (routeDraft === null) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const nextStatus = await setRouteSettings(routeDraft);
+      setStatus(nextStatus);
+      setRouteDraft(runtimeOrderedRoute(nextStatus.route));
+      setRouteDirty(false);
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, [routeDraft]);
 
   const resolveSystemProxyStartup = useCallback(
     async (command: () => Promise<SystemProxyStartupStatus>) => {
@@ -892,6 +998,188 @@ export default function App() {
             onClick={() => void onSaveDns()}
           >
             保存 DNS
+          </button>
+        </div>
+
+        <h2>路由规则</h2>
+
+        <p className="hint">
+          运行顺序固定为：本地安全规则 → 用户规则 → Geo 规则 → 默认出口。仅规则模式应用列表。
+        </p>
+        {routeDraft === null ? (
+          <p className="hint">正在读取路由设置</p>
+        ) : (
+          <>
+            <div className="settings-form">
+              <label>
+                规则类型
+                <select
+                  aria-label="规则类型"
+                  disabled={busy || connected}
+                  value={routeRuleKind}
+                  onChange={(event) =>
+                    setRouteRuleKind(event.target.value as RouteRuleKind)
+                  }
+                >
+                  {Object.entries(ROUTE_KIND_LABEL).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                规则值
+                <input
+                  aria-label="规则值"
+                  disabled={busy || connected}
+                  placeholder={routeRuleKind === "network" ? "tcp 或 udp" : undefined}
+                  value={routeRuleValue}
+                  onChange={(event) => setRouteRuleValue(event.target.value)}
+                />
+              </label>
+              <label>
+                出口
+                <select
+                  aria-label="规则出口"
+                  disabled={busy || connected}
+                  value={routeRuleOutbound}
+                  onChange={(event) =>
+                    setRouteRuleOutbound(event.target.value as RouteOutbound)
+                  }
+                >
+                  <option value="proxy">代理</option>
+                  <option value="direct">直连</option>
+                </select>
+              </label>
+            </div>
+            <div className="actions">
+              <button
+                type="button"
+                disabled={busy || connected}
+                onClick={onAddRouteRule}
+              >
+                添加规则
+              </button>
+            </div>
+
+            {routeDraft.rules.length === 0 ? (
+              <p className="hint">尚未添加规则</p>
+            ) : (
+              <table className="node-list" aria-label="路由规则列表">
+                <thead>
+                  <tr>
+                    <th>顺序</th>
+                    <th>类型</th>
+                    <th>值</th>
+                    <th>出口</th>
+                    <th>启用</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {routeDraft.rules.map((rule, index) => (
+                    <tr key={`${rule.kind}-${rule.value}-${index}`}>
+                      <td>{index + 1}</td>
+                      <td>{ROUTE_KIND_LABEL[rule.kind]}</td>
+                      <td>{rule.value}</td>
+                      <td>{rule.outbound === "proxy" ? "代理" : "直连"}</td>
+                      <td>
+                        <input
+                          aria-label={`启用规则 ${index + 1}`}
+                          checked={rule.enabled}
+                          disabled={busy || connected}
+                          type="checkbox"
+                          onChange={(event) => {
+                            const rules = [...routeDraft.rules];
+                            rules[index] = {
+                              ...rule,
+                              enabled: event.target.checked,
+                            };
+                            setRouteDraft({ ...routeDraft, rules });
+                            setRouteDirty(true);
+                          }}
+                        />
+                      </td>
+                      <td className="node-actions">
+                        <button
+                          type="button"
+                          disabled={
+                            busy ||
+                            connected ||
+                            index === 0 ||
+                            isGeoRule(rule.kind) !==
+                              isGeoRule(routeDraft.rules[index - 1].kind)
+                          }
+                          onClick={() => onMoveRouteRule(index, -1)}
+                        >
+                          上移
+                        </button>
+                        <button
+                          type="button"
+                          disabled={
+                            busy ||
+                            connected ||
+                            index === routeDraft.rules.length - 1 ||
+                            isGeoRule(rule.kind) !==
+                              isGeoRule(routeDraft.rules[index + 1].kind)
+                          }
+                          onClick={() => onMoveRouteRule(index, 1)}
+                        >
+                          下移
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy || connected}
+                          onClick={() => {
+                            setRouteDraft({
+                              ...routeDraft,
+                              rules: routeDraft.rules.filter(
+                                (_, ruleIndex) => ruleIndex !== index,
+                              ),
+                            });
+                            setRouteDirty(true);
+                          }}
+                        >
+                          删除
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+
+            <div className="settings-form">
+              <label>
+                默认出口
+                <select
+                  aria-label="默认出口"
+                  disabled={busy || connected}
+                  value={routeDraft.finalOutbound}
+                  onChange={(event) => {
+                    setRouteDraft({
+                      ...routeDraft,
+                      finalOutbound: event.target.value as RouteOutbound,
+                    });
+                    setRouteDirty(true);
+                  }}
+                >
+                  <option value="proxy">代理</option>
+                  <option value="direct">直连</option>
+                </select>
+              </label>
+            </div>
+          </>
+        )}
+
+        <div className="actions">
+          <button
+            type="button"
+            disabled={busy || connected || routeDraft === null || !routeDirty}
+            onClick={() => void onSaveRoute()}
+          >
+            保存路由
           </button>
         </div>
 

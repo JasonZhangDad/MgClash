@@ -19,6 +19,7 @@ import {
   recoverSystemProxy,
   selectNode,
   setDnsSettings,
+  setRouteSettings,
   setRoutingMode,
   testAllNodes,
   testNode,
@@ -42,6 +43,10 @@ const IDLE: SessionStatus = {
   },
   httpPort: 10809,
   mode: "global",
+  route: {
+    finalOutbound: "proxy",
+    rules: [],
+  },
   node: null,
   socksPort: 10808,
   systemProxy: true,
@@ -208,6 +213,26 @@ describe("session commands", () => {
 
     expect(invokeMock).toHaveBeenCalledWith("session_set_routing_mode", {
       mode: "rule",
+    });
+  });
+
+  it("saves ordered route settings through their own command", async () => {
+    const settings = {
+      finalOutbound: "proxy" as const,
+      rules: [
+        {
+          enabled: true,
+          kind: "domainSuffix" as const,
+          outbound: "direct" as const,
+          value: "cn",
+        },
+      ],
+    };
+
+    await setRouteSettings(settings);
+
+    expect(invokeMock).toHaveBeenCalledWith("session_set_route_settings", {
+      settings,
     });
   });
 

@@ -41,6 +41,7 @@ export interface SessionStatus {
   httpPort: number;
   mode: RoutingMode;
   node: NodeSummary | null;
+  route: RouteSettings;
   socksPort: number;
   systemProxy: boolean;
 }
@@ -66,6 +67,31 @@ export interface DnsSettings {
   systemDomains: string[];
 }
 
+export type RouteRuleKind =
+  | "domain"
+  | "domainSuffix"
+  | "domainKeyword"
+  | "ipCidr"
+  | "ipCidr6"
+  | "geoIp"
+  | "geoSite"
+  | "port"
+  | "network";
+
+export type RouteOutbound = "proxy" | "direct";
+
+export interface RouteRuleSetting {
+  enabled: boolean;
+  kind: RouteRuleKind;
+  outbound: RouteOutbound;
+  value: string;
+}
+
+export interface RouteSettings {
+  finalOutbound: RouteOutbound;
+  rules: RouteRuleSetting[];
+}
+
 /** The shape every failed Tauri command returns. */
 export interface CommandError {
   code: string;
@@ -89,6 +115,10 @@ export function loadSessionStatus(): Promise<SessionStatus> {
 
 export function setRoutingMode(mode: RoutingMode): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_set_routing_mode", { mode });
+}
+
+export function setRouteSettings(settings: RouteSettings): Promise<SessionStatus> {
+  return invoke<SessionStatus>("session_set_route_settings", { settings });
 }
 
 export function setDnsSettings(settings: DnsSettings): Promise<SessionStatus> {
