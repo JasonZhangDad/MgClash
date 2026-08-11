@@ -3,12 +3,16 @@ import { useCallback, useEffect, useState } from "react";
 import { loadPlatformSummary, type PlatformSummary } from "./platform";
 import {
   connectSession,
+  dismissSystemProxyRecovery,
   disconnectSession,
   exportDiagnostics,
   importNode,
   isCommandError,
   loadSessionStatus,
+  loadSystemProxyStartupStatus,
+  recoverSystemProxy,
   type SessionStatus,
+  type SystemProxyStartupStatus,
 } from "./session";
 
 /**
@@ -59,6 +63,8 @@ export default function App() {
   const [uri, setUri] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [exportedTo, setExportedTo] = useState<string | null>(null);
+  const [systemProxyStartup, setSystemProxyStartup] =
+    useState<SystemProxyStartupStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [noticeDismissed, setNoticeDismissed] = useState(noticeWasDismissed);
 
@@ -68,6 +74,10 @@ export default function App() {
     );
     loadSessionStatus().then(setStatus, (failure: unknown) =>
       setError(describeFailure(failure)),
+    );
+    loadSystemProxyStartupStatus().then(
+      setSystemProxyStartup,
+      (failure: unknown) => setError(describeFailure(failure)),
     );
   }, []);
 
@@ -111,6 +121,21 @@ export default function App() {
     }
   }, []);
 
+  const resolveSystemProxyStartup = useCallback(
+    async (command: () => Promise<SystemProxyStartupStatus>) => {
+      setBusy(true);
+      setError(null);
+      try {
+        setSystemProxyStartup(await command());
+      } catch (failure: unknown) {
+        setError(describeFailure(failure));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [],
+  );
+
   const dismissNotice = useCallback(() => {
     try {
       localStorage.setItem(UNSIGNED_NOTICE_KEY, "1");
@@ -139,6 +164,34 @@ export default function App() {
       </header>
 
       <section className="content">
+        {systemProxyStartup === "restoreRequired" && (
+          <section className="notice" aria-label="系统代理恢复">
+            <p>
+              检测到上次异常退出留下的系统代理设置。恢复原设置可以避免系统继续指向已经停止的本地代理。
+            </p>
+            <div className="actions">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  void resolveSystemProxyStartup(recoverSystemProxy)
+                }
+              >
+                恢复原设置
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  void resolveSystemProxyStartup(dismissSystemProxyRecovery)
+                }
+              >
+                保留当前设置
+              </button>
+            </div>
+          </section>
+        )}
+
         {!noticeDismissed && (
           <div className="notice" role="note">
             <p>
@@ -212,7 +265,9 @@ export default function App() {
         <div className="actions">
           <button
             type="button"
-            disabled={busy || node === null}
+            disabled={
+              busy || node === null || systemProxyStartup !== "clean"
+            }
             onClick={() =>
               void run(connected ? disconnectSession : connectSession)
             }

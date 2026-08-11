@@ -10,6 +10,9 @@ const importNodeMock = vi.hoisted(() => vi.fn());
 const connectSessionMock = vi.hoisted(() => vi.fn());
 const disconnectSessionMock = vi.hoisted(() => vi.fn());
 const exportDiagnosticsMock = vi.hoisted(() => vi.fn());
+const loadSystemProxyStartupStatusMock = vi.hoisted(() => vi.fn());
+const recoverSystemProxyMock = vi.hoisted(() => vi.fn());
+const dismissSystemProxyRecoveryMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./platform", () => ({
   loadPlatformSummary: loadPlatformSummaryMock,
@@ -20,10 +23,13 @@ vi.mock("./session", async () => {
   return {
     connectSession: connectSessionMock,
     disconnectSession: disconnectSessionMock,
+    dismissSystemProxyRecovery: dismissSystemProxyRecoveryMock,
     exportDiagnostics: exportDiagnosticsMock,
     importNode: importNodeMock,
     isCommandError: actual.isCommandError,
     loadSessionStatus: loadSessionStatusMock,
+    loadSystemProxyStartupStatus: loadSystemProxyStartupStatusMock,
+    recoverSystemProxy: recoverSystemProxyMock,
   };
 });
 
@@ -66,12 +72,18 @@ describe("App", () => {
     connectSessionMock.mockReset();
     disconnectSessionMock.mockReset();
     exportDiagnosticsMock.mockReset();
+    loadSystemProxyStartupStatusMock.mockReset();
+    recoverSystemProxyMock.mockReset();
+    dismissSystemProxyRecoveryMock.mockReset();
 
     loadPlatformSummaryMock.mockResolvedValue({
       artifactIdentifier: "macos-x86_64",
       tunAvailability: "unavailableInUnsignedBuild",
     });
     loadSessionStatusMock.mockResolvedValue(IDLE);
+    loadSystemProxyStartupStatusMock.mockResolvedValue("clean");
+    recoverSystemProxyMock.mockResolvedValue("clean");
+    dismissSystemProxyRecoveryMock.mockResolvedValue("clean");
 
     localStorage.clear();
     container = document.createElement("div");
@@ -196,6 +208,70 @@ describe("App", () => {
     await render();
 
     expect(container.textContent).toContain("需要管理员权限");
+  });
+
+  it("offers to restore System Proxy settings left by an abnormal exit", async () => {
+    loadSystemProxyStartupStatusMock.mockResolvedValue("restoreRequired");
+
+    await render();
+
+    const recovery = container.querySelector(
+      "[aria-label='系统代理恢复']",
+    );
+    expect(recovery?.textContent).toContain("异常退出");
+    expect(recovery?.textContent).toContain("恢复原设置");
+    expect(recovery?.textContent).toContain("保留当前设置");
+  });
+
+  it("does not connect before startup System Proxy inspection finishes", async () => {
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadSystemProxyStartupStatusMock.mockReturnValue(new Promise(() => {}));
+
+    await render();
+
+    expect(button("连接").disabled).toBe(true);
+  });
+
+  it("restores the saved System Proxy settings", async () => {
+    loadSystemProxyStartupStatusMock.mockResolvedValue("restoreRequired");
+    await render();
+
+    await act(async () => button("恢复原设置").click());
+
+    expect(recoverSystemProxyMock).toHaveBeenCalledOnce();
+    expect(
+      container.querySelector("[aria-label='系统代理恢复']"),
+    ).toBeNull();
+  });
+
+  it("can keep the current System Proxy settings", async () => {
+    loadSystemProxyStartupStatusMock.mockResolvedValue("restoreRequired");
+    await render();
+
+    await act(async () => button("保留当前设置").click());
+
+    expect(dismissSystemProxyRecoveryMock).toHaveBeenCalledOnce();
+    expect(
+      container.querySelector("[aria-label='系统代理恢复']"),
+    ).toBeNull();
+  });
+
+  it("keeps the recovery choice visible when restoration fails", async () => {
+    loadSystemProxyStartupStatusMock.mockResolvedValue("restoreRequired");
+    recoverSystemProxyMock.mockRejectedValue({
+      code: "system_proxy_failed",
+      message: "failed to restore System Proxy",
+    });
+    await render();
+
+    await act(async () => button("恢复原设置").click());
+
+    expect(
+      container.querySelector("[aria-label='系统代理恢复']"),
+    ).not.toBeNull();
+    expect(container.querySelector("[role='alert']")?.textContent).toContain(
+      "failed to restore System Proxy",
+    );
   });
 
   it("imports a share link and enables connecting", async () => {

@@ -30,6 +30,8 @@ export interface CommandError {
   message: string;
 }
 
+export type SystemProxyStartupStatus = "clean" | "restoreRequired";
+
 export function isCommandError(value: unknown): value is CommandError {
   return (
     typeof value === "object" &&
@@ -53,6 +55,18 @@ export function connectSession(): Promise<SessionStatus> {
 
 export function disconnectSession(): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_disconnect");
+}
+
+export function loadSystemProxyStartupStatus(): Promise<SystemProxyStartupStatus> {
+  return invoke<SystemProxyStartupStatus>("system_proxy_startup_status");
+}
+
+export function recoverSystemProxy(): Promise<SystemProxyStartupStatus> {
+  return invoke<SystemProxyStartupStatus>("system_proxy_recover");
+}
+
+export function dismissSystemProxyRecovery(): Promise<SystemProxyStartupStatus> {
+  return invoke<SystemProxyStartupStatus>("system_proxy_dismiss");
 }
 
 /** Writes a redacted diagnostic bundle and resolves with its path. */
