@@ -632,6 +632,26 @@ fn a_network_event_leaves_a_healthy_core_alone() {
 }
 
 #[test]
+fn health_monitor_reconnects_a_dead_core_without_a_network_event() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let (mut service, _runtime, _fail_start) = service_with_events(&events);
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    service.connect().unwrap();
+    events.lock().unwrap().clear();
+
+    let outcome = service
+        .monitor_recovery(Instant::now(), &AlwaysUnhealthy)
+        .unwrap();
+
+    assert_eq!(outcome, RecoveryOutcome::Reconnected { attempts: 1 });
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        ["proxy_stop", "core_stop", "core_start", "proxy_enable"]
+    );
+    assert!(service.status().connected);
+}
+
+#[test]
 fn every_session_failure_carries_a_stable_code_for_the_ui() {
     let (mut service, _runtime, _fail_start) = service();
 

@@ -104,6 +104,39 @@ impl NetworkRecoveryPolicy {
         self.due_at
     }
 
+    /// Runs a due network recovery or checks an otherwise active session for
+    /// an unsolicited Core crash.
+    ///
+    /// A failed periodic probe is confirmed by [`Self::recover`] before the
+    /// disruptive stop/start sequence begins. A stopped session is never
+    /// probed or resurrected unless an earlier recovery retained its profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same typed stop or bounded-restart error as
+    /// [`Self::recover`].
+    pub fn monitor<S, C, P>(
+        &mut self,
+        now: Instant,
+        session: &mut DesktopSession<S, C, P>,
+        probe: &impl SessionHealthProbe,
+    ) -> Result<RecoveryOutcome, RecoveryError<C::Error, P::Error>>
+    where
+        S: SecretStore,
+        C: CoreSessionControl,
+        P: SystemProxySessionControl,
+    {
+        if self.due_at.is_some() {
+            return self.recover(now, session, probe);
+        }
+        if session.active_profile().is_none() || probe.is_healthy() {
+            return Ok(RecoveryOutcome::Idle);
+        }
+
+        self.due_at = Some(now);
+        self.recover(now, session, probe)
+    }
+
     /// Runs one recovery pass for the debounced event, if it is due.
     ///
     /// Checks Core health first and restarts the session only when the probe
