@@ -1,3 +1,5 @@
+use std::num::NonZeroU16;
+
 use magies_domain::{CoreType, CredentialRef, ProxyNode, ProxyProtocol, TransportConfig};
 use magies_platform::OperatingSystem;
 use magies_profiles::{
@@ -92,6 +94,41 @@ fn composes_local_proxies_selected_node_dns_and_ordered_route() {
             }
         })
     );
+}
+
+#[test]
+fn enables_a_loopback_clash_api_without_sharing_listener_ports() {
+    let parsed = ShadowsocksParser
+        .parse("ss://aes-256-gcm:proxy-secret@edge.example.com:8388")
+        .unwrap();
+    let node = shadowsocks_node(true);
+    let dns = system_dns();
+    let route = RouteProfile::new(RoutingMode::Global, Vec::new(), RouteOutbound::Proxy).unwrap();
+    let profile = SingBoxRuntimeProfile::new(
+        &node,
+        NodeCredential::from(parsed.credential()),
+        &dns,
+        &route,
+    )
+    .with_clash_api_port(NonZeroU16::new(9_090).unwrap())
+    .unwrap();
+
+    let generated = SingBoxRuntimeConfigGenerator::generate(&profile).unwrap();
+
+    assert_eq!(
+        generated.json()["experimental"]["clash_api"],
+        json!({ "external_controller": "127.0.0.1:9090" })
+    );
+    assert!(matches!(
+        SingBoxRuntimeProfile::new(
+            &node,
+            NodeCredential::from(parsed.credential()),
+            &dns,
+            &route,
+        )
+        .with_clash_api_port(NonZeroU16::new(10_808).unwrap()),
+        Err(RuntimeConfigError::DuplicateLocalPort { port: 10_808 })
+    ));
 }
 
 #[test]

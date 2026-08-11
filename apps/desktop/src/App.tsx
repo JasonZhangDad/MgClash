@@ -12,6 +12,7 @@ import {
   loadNodes,
   loadSessionStatus,
   loadSystemProxyStartupStatus,
+  loadTraffic,
   recoverSystemProxy,
   selectNode,
   testAllNodes,
@@ -21,6 +22,7 @@ import {
   type NodeTestResult,
   type SessionStatus,
   type SystemProxyStartupStatus,
+  type TrafficRate,
 } from "./session";
 import {
   createSubscription,
@@ -37,6 +39,11 @@ import {
  * so the dashboard re-reads the status instead of trusting its last command.
  */
 const REFRESH_INTERVAL_MS = 3_000;
+const TRAFFIC_REFRESH_INTERVAL_MS = 1_000;
+const EMPTY_TRAFFIC: TrafficRate = {
+  downloadBytesPerSecond: 0,
+  uploadBytesPerSecond: 0,
+};
 
 const TUN_LABEL: Record<PlatformSummary["tunAvailability"], string> = {
   requiresElevation: "需要管理员权限",
@@ -75,6 +82,17 @@ function savedUrlTestAddress(): string {
   }
 }
 
+function formatRate(bytesPerSecond: number): string {
+  const units = ["B/s", "KB/s", "MB/s", "GB/s"];
+  let value = bytesPerSecond;
+  let unit = 0;
+  while (value >= 1_024 && unit < units.length - 1) {
+    value /= 1_024;
+    unit += 1;
+  }
+  return unit === 0 ? `${value} ${units[unit]}` : `${value.toFixed(1)} ${units[unit]}`;
+}
+
 /** Command rejections are typed values from Rust, not `Error` instances. */
 function describeFailure(error: unknown): string {
   if (isCommandError(error)) {
@@ -103,6 +121,7 @@ export default function App() {
   const [systemProxyStartup, setSystemProxyStartup] =
     useState<SystemProxyStartupStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [traffic, setTraffic] = useState<TrafficRate>(EMPTY_TRAFFIC);
   const [urlTestAddress, setUrlTestAddress] = useState(savedUrlTestAddress);
   const [nodeTests, setNodeTests] = useState<
     Record<string, NodeTestResult | { status: "testing" }>
@@ -150,6 +169,41 @@ export default function App() {
     }, REFRESH_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [busy]);
+
+  useEffect(() => {
+    if (!status?.connected) {
+      setTraffic(EMPTY_TRAFFIC);
+      return undefined;
+    }
+
+    let active = true;
+    let loading = false;
+    const refresh = async () => {
+      if (loading) {
+        return;
+      }
+      loading = true;
+      try {
+        const sample = await loadTraffic();
+        if (active) {
+          setTraffic(sample);
+        }
+      } catch (failure: unknown) {
+        if (active) {
+          setTraffic(EMPTY_TRAFFIC);
+          console.warn("traffic refresh failed", failure);
+        }
+      } finally {
+        loading = false;
+      }
+    };
+    void refresh();
+    const timer = setInterval(() => void refresh(), TRAFFIC_REFRESH_INTERVAL_MS);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [status?.connected]);
 
   const run = useCallback(async (command: () => Promise<SessionStatus>) => {
     setBusy(true);
@@ -516,6 +570,18 @@ export default function App() {
             <dt>状态</dt>
             <dd className={connected ? "connected" : undefined}>
               {connected ? "已连接" : "未连接"}
+            </dd>
+          </div>
+          <div>
+            <dt>下载</dt>
+            <dd aria-label="下载速率">
+              {connected ? formatRate(traffic.downloadBytesPerSecond) : "—"}
+            </dd>
+          </div>
+          <div>
+            <dt>上传</dt>
+            <dd aria-label="上传速率">
+              {connected ? formatRate(traffic.uploadBytesPerSecond) : "—"}
             </dd>
           </div>
           <div>

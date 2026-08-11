@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread::{self, sleep};
@@ -30,11 +31,12 @@ fn generated_runtime_proxies_an_http_request_through_selected_node() {
         std::env::var_os("MAGIES_SING_BOX_CONFIG_BIN")
             .expect("MAGIES_SING_BOX_CONFIG_BIN must point to official sing-box"),
     );
-    let ports = available_ports(4);
+    let ports = available_ports(5);
     let server_port = ports[0];
     let socks_port = ports[1];
     let http_port = ports[2];
     let unreachable_port = ports[3];
+    let api_port = ports[4];
     let server_config = ConfigFile::new(
         "server",
         &json!({
@@ -94,6 +96,8 @@ fn generated_runtime_proxies_an_http_request_through_selected_node() {
         LocalSocksProfile::new(u32::from(socks_port)).unwrap(),
         LocalHttpProfile::new(u32::from(http_port)).unwrap(),
     )
+    .unwrap()
+    .with_clash_api_port(NonZeroU16::new(api_port).unwrap())
     .unwrap();
     let generated = SingBoxRuntimeConfigGenerator::generate(&profile).unwrap();
     let mut client_json = generated.json().clone();
@@ -107,8 +111,46 @@ fn generated_runtime_proxies_an_http_request_through_selected_node() {
     let _client = CoreProcess::start(&binary, client_config.path());
     wait_for_port(socks_port);
     wait_for_port(http_port);
+    wait_for_port(api_port);
 
+    assert_traffic_stream(api_port);
     assert_http_proxy_request(http_port);
+}
+
+fn assert_traffic_stream(api_port: u16) {
+    let mut api = TcpStream::connect(("127.0.0.1", api_port)).unwrap();
+    api.set_read_timeout(Some(TIMEOUT)).unwrap();
+    write!(
+        api,
+        "GET /traffic HTTP/1.1\r\nHost: 127.0.0.1:{api_port}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+
+    let mut response = Vec::new();
+    let mut chunk = [0_u8; 512];
+    loop {
+        let length = api.read(&mut chunk).unwrap();
+        assert!(length > 0, "traffic API closed without a sample");
+        response.extend_from_slice(&chunk[..length]);
+        let Some(header_end) = response.windows(4).position(|bytes| bytes == b"\r\n\r\n") else {
+            continue;
+        };
+        let body = &response[header_end + 4..];
+        let Some(size_end) = body.windows(2).position(|bytes| bytes == b"\r\n") else {
+            continue;
+        };
+        let size =
+            usize::from_str_radix(std::str::from_utf8(&body[..size_end]).unwrap(), 16).unwrap();
+        let sample_start = size_end + 2;
+        if body.len() < sample_start + size {
+            continue;
+        }
+        let sample: Value =
+            serde_json::from_slice(&body[sample_start..sample_start + size]).unwrap();
+        assert!(sample["up"].is_u64());
+        assert!(sample["down"].is_u64());
+        return;
+    }
 }
 
 fn assert_http_proxy_request(proxy_port: u16) {

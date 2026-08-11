@@ -26,6 +26,11 @@ export interface NodeTestResult {
   status: NodeTestStatus;
 }
 
+export interface TrafficRate {
+  downloadBytesPerSecond: number;
+  uploadBytesPerSecond: number;
+}
+
 export interface SessionStatus {
   connected: boolean;
   core: string;
@@ -71,6 +76,10 @@ export function testNode(id: string): Promise<NodeTestResult> {
 
 export function testUrl(url: string): Promise<NodeTestResult> {
   return invoke<NodeTestResult>("session_url_test", { url });
+}
+
+export function loadTraffic(): Promise<TrafficRate> {
+  return invoke<TrafficRate>("session_traffic");
 }
 
 export async function testAllNodes(

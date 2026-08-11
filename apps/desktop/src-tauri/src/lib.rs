@@ -6,6 +6,7 @@ pub mod node_latency;
 pub mod platform_proxy;
 pub mod session;
 mod subscriptions;
+pub mod traffic;
 mod tray;
 pub mod url_test;
 
@@ -34,6 +35,7 @@ use crate::session::{SessionCommandError, SessionDefaults, SessionService, Sessi
 use crate::subscriptions::{
     DesktopSubscriptionController, DesktopSubscriptionError, DesktopSubscriptionSummary,
 };
+use crate::traffic::{TrafficRate, TrafficSampleError, sample_traffic};
 use crate::tray::{TrayAction, TrayUi, menu_model};
 use crate::url_test::{UrlTestError, probe_url};
 
@@ -64,6 +66,9 @@ const NODE_TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A real URL test uses the same per-node timeout as TCP Connect.
 const URL_TEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The Core emits a traffic sample every second; keep the PRD's bounded timeout.
+const TRAFFIC_SAMPLE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -144,6 +149,17 @@ fn url_test_result(
             status: NodeTestStatus::Failed,
             latency_ms: None,
         }),
+    }
+}
+
+fn traffic_command_error(error: &TrafficSampleError) -> CommandError {
+    CommandError {
+        code: match error {
+            TrafficSampleError::InvalidTimeout => "invalid_traffic_sample",
+            TrafficSampleError::TimedOut => "traffic_sample_timeout",
+            _ => "traffic_sample_failed",
+        },
+        message: describe(error),
     }
 }
 
@@ -561,6 +577,20 @@ async fn session_url_test(
     Ok(result)
 }
 
+#[tauri::command]
+async fn session_traffic(state: State<'_, AppState>) -> Result<TrafficRate, CommandError> {
+    let api_address = state
+        .service()
+        .traffic_api_address()
+        .map_err(|error| command_error(&error))?;
+    sample_traffic(api_address, TRAFFIC_SAMPLE_TIMEOUT)
+        .await
+        .map_err(|error| {
+            eprintln!("traffic sample failed: {}", describe(&error));
+            traffic_command_error(&error)
+        })
+}
+
 fn parse_node_id(id: &str) -> Result<Uuid, CommandError> {
     Uuid::parse_str(id).map_err(|error| CommandError {
         code: "invalid_node_id",
@@ -901,6 +931,7 @@ pub fn run() {
             session_nodes,
             session_test_node,
             session_url_test,
+            session_traffic,
             session_select_node,
             session_delete_node,
             session_connect,
@@ -933,10 +964,12 @@ pub fn run() {
 mod tests {
     use super::{
         NodeTestStatus, ensure_subscription_mutation_ready, ensure_system_proxy_ready,
-        node_test_result, parse_node_id, parse_subscription_id, platform_summary, url_test_result,
+        node_test_result, parse_node_id, parse_subscription_id, platform_summary,
+        traffic_command_error, url_test_result,
     };
     use crate::node_latency::TcpLatencyError;
     use crate::platform_proxy::SystemProxyStartupStatus;
+    use crate::traffic::TrafficSampleError;
     use crate::url_test::UrlTestError;
     use std::io;
     use uuid::Uuid;
@@ -1015,6 +1048,18 @@ mod tests {
             .unwrap_err()
             .code,
             "invalid_url_test"
+        );
+    }
+
+    #[test]
+    fn traffic_failures_keep_timeouts_distinct_from_other_api_errors() {
+        assert_eq!(
+            traffic_command_error(&TrafficSampleError::TimedOut).code,
+            "traffic_sample_timeout"
+        );
+        assert_eq!(
+            traffic_command_error(&TrafficSampleError::HttpStatus { status: 503 }).code,
+            "traffic_sample_failed"
         );
     }
 

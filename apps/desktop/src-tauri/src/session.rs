@@ -4,6 +4,8 @@
 //! shared node model, saves the credential in the OS store, and drives
 //! [`DesktopSession`] for connect and disconnect.
 
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::num::NonZeroU16;
 use std::path::Path;
 use std::time::Instant;
 
@@ -32,6 +34,7 @@ const CORE_NAME: &str = "sing-box";
 pub struct SessionDefaults {
     pub socks: LocalSocksProfile,
     pub http: LocalHttpProfile,
+    pub clash_api_port: NonZeroU16,
     pub dns: DnsProfile,
     pub route: RouteProfile,
     pub system_proxy: bool,
@@ -50,6 +53,7 @@ impl SessionDefaults {
         Self {
             socks: LocalSocksProfile::default(),
             http: LocalHttpProfile::default(),
+            clash_api_port: NonZeroU16::new(9_090).expect("the Clash API port is nonzero"),
             dns: DnsProfile::new(
                 vec![DnsServer::system("system").expect("\"system\" is a valid DNS server tag")],
                 Vec::new(),
@@ -401,6 +405,7 @@ where
             self.defaults.route.clone(),
         )
         .with_local_proxies(self.defaults.socks, self.defaults.http)
+        .with_clash_api_port(self.defaults.clash_api_port)
         .with_system_proxy(self.defaults.system_proxy);
 
         self.session
@@ -460,6 +465,23 @@ where
             http_port: self.defaults.http.port().get(),
         })
     }
+
+    /// Returns the loopback API used for one-second Core traffic samples.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed inactive-session error until the Core is running.
+    pub fn traffic_api_address(
+        &self,
+    ) -> Result<SocketAddr, SessionCommandError<C::Error, P::Error>> {
+        if !self.session.is_running() {
+            return Err(SessionCommandError::SessionInactive);
+        }
+        Ok(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            self.defaults.clash_api_port.get(),
+        ))
+    }
 }
 
 #[derive(Debug, Error)]
@@ -501,7 +523,7 @@ where
     DeleteSecret(#[source] SecretStoreError),
     #[error("nodes cannot be changed while the session is connected")]
     SessionActive,
-    #[error("the URL test requires a running proxy session")]
+    #[error("this command requires a running proxy session")]
     SessionInactive,
     #[error("failed to change the desktop proxy session")]
     Session(#[source] DesktopSessionError<C, P>),

@@ -11,6 +11,7 @@ pub use network_watcher::NetworkWatcher;
 
 use std::error::Error;
 use std::net::SocketAddr;
+use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -94,6 +95,7 @@ pub struct DesktopSessionProfile {
     route: RouteProfile,
     socks: LocalSocksProfile,
     http: LocalHttpProfile,
+    clash_api_port: Option<NonZeroU16>,
     tun: Option<TunProfile>,
     dns_hijack: bool,
     system_proxy: bool,
@@ -108,6 +110,7 @@ impl DesktopSessionProfile {
             route,
             socks: LocalSocksProfile::default(),
             http: LocalHttpProfile::default(),
+            clash_api_port: None,
             tun: None,
             dns_hijack: false,
             system_proxy: false,
@@ -129,6 +132,12 @@ impl DesktopSessionProfile {
     pub fn with_tun(mut self, tun: TunProfile, dns_hijack: bool) -> Self {
         self.tun = Some(tun);
         self.dns_hijack = dns_hijack;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_clash_api_port(mut self, port: NonZeroU16) -> Self {
+        self.clash_api_port = Some(port);
         self
     }
 
@@ -238,6 +247,11 @@ where
         )
         .with_local_proxies(profile.socks, profile.http)
         .map_err(|source| DesktopSessionError::Config { source })?;
+        if let Some(port) = profile.clash_api_port {
+            runtime_profile = runtime_profile
+                .with_clash_api_port(port)
+                .map_err(|source| DesktopSessionError::Config { source })?;
+        }
         if let Some(tun) = profile.tun.as_ref() {
             runtime_profile = runtime_profile.with_tun(tun, profile.dns_hijack);
         }

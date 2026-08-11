@@ -12,6 +12,7 @@ import {
   importNode,
   isCommandError,
   deleteNode,
+  loadTraffic,
   loadNodes,
   loadSessionStatus,
   loadSystemProxyStartupStatus,
@@ -95,6 +96,17 @@ describe("session commands", () => {
     expect(invokeMock).toHaveBeenCalledWith("session_url_test", {
       url: "https://www.gstatic.com/generate_204",
     });
+  });
+
+  it("reads one live traffic sample from the running Core", async () => {
+    const traffic = {
+      downloadBytesPerSecond: 2_048,
+      uploadBytesPerSecond: 1_024,
+    };
+    invokeMock.mockResolvedValue(traffic);
+
+    await expect(loadTraffic()).resolves.toEqual(traffic);
+    expect(invokeMock).toHaveBeenCalledWith("session_traffic");
   });
 
   it("tests at most eight nodes concurrently and cancels queued tests", async () => {
