@@ -7,6 +7,7 @@ use tauri::{App, AppHandle, Wry};
 use uuid::Uuid;
 
 use crate::session::{NodeSummary, SessionStatus};
+use crate::traffic::TrafficSnapshot;
 
 pub const OPEN_MENU_ID: &str = "tray:open";
 pub const TOGGLE_MENU_ID: &str = "tray:toggle";
@@ -19,6 +20,8 @@ const MODE_DIRECT_MENU_ID: &str = "tray:mode:direct";
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TrayMenuModel {
     pub status_text: String,
+    pub node_text: String,
+    pub traffic_text: String,
     pub toggle_text: &'static str,
     pub toggle_enabled: bool,
     pub mode: RoutingMode,
@@ -45,6 +48,8 @@ pub enum TrayAction {
 
 pub struct TrayUi {
     status: MenuItem<Wry>,
+    node: MenuItem<Wry>,
+    traffic: MenuItem<Wry>,
     toggle: MenuItem<Wry>,
     modes: Submenu<Wry>,
     nodes: Submenu<Wry>,
@@ -65,6 +70,8 @@ impl TrayUi {
     ) -> tauri::Result<Self> {
         let open = MenuItem::with_id(app, OPEN_MENU_ID, "打开 MgClash", true, None::<&str>)?;
         let status = MenuItem::new(app, &initial.status_text, false, None::<&str>)?;
+        let node = MenuItem::new(app, &initial.node_text, false, None::<&str>)?;
+        let traffic = MenuItem::new(app, &initial.traffic_text, false, None::<&str>)?;
         let toggle = MenuItem::with_id(
             app,
             TOGGLE_MENU_ID,
@@ -76,11 +83,23 @@ impl TrayUi {
         replace_mode_items(app.handle(), &modes, initial.mode, initial.mode_enabled)?;
         let nodes = Submenu::new(app, "节点", true)?;
         replace_node_items(app.handle(), &nodes, &initial.nodes)?;
-        let separator = PredefinedMenuItem::separator(app)?;
+        let info_separator = PredefinedMenuItem::separator(app)?;
+        let action_separator = PredefinedMenuItem::separator(app)?;
         let quit = MenuItem::with_id(app, QUIT_MENU_ID, "退出", true, None::<&str>)?;
         let menu = Menu::with_items(
             app,
-            &[&open, &status, &toggle, &modes, &nodes, &separator, &quit],
+            &[
+                &status,
+                &node,
+                &traffic,
+                &info_separator,
+                &modes,
+                &nodes,
+                &action_separator,
+                &open,
+                &toggle,
+                &quit,
+            ],
         )?;
         let mut builder = TrayIconBuilder::with_id("main")
             .menu(&menu)
@@ -97,6 +116,8 @@ impl TrayUi {
 
         Ok(Self {
             status,
+            node,
+            traffic,
             toggle,
             modes,
             nodes,
@@ -120,6 +141,8 @@ impl TrayUi {
         }
 
         self.status.set_text(&model.status_text)?;
+        self.node.set_text(&model.node_text)?;
+        self.traffic.set_text(&model.traffic_text)?;
         self.toggle.set_text(model.toggle_text)?;
         self.toggle.set_enabled(model.toggle_enabled)?;
         replace_mode_items(app, &self.modes, model.mode, model.mode_enabled)?;
@@ -190,7 +213,11 @@ fn replace_node_items(
 }
 
 #[must_use]
-pub fn menu_model(status: &SessionStatus, nodes: &[NodeSummary]) -> TrayMenuModel {
+pub fn menu_model(
+    status: &SessionStatus,
+    nodes: &[NodeSummary],
+    traffic: TrafficSnapshot,
+) -> TrayMenuModel {
     let selected_id = status.node.as_ref().map(|node| node.id);
     let state = if status.connected {
         "已连接"
@@ -202,13 +229,29 @@ pub fn menu_model(status: &SessionStatus, nodes: &[NodeSummary]) -> TrayMenuMode
         "direct" => (RoutingMode::Direct, "直连"),
         _ => (RoutingMode::Global, "全局"),
     };
-    let status_text = status.node.as_ref().map_or_else(
-        || format!("{state} · {mode_text}"),
-        |node| format!("{state} · {} · {mode_text}", node.name),
+    let status_text = format!("{state} · {mode_text}");
+    let node_text = status.node.as_ref().map_or_else(
+        || "未选择节点".to_owned(),
+        |node| match node.latency_ms {
+            Some(latency_ms) => format!("{} · {latency_ms} ms", node.name),
+            None => format!("{} · 未测速", node.name),
+        },
+    );
+    let traffic = if status.connected {
+        traffic
+    } else {
+        TrafficSnapshot::default()
+    };
+    let traffic_text = format!(
+        "↓ {}    ↑ {}",
+        format_rate(traffic.download_bytes_per_second),
+        format_rate(traffic.upload_bytes_per_second)
     );
 
     TrayMenuModel {
         status_text,
+        node_text,
+        traffic_text,
         toggle_text: if status.connected { "断开" } else { "连接" },
         toggle_enabled: status.connected || selected_id.is_some(),
         mode,
@@ -225,6 +268,25 @@ pub fn menu_model(status: &SessionStatus, nodes: &[NodeSummary]) -> TrayMenuMode
                 }
             })
             .collect(),
+    }
+}
+
+fn format_rate(bytes_per_second: u64) -> String {
+    let (divisor, unit) = if bytes_per_second >= 1_073_741_824 {
+        (1_073_741_824, "GB/s")
+    } else if bytes_per_second >= 1_048_576 {
+        (1_048_576, "MB/s")
+    } else if bytes_per_second >= 1_024 {
+        (1_024, "KB/s")
+    } else {
+        return format!("{bytes_per_second} B/s");
+    };
+    let whole = bytes_per_second / divisor;
+    let tenth = ((bytes_per_second % divisor) * 10 + divisor / 2) / divisor;
+    if tenth == 10 {
+        format!("{}.0 {unit}", whole + 1)
+    } else {
+        format!("{whole}.{tenth} {unit}")
     }
 }
 
@@ -259,6 +321,7 @@ mod tests {
 
     use super::{TrayAction, action_for_menu_id, menu_model, node_menu_id};
     use crate::session::{NodeSummary, SessionStatus};
+    use crate::traffic::TrafficSnapshot;
 
     #[test]
     fn disconnected_menu_can_connect_and_switch_nodes() {
@@ -267,9 +330,12 @@ mod tests {
         let model = menu_model(
             &status(false, Some(selected.clone())),
             &[selected.clone(), other.clone()],
+            TrafficSnapshot::default(),
         );
 
-        assert_eq!(model.status_text, "未连接 · Tokyo · 全局");
+        assert_eq!(model.status_text, "未连接 · 全局");
+        assert_eq!(model.node_text, "Tokyo · 未测速");
+        assert_eq!(model.traffic_text, "↓ 0 B/s    ↑ 0 B/s");
         assert_eq!(model.toggle_text, "连接");
         assert!(model.toggle_enabled);
         assert_eq!(model.mode, RoutingMode::Global);
@@ -286,13 +352,17 @@ mod tests {
 
     #[test]
     fn connected_menu_disables_node_switching_and_can_disconnect() {
-        let selected = node(1, "Tokyo");
+        let mut selected = node(1, "Tokyo");
+        selected.latency_ms = Some(32);
         let model = menu_model(
             &status(true, Some(selected.clone())),
             std::slice::from_ref(&selected),
+            traffic(1_048_576, 2_048),
         );
 
-        assert_eq!(model.status_text, "已连接 · Tokyo · 全局");
+        assert_eq!(model.status_text, "已连接 · 全局");
+        assert_eq!(model.node_text, "Tokyo · 32 ms");
+        assert_eq!(model.traffic_text, "↓ 2.0 KB/s    ↑ 1.0 MB/s");
         assert_eq!(model.toggle_text, "断开");
         assert!(model.toggle_enabled);
         assert!(!model.mode_enabled);
@@ -309,9 +379,11 @@ mod tests {
 
     #[test]
     fn menu_without_a_selected_node_cannot_connect() {
-        let model = menu_model(&status(false, None), &[]);
+        let model = menu_model(&status(false, None), &[], traffic(1_024, 2_048));
 
         assert_eq!(model.status_text, "未连接 · 全局");
+        assert_eq!(model.node_text, "未选择节点");
+        assert_eq!(model.traffic_text, "↓ 0 B/s    ↑ 0 B/s");
         assert_eq!(model.toggle_text, "连接");
         assert!(!model.toggle_enabled);
         assert!(model.nodes.is_empty());
@@ -322,7 +394,10 @@ mod tests {
         let mut current = status(false, None);
         current.mode = "rule";
 
-        assert_eq!(menu_model(&current, &[]).status_text, "未连接 · 规则");
+        assert_eq!(
+            menu_model(&current, &[], TrafficSnapshot::default()).status_text,
+            "未连接 · 规则"
+        );
     }
 
     fn node(value: u128, name: &str) -> NodeSummary {
@@ -335,6 +410,16 @@ mod tests {
             deletable: true,
             latency_ms: None,
             last_tested_at: None,
+        }
+    }
+
+    const fn traffic(upload: u64, download: u64) -> TrafficSnapshot {
+        TrafficSnapshot {
+            upload_bytes_per_second: upload,
+            download_bytes_per_second: download,
+            today_bytes: 0,
+            month_bytes: 0,
+            total_bytes: 0,
         }
     }
 
