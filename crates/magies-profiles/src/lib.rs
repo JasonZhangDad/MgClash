@@ -12,6 +12,7 @@ mod share_link;
 mod sing_box_outbound;
 mod sing_box_runtime_config;
 mod subscription;
+mod subscription_content;
 mod subscription_transaction;
 mod trojan;
 mod tun_config;
@@ -49,6 +50,9 @@ pub use sing_box_runtime_config::{
 pub use subscription::{
     SubscriptionFetchError, SubscriptionFetchOptions, SubscriptionFetchResult, SubscriptionFetcher,
     SubscriptionValidators,
+};
+pub use subscription_content::{
+    ParsedSubscriptionNode, SubscriptionContentError, SubscriptionContentParser,
 };
 pub use subscription_transaction::{
     SqliteSubscriptionStore, SubscriptionCommit, SubscriptionState, SubscriptionTransactionError,

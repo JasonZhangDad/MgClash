@@ -22,7 +22,7 @@ serde_json = "1"
 sha2 = "0.10"
 thiserror = "2"
 url = "2"
-uuid = "1"
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 magies-core-runtime = { path = "../magies-core-runtime" }
