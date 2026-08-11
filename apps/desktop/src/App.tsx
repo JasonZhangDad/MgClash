@@ -18,6 +18,14 @@ import {
   type SessionStatus,
   type SystemProxyStartupStatus,
 } from "./session";
+import {
+  createSubscription,
+  deleteSubscription,
+  loadSubscriptions,
+  refreshSubscription,
+  updateSubscription,
+  type SubscriptionSummary,
+} from "./subscriptions";
 
 /**
  * Automatic network recovery can reconnect the session without the user acting,
@@ -65,7 +73,16 @@ export default function App() {
   const [platformError, setPlatformError] = useState<string | null>(null);
   const [status, setStatus] = useState<SessionStatus | null>(null);
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
+  const [subscriptions, setSubscriptions] = useState<SubscriptionSummary[]>([]);
   const [uri, setUri] = useState("");
+  const [subscriptionName, setSubscriptionName] = useState("");
+  const [subscriptionUrl, setSubscriptionUrl] = useState("");
+  const [subscriptionInterval, setSubscriptionInterval] = useState("60");
+  const [subscriptionAutoUpdate, setSubscriptionAutoUpdate] = useState(true);
+  const [subscriptionEnabled, setSubscriptionEnabled] = useState(true);
+  const [editingSubscriptionId, setEditingSubscriptionId] = useState<
+    string | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
   const [exportedTo, setExportedTo] = useState<string | null>(null);
   const [systemProxyStartup, setSystemProxyStartup] =
@@ -81,6 +98,9 @@ export default function App() {
       setError(describeFailure(failure)),
     );
     loadNodes().then(setNodes, (failure: unknown) =>
+      setError(describeFailure(failure)),
+    );
+    loadSubscriptions().then(setSubscriptions, (failure: unknown) =>
       setError(describeFailure(failure)),
     );
     loadSystemProxyStartupStatus().then(
@@ -186,6 +206,115 @@ export default function App() {
       setBusy(false);
     }
   }, []);
+
+  const resetSubscriptionForm = useCallback(() => {
+    setEditingSubscriptionId(null);
+    setSubscriptionName("");
+    setSubscriptionUrl("");
+    setSubscriptionInterval("60");
+    setSubscriptionAutoUpdate(true);
+    setSubscriptionEnabled(true);
+  }, []);
+
+  const onSaveSubscription = useCallback(async () => {
+    const name = subscriptionName.trim();
+    const url = subscriptionUrl.trim();
+    const updateIntervalMinutes = Number(subscriptionInterval);
+    if (name === "" || (editingSubscriptionId === null && url === "")) {
+      setError("请填写订阅名称和地址");
+      return;
+    }
+    if (!Number.isInteger(updateIntervalMinutes) || updateIntervalMinutes < 1) {
+      setError("更新间隔必须是正整数");
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+    try {
+      const saved =
+        editingSubscriptionId === null
+          ? await createSubscription({
+              autoUpdate: subscriptionAutoUpdate,
+              name,
+              updateIntervalMinutes,
+              url,
+            })
+          : await updateSubscription({
+              autoUpdate: subscriptionAutoUpdate,
+              enabled: subscriptionEnabled,
+              id: editingSubscriptionId,
+              name,
+              updateIntervalMinutes,
+              url: url === "" ? null : url,
+            });
+      setSubscriptions((current) => {
+        const existing = current.findIndex((item) => item.id === saved.id);
+        if (existing === -1) {
+          return [...current, saved];
+        }
+        return current.map((item) => (item.id === saved.id ? saved : item));
+      });
+      resetSubscriptionForm();
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, [
+    editingSubscriptionId,
+    resetSubscriptionForm,
+    subscriptionAutoUpdate,
+    subscriptionEnabled,
+    subscriptionInterval,
+    subscriptionName,
+    subscriptionUrl,
+  ]);
+
+  const onEditSubscription = useCallback((item: SubscriptionSummary) => {
+    setEditingSubscriptionId(item.id);
+    setSubscriptionName(item.name);
+    setSubscriptionUrl("");
+    setSubscriptionInterval(String(item.updateIntervalMinutes));
+    setSubscriptionAutoUpdate(item.autoUpdate);
+    setSubscriptionEnabled(item.enabled);
+  }, []);
+
+  const onRefreshSubscription = useCallback(async (id: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const refreshed = await refreshSubscription(id);
+      setSubscriptions((current) =>
+        current.map((item) => (item.id === id ? refreshed : item)),
+      );
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const onDeleteSubscription = useCallback(
+    async (id: string) => {
+      setBusy(true);
+      setError(null);
+      try {
+        await deleteSubscription(id);
+        setSubscriptions((current) =>
+          current.filter((item) => item.id !== id),
+        );
+        if (editingSubscriptionId === id) {
+          resetSubscriptionForm();
+        }
+      } catch (failure: unknown) {
+        setError(describeFailure(failure));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [editingSubscriptionId, resetSubscriptionForm],
+  );
 
   const connected = status?.connected ?? false;
   const node = status?.node ?? null;
@@ -357,6 +486,135 @@ export default function App() {
             </tbody>
           </table>
         )}
+
+        <h2>订阅</h2>
+
+        {subscriptions.length === 0 ? (
+          <p className="hint">尚未添加订阅</p>
+        ) : (
+          <table className="node-list" aria-label="订阅列表">
+            <thead>
+              <tr>
+                <th>名称</th>
+                <th>节点</th>
+                <th>更新</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {subscriptions.map((item) => (
+                <tr key={item.id}>
+                  <td>{item.name}</td>
+                  <td>{item.nodeCount}</td>
+                  <td>{item.lastUpdatedAt === null ? "从未" : "已更新"}</td>
+                  <td className="node-actions">
+                    <button
+                      type="button"
+                      aria-label={`编辑 ${item.name}`}
+                      disabled={busy}
+                      onClick={() => onEditSubscription(item)}
+                    >
+                      编辑
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`刷新 ${item.name}`}
+                      disabled={busy || !item.enabled}
+                      onClick={() => void onRefreshSubscription(item.id)}
+                    >
+                      刷新
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`删除订阅 ${item.name}`}
+                      disabled={busy}
+                      onClick={() => void onDeleteSubscription(item.id)}
+                    >
+                      删除
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        <div className="subscription-form">
+          <label>
+            名称
+            <input
+              aria-label="订阅名称"
+              value={subscriptionName}
+              disabled={busy}
+              onChange={(event) => setSubscriptionName(event.target.value)}
+            />
+          </label>
+          <label>
+            地址
+            <input
+              aria-label="订阅地址"
+              type="password"
+              value={subscriptionUrl}
+              disabled={busy}
+              placeholder={
+                editingSubscriptionId === null ? "https://" : "留空则不修改"
+              }
+              onChange={(event) => setSubscriptionUrl(event.target.value)}
+            />
+          </label>
+          <label>
+            更新间隔（分钟）
+            <input
+              aria-label="更新间隔"
+              type="number"
+              min="1"
+              value={subscriptionInterval}
+              disabled={busy}
+              onChange={(event) => setSubscriptionInterval(event.target.value)}
+            />
+          </label>
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={subscriptionAutoUpdate}
+              disabled={busy}
+              onChange={(event) =>
+                setSubscriptionAutoUpdate(event.target.checked)
+              }
+            />
+            自动更新
+          </label>
+          {editingSubscriptionId !== null && (
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={subscriptionEnabled}
+                disabled={busy}
+                onChange={(event) => setSubscriptionEnabled(event.target.checked)}
+              />
+              启用订阅
+            </label>
+          )}
+        </div>
+
+        <div className="actions">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void onSaveSubscription()}
+          >
+            {editingSubscriptionId === null ? "添加订阅" : "保存修改"}
+          </button>
+          {editingSubscriptionId !== null && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={resetSubscriptionForm}
+            >
+              取消
+            </button>
+          )}
+        </div>
 
         <h2>导入节点</h2>
 
