@@ -98,9 +98,12 @@ describe("session commands", () => {
     });
   });
 
-  it("reads one live traffic sample from the running Core", async () => {
+  it("reads live rates and persisted traffic totals", async () => {
     const traffic = {
       downloadBytesPerSecond: 2_048,
+      monthBytes: 4_096,
+      todayBytes: 3_072,
+      totalBytes: 8_192,
       uploadBytesPerSecond: 1_024,
     };
     invokeMock.mockResolvedValue(traffic);

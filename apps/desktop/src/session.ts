@@ -26,8 +26,11 @@ export interface NodeTestResult {
   status: NodeTestStatus;
 }
 
-export interface TrafficRate {
+export interface TrafficSnapshot {
   downloadBytesPerSecond: number;
+  monthBytes: number;
+  todayBytes: number;
+  totalBytes: number;
   uploadBytesPerSecond: number;
 }
 
@@ -78,8 +81,8 @@ export function testUrl(url: string): Promise<NodeTestResult> {
   return invoke<NodeTestResult>("session_url_test", { url });
 }
 
-export function loadTraffic(): Promise<TrafficRate> {
-  return invoke<TrafficRate>("session_traffic");
+export function loadTraffic(): Promise<TrafficSnapshot> {
+  return invoke<TrafficSnapshot>("session_traffic");
 }
 
 export async function testAllNodes(

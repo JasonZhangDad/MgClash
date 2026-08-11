@@ -13,6 +13,7 @@ name = "magies_desktop_lib"
 tauri-build = { version = "=2.6.3", features = [] }
 
 [dependencies]
+chrono = "=0.4.45"
 magies-core-runtime = { path = "../../../crates/magies-core-runtime" }
 magies-domain = { path = "../../../crates/magies-domain" }
 magies-platform = { path = "../../../crates/magies-platform" }
@@ -21,10 +22,12 @@ magies-routing = { path = "../../../crates/magies-routing" }
 magies-session = { path = "../../../crates/magies-session" }
 magies-storage = { path = "../../../crates/magies-storage" }
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls-no-provider"] }
+rusqlite = { version = "=0.35.0", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "=2.11.5", features = ["tray-icon"] }
 thiserror = "2"
+tokio = { version = "1", features = ["time"] }
 uuid = { version = "1", features = ["v4"] }
 url = "2"
 
