@@ -18,7 +18,7 @@ page and at first launch. This ADR records how that is produced.
 | Platform | Artifact | Why |
 | --- | --- | --- |
 | macOS | `.app` inside a `.tar.gz` | the `.app` layout is what Gatekeeper prompts about; a bare Mach-O is not a usable desktop artifact |
-| Windows | portable `.zip` | Tauri embeds the frontend, so the executable is self-contained |
+| Windows | portable `.zip` and NSIS installer | supports both portable and installed use without Authenticode |
 | Linux | `.tar.gz` | same, and no signed repository is offered |
 
 The name is `mgclash-<version>-<os>-<cpu>-unsigned.<ext>`. Every artifact ships a
@@ -58,7 +58,8 @@ no compiled-in digest is refused rather than trusted.
   | Linux x86_64 | `d34d987ed6ae39ca3760269264fb502b867e5477db45518c829b07776245c495` |
 
 - The Windows artifact also contains the Authenticode-verified Wintun 0.14.1
-  amd64 DLL and its license, per ADR 0002.
+  amd64 DLL and its license, per ADR 0002. Both the portable ZIP and NSIS
+  installer also contain the pinned Core and both licenses.
 - Gatekeeper and SmartScreen prompts are expected and documented in `README.md`
   and in the app's first-run notice; they are not defects.
 

@@ -1,0 +1,10 @@
+{
+  "bundle": {
+    "resources": {
+      "../../../target/release-resources/sing-box.exe": "sing-box.exe",
+      "../../../target/release-resources/LICENSE-sing-box": "LICENSE-sing-box",
+      "../../../target/release-resources/wintun.dll": "wintun.dll",
+      "../../../target/release-resources/LICENSE-wintun": "LICENSE-wintun"
+    }
+  }
+}

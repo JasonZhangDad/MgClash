@@ -50,6 +50,7 @@ esac
 
 name="mgclash-${version}-${os}-${cpu}-unsigned"
 mkdir -p "${output_directory}"
+artifacts=()
 
 scratch="$(mktemp -d)"
 trap 'rm -rf "${scratch}"' EXIT
@@ -89,11 +90,19 @@ if [[ "${os}" == "macos" ]]; then
 else
   # Windows and Linux ship the portable executable: Tauri embeds the frontend,
   # so the binary is self-contained.
-  npm run tauri -- build --no-bundle
   if [[ "${os}" == "windows" ]]; then
+    release_resources="${repository}/target/release-resources"
+    mkdir -p "${release_resources}"
+    cp "${scratch}/core/sing-box.exe" "${release_resources}/"
+    cp "${scratch}/core/LICENSE-sing-box" "${release_resources}/"
+    cp "${scratch}/wintun/wintun.dll" "${release_resources}/"
+    cp "${scratch}/wintun/LICENSE-wintun" "${release_resources}/"
+    npm run tauri -- build --bundles nsis \
+      --config src-tauri/tauri.windows-release.conf.json
     binary="${repository}/target/release/MgClash.exe"
     [[ -f "${binary}" ]] || binary="${repository}/target/release/magies-desktop.exe"
   else
+    npm run tauri -- build --no-bundle
     binary="${repository}/target/release/MgClash"
     [[ -f "${binary}" ]] || binary="${repository}/target/release/magies-desktop"
   fi
@@ -125,6 +134,15 @@ else
       powershell.exe -NoProfile -Command \
         "Compress-Archive -Path '${staging}\\${name}' -DestinationPath '${archive}' -Force"
     fi
+
+    installer_source="${repository}/target/release/bundle/nsis/MgClash_${version}_x64-setup.exe"
+    [[ -f "${installer_source}" ]] || {
+      echo "expected the NSIS installer at ${installer_source}" >&2
+      exit 1
+    }
+    installer="${output_directory}/mgclash-${version}-windows-${cpu}-unsigned-setup.exe"
+    cp "${installer_source}" "${installer}"
+    artifacts+=("${installer}")
   else
     archive="${output_directory}/${name}.tar.gz"
     tar -czf "${archive}" -C "${staging}" "${name}"
@@ -132,11 +150,14 @@ else
 fi
 
 # The digest is what a downloader can check in the absence of a signature.
-if command -v shasum >/dev/null 2>&1; then
-  (cd "${output_directory}" && shasum -a 256 "$(basename "${archive}")" > "$(basename "${archive}").sha256")
-else
-  (cd "${output_directory}" && sha256sum "$(basename "${archive}")" > "$(basename "${archive}").sha256")
-fi
-
-echo "packaged ${archive}"
-cat "${archive}.sha256"
+artifacts+=("${archive}")
+for artifact in "${artifacts[@]}"; do
+  artifact_name="$(basename "${artifact}")"
+  if command -v shasum >/dev/null 2>&1; then
+    (cd "${output_directory}" && shasum -a 256 "${artifact_name}" > "${artifact_name}.sha256")
+  else
+    (cd "${output_directory}" && sha256sum "${artifact_name}" > "${artifact_name}.sha256")
+  fi
+  echo "packaged ${artifact}"
+  cat "${artifact}.sha256"
+done
