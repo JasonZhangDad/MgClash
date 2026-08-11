@@ -13,6 +13,7 @@ mod sing_box_outbound;
 mod sing_box_runtime_config;
 mod subscription;
 mod subscription_content;
+mod subscription_management;
 mod subscription_service;
 mod subscription_transaction;
 mod trojan;
@@ -54,6 +55,10 @@ pub use subscription::{
 };
 pub use subscription_content::{
     ParsedSubscriptionNode, SubscriptionContentError, SubscriptionContentParser,
+};
+pub use subscription_management::{
+    SubscriptionManagementError, SubscriptionManagementSecretOperation,
+    SubscriptionManagementService,
 };
 pub use subscription_service::{
     SubscriptionRefreshError, SubscriptionRefreshOutcome, SubscriptionRefreshService,
