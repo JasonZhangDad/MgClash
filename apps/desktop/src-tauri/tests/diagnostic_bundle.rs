@@ -14,6 +14,7 @@ fn status() -> SessionStatus {
     SessionStatus {
         connected: true,
         node: Some(NodeSummary {
+            deletable: true,
             id: Uuid::nil(),
             name: "Tokyo Edge".to_owned(),
             protocol: ProxyProtocol::Shadowsocks,

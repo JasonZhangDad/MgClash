@@ -8,14 +8,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use magies_desktop_lib::session::{SessionCommandError, SessionDefaults, SessionService};
-use magies_domain::ProxyProtocol;
+use magies_domain::{CredentialRef, ProxyProtocol, Subscription, TimestampMillis};
 use magies_platform::system_proxy::SystemProxyState;
-use magies_profiles::{LocalHttpProfile, LocalSocksProfile, SqliteManualNodeStore};
+use magies_profiles::{
+    CredentialCodec, LocalHttpProfile, LocalSocksProfile, SqliteManualNodeStore,
+    SqliteSubscriptionStore, SubscriptionContentParser, SubscriptionUpdate, SubscriptionValidators,
+};
 use magies_session::{
     CoreSessionControl, DesktopSession, NetworkEvent, RecoveryOutcome, SessionHealthProbe,
     SystemProxySessionControl,
 };
-use magies_storage::MemorySecretStore;
+use magies_storage::{MemorySecretStore, SecretStore};
 use uuid::Uuid;
 
 const SHADOWSOCKS_LINK: &str = "ss://aes-128-gcm:runtime-secret@edge.example.com:8388#Tokyo%20Edge";
@@ -78,6 +81,74 @@ fn selects_and_deletes_nodes_while_disconnected() {
     let nodes = service.nodes().unwrap();
     assert_eq!(nodes.len(), 1);
     assert_eq!(nodes[0].name, "Osaka");
+}
+
+#[test]
+fn selects_and_connects_a_read_only_subscription_node() {
+    let (mut service, subscription_node_id, _runtime) = service_with_subscription_node();
+
+    assert_eq!(
+        service.status().node.as_ref().unwrap().id,
+        subscription_node_id
+    );
+    let nodes = service.nodes().unwrap();
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].id, subscription_node_id);
+    assert!(!nodes[0].deletable);
+
+    let selected = service.select_node(subscription_node_id).unwrap();
+    assert_eq!(selected.node.as_ref().unwrap().id, subscription_node_id);
+    assert!(service.connect().unwrap().connected);
+    service.disconnect().unwrap();
+    assert_eq!(
+        service
+            .delete_node(subscription_node_id)
+            .unwrap_err()
+            .code(),
+        "subscription_node_read_only"
+    );
+}
+
+#[test]
+fn manual_import_replaces_a_persisted_subscription_selection() {
+    let (mut service, subscription_node_id, _runtime) = service_with_subscription_node();
+    service.select_node(subscription_node_id).unwrap();
+
+    let imported = service.import_node(SHADOWSOCKS_LINK).unwrap();
+    let synced = service.sync_selected_node().unwrap();
+
+    assert_ne!(imported.node.as_ref().unwrap().id, subscription_node_id);
+    assert_eq!(synced.node, imported.node);
+    assert!(synced.node.unwrap().deletable);
+}
+
+#[test]
+fn synchronization_drops_a_subscription_node_that_was_disabled() {
+    let (mut service, subscription_node_id, runtime) = service_with_subscription_node();
+    service.select_node(subscription_node_id).unwrap();
+    let external = SqliteSubscriptionStore::open(runtime.path().join("nodes.sqlite")).unwrap();
+    let selected_node_id = service.status().node.unwrap().id;
+    let actual_subscription_id = external
+        .active_nodes()
+        .unwrap()
+        .into_iter()
+        .find(|node| node.id == selected_node_id)
+        .unwrap()
+        .subscription_id
+        .unwrap();
+    let mut subscription = external
+        .subscription(actual_subscription_id)
+        .unwrap()
+        .unwrap();
+    subscription.enabled = false;
+    external
+        .update_subscription_settings(&subscription)
+        .unwrap();
+
+    let status = service.sync_selected_node().unwrap();
+
+    assert!(status.node.is_none());
+    assert_eq!(service.connect().unwrap_err().code(), "no_selected_node");
 }
 
 #[test]
@@ -163,6 +234,7 @@ fn surfaces_a_failing_core_start_as_a_session_error() {
         ),
         SessionDefaults::v01(),
         SqliteManualNodeStore::open_in_memory().unwrap(),
+        SqliteSubscriptionStore::open_in_memory().unwrap(),
     )
     .unwrap();
     service.import_node(SHADOWSOCKS_LINK).unwrap();
@@ -205,9 +277,65 @@ fn service_with_events(
         ),
         SessionDefaults::v01(),
         SqliteManualNodeStore::open_in_memory().unwrap(),
+        SqliteSubscriptionStore::open_in_memory().unwrap(),
     )
     .unwrap();
     (service, runtime, fail_start)
+}
+
+fn service_with_subscription_node() -> (TestService, Uuid, RuntimeDirectory) {
+    let runtime = RuntimeDirectory::new("subscription-node");
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let secret_store = MemorySecretStore::default();
+    let subscription_id = Uuid::parse_str("018f78b5-2cd0-7000-a9a6-3bccf60951e8").unwrap();
+    let subscription = Subscription::new(
+        subscription_id,
+        "Primary",
+        CredentialRef::new("subscription/primary/url").unwrap(),
+        60,
+    )
+    .unwrap();
+    let (node, credential) = SubscriptionContentParser
+        .parse(SHADOWSOCKS_LINK.as_bytes(), subscription_id)
+        .unwrap()
+        .pop()
+        .unwrap()
+        .into_parts();
+    secret_store
+        .put(
+            &node.credential_ref,
+            &CredentialCodec::encode(&credential).unwrap(),
+        )
+        .unwrap();
+    let node_id = node.id;
+    let database = runtime.path().join("nodes.sqlite");
+    let mut subscriptions = SqliteSubscriptionStore::open(&database).unwrap();
+    subscriptions.insert_subscription(&subscription).unwrap();
+    subscriptions
+        .apply_update(
+            &SubscriptionUpdate::new(
+                subscription_id,
+                vec![node],
+                SubscriptionValidators::default(),
+                TimestampMillis::new(100),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    subscriptions.select_node(node_id).unwrap();
+    let service = SessionService::new(
+        DesktopSession::new(
+            secret_store,
+            FakeCore::new(events.clone(), Arc::new(AtomicBool::new(false))),
+            FakeProxy::new(events),
+            runtime.path(),
+        ),
+        SessionDefaults::v01(),
+        SqliteManualNodeStore::open(&database).unwrap(),
+        subscriptions,
+    )
+    .unwrap();
+    (service, node_id, runtime)
 }
 
 #[test]

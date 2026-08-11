@@ -11,7 +11,7 @@ use magies_domain::{CredentialRef, NodeModelError, ProxyNode, ProxyProtocol};
 use magies_profiles::{
     CredentialCodec, CredentialCodecError, DnsProfile, DnsServer, DnsStrategy, LocalHttpProfile,
     LocalSocksProfile, ManualNodeStoreError, ShareLinkParseError, ShareLinkParser,
-    SqliteManualNodeStore,
+    SqliteManualNodeStore, SqliteSubscriptionStore, SubscriptionTransactionError,
 };
 use magies_routing::{RouteOutbound, RouteProfile, RoutingMode};
 use magies_session::{
@@ -83,6 +83,7 @@ pub struct NodeSummary {
     pub protocol: ProxyProtocol,
     pub server: String,
     pub port: u16,
+    pub deletable: bool,
 }
 
 impl From<&ProxyNode> for NodeSummary {
@@ -93,6 +94,7 @@ impl From<&ProxyNode> for NodeSummary {
             protocol: node.protocol_type,
             server: node.server.as_str().to_owned(),
             port: node.port.get(),
+            deletable: node.subscription_id.is_none(),
         }
     }
 }
@@ -115,7 +117,8 @@ pub struct SessionService<S, C, P> {
     session: DesktopSession<S, C, P>,
     defaults: SessionDefaults,
     node: Option<ProxyNode>,
-    nodes: SqliteManualNodeStore,
+    manual_nodes: SqliteManualNodeStore,
+    subscription_nodes: SqliteSubscriptionStore,
     recovery: NetworkRecoveryPolicy,
 }
 
@@ -125,23 +128,27 @@ where
     C: CoreSessionControl,
     P: SystemProxySessionControl,
 {
-    /// Restores the selected manual node when constructing the service.
+    /// Restores the selected subscription or manual node when constructing the service.
     ///
     /// # Errors
     ///
-    /// Returns a typed node-store error when the persisted selection cannot be
-    /// read.
+    /// Returns a typed node-store error when either persisted selection cannot
+    /// be read.
     pub fn new(
         session: DesktopSession<S, C, P>,
         defaults: SessionDefaults,
-        nodes: SqliteManualNodeStore,
-    ) -> Result<Self, ManualNodeStoreError> {
-        let node = nodes.selected_node()?;
+        manual_nodes: SqliteManualNodeStore,
+        subscription_nodes: SqliteSubscriptionStore,
+    ) -> Result<Self, SessionInitializationError> {
+        let node = subscription_nodes
+            .selected_node()?
+            .or(manual_nodes.selected_node()?);
         Ok(Self {
             session,
             defaults,
             node,
-            nodes,
+            manual_nodes,
+            subscription_nodes,
             recovery: NetworkRecoveryPolicy::default(),
         })
     }
@@ -200,7 +207,7 @@ where
             .put(&node.credential_ref, &secret)
             .map_err(SessionCommandError::Secret)?;
 
-        if let Err(store) = self.nodes.save_and_select(&node) {
+        if let Err(store) = self.manual_nodes.save_and_select(&node) {
             return match self.session.secret_store().delete(&node.credential_ref) {
                 Ok(()) => Err(SessionCommandError::NodeStore(store)),
                 Err(secret) => {
@@ -208,21 +215,31 @@ where
                 }
             };
         }
+        self.subscription_nodes
+            .clear_selected_node()
+            .map_err(SessionCommandError::SubscriptionNodeStore)?;
 
         self.node = Some(node);
         Ok(self.status())
     }
 
-    /// Lists every persisted manual node without exposing credentials.
+    /// Lists every persisted manual and active subscription node without
+    /// exposing credentials.
     ///
     /// # Errors
     ///
     /// Returns a typed storage error when the node database is unreadable.
     pub fn nodes(&self) -> Result<Vec<NodeSummary>, SessionCommandError<C::Error, P::Error>> {
-        self.nodes
+        let mut nodes = self
+            .manual_nodes
             .nodes()
-            .map(|nodes| nodes.iter().map(NodeSummary::from).collect())
-            .map_err(SessionCommandError::NodeStore)
+            .map_err(SessionCommandError::NodeStore)?;
+        nodes.extend(
+            self.subscription_nodes
+                .active_nodes()
+                .map_err(SessionCommandError::SubscriptionNodeStore)?,
+        );
+        Ok(nodes.iter().map(NodeSummary::from).collect())
     }
 
     /// Selects a persisted node while the session is disconnected.
@@ -238,10 +255,19 @@ where
         if self.session.is_running() {
             return Err(SessionCommandError::SessionActive);
         }
-        let node = self
-            .nodes
-            .select(id)
-            .map_err(SessionCommandError::NodeStore)?;
+        let node = match self.manual_nodes.select(id) {
+            Ok(node) => {
+                self.subscription_nodes
+                    .clear_selected_node()
+                    .map_err(SessionCommandError::SubscriptionNodeStore)?;
+                node
+            }
+            Err(ManualNodeStoreError::NodeNotFound { .. }) => self
+                .subscription_nodes
+                .select_node(id)
+                .map_err(SessionCommandError::SubscriptionNodeStore)?,
+            Err(error) => return Err(SessionCommandError::NodeStore(error)),
+        };
         self.node = Some(node);
         Ok(self.status())
     }
@@ -259,10 +285,22 @@ where
         if self.session.is_running() {
             return Err(SessionCommandError::SessionActive);
         }
-        let node = self
-            .nodes
-            .delete(id)
-            .map_err(SessionCommandError::NodeStore)?;
+        let node = match self.manual_nodes.delete(id) {
+            Ok(node) => node,
+            Err(error @ ManualNodeStoreError::NodeNotFound { .. }) => {
+                let is_subscription_node = self
+                    .subscription_nodes
+                    .active_nodes()
+                    .map_err(SessionCommandError::SubscriptionNodeStore)?
+                    .iter()
+                    .any(|node| node.id == id);
+                if is_subscription_node {
+                    return Err(SessionCommandError::SubscriptionNodeReadOnly { id });
+                }
+                return Err(SessionCommandError::NodeStore(error));
+            }
+            Err(error) => return Err(SessionCommandError::NodeStore(error)),
+        };
         if self.node.as_ref().is_some_and(|selected| selected.id == id) {
             self.node = None;
         }
@@ -270,6 +308,29 @@ where
             .secret_store()
             .delete(&node.credential_ref)
             .map_err(SessionCommandError::DeleteSecret)?;
+        Ok(self.status())
+    }
+
+    /// Reloads the persisted selection after subscription metadata or nodes
+    /// change while the session is disconnected.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed storage error when either node database cannot be read.
+    pub fn sync_selected_node(
+        &mut self,
+    ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
+        if self.session.is_running() {
+            return Err(SessionCommandError::SessionActive);
+        }
+        self.node = self
+            .subscription_nodes
+            .selected_node()
+            .map_err(SessionCommandError::SubscriptionNodeStore)?
+            .or(self
+                .manual_nodes
+                .selected_node()
+                .map_err(SessionCommandError::NodeStore)?);
         Ok(self.status())
     }
 
@@ -330,6 +391,14 @@ where
 }
 
 #[derive(Debug, Error)]
+pub enum SessionInitializationError {
+    #[error("failed to read the manual node selection")]
+    ManualNodeStore(#[from] ManualNodeStoreError),
+    #[error("failed to read the subscription node selection")]
+    SubscriptionNodeStore(#[from] SubscriptionTransactionError),
+}
+
+#[derive(Debug, Error)]
 pub enum SessionCommandError<C, P>
 where
     C: std::error::Error + 'static,
@@ -347,6 +416,10 @@ where
     Secret(#[source] SecretStoreError),
     #[error("failed to change the manual node store")]
     NodeStore(#[source] ManualNodeStoreError),
+    #[error("failed to change the subscription node store")]
+    SubscriptionNodeStore(#[source] SubscriptionTransactionError),
+    #[error("subscription node {id} is managed by its subscription")]
+    SubscriptionNodeReadOnly { id: Uuid },
     #[error("failed to save the node and roll back its credential")]
     NodeStoreAndSecretRollback {
         store: ManualNodeStoreError,
@@ -374,8 +447,14 @@ where
             Self::ShareLink(_) => "invalid_share_link",
             Self::Credential(_) => "credential_encode_failed",
             Self::Secret(_) | Self::DeleteSecret(_) => "secret_store_failed",
-            Self::NodeStore(ManualNodeStoreError::NodeNotFound { .. }) => "node_not_found",
-            Self::NodeStore(_) | Self::NodeStoreAndSecretRollback { .. } => "node_store_failed",
+            Self::NodeStore(ManualNodeStoreError::NodeNotFound { .. })
+            | Self::SubscriptionNodeStore(SubscriptionTransactionError::NodeNotFound { .. }) => {
+                "node_not_found"
+            }
+            Self::NodeStore(_)
+            | Self::NodeStoreAndSecretRollback { .. }
+            | Self::SubscriptionNodeStore(_) => "node_store_failed",
+            Self::SubscriptionNodeReadOnly { .. } => "subscription_node_read_only",
             Self::SessionActive => "session_active",
             Self::Session(_) => "session_failed",
         }
