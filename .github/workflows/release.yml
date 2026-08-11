@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  SING_BOX_VERSION: "1.13.18"
+
 jobs:
   package:
     name: Package ${{ matrix.target }}
@@ -19,12 +22,28 @@ jobs:
         include:
           - target: macos-x86_64
             runner: macos-15-intel
+            core_asset: sing-box-1.13.18-darwin-amd64.tar.gz
+            core_archive_sha256: 500f0decfc21f7cdb2aaa4fe193b7857a41b07c38ee3a0b15bd53e3c7af3671c
+            core_directory: sing-box-1.13.18-darwin-amd64
+            core_file_name: sing-box
           - target: macos-aarch64
             runner: macos-15
+            core_asset: sing-box-1.13.18-darwin-arm64.tar.gz
+            core_archive_sha256: 9fbc05946b584423457a2778035e0cee2d9b239a4af5ae1932d9b79991149107
+            core_directory: sing-box-1.13.18-darwin-arm64
+            core_file_name: sing-box
           - target: windows-x86_64
             runner: windows-2022
+            core_asset: sing-box-1.13.18-windows-amd64.zip
+            core_archive_sha256: 65045155ffdc506334f01a4353889657ddfc024f72b394081a9abaef34dfbef3
+            core_directory: sing-box-1.13.18-windows-amd64
+            core_file_name: sing-box.exe
           - target: linux-x86_64
             runner: ubuntu-22.04
+            core_asset: sing-box-1.13.18-linux-amd64.tar.gz
+            core_archive_sha256: d34d987ed6ae39ca3760269264fb502b867e5477db45518c829b07776245c495
+            core_directory: sing-box-1.13.18-linux-amd64
+            core_file_name: sing-box
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -45,6 +64,62 @@ jobs:
       - name: Install frontend dependencies
         working-directory: apps/desktop
         run: npm ci
+      - name: Test release scripts
+        shell: bash
+        run: bash scripts/tests/stage-bundled-core.sh
+      - name: Prepare pinned sing-box
+        shell: bash
+        env:
+          SING_BOX_ASSET: ${{ matrix.core_asset }}
+          SING_BOX_ARCHIVE_SHA256: ${{ matrix.core_archive_sha256 }}
+          SING_BOX_DIRECTORY: ${{ matrix.core_directory }}
+          SING_BOX_FILE_NAME: ${{ matrix.core_file_name }}
+        run: |
+          set -euo pipefail
+
+          runner_temp="${RUNNER_TEMP}"
+          github_env="${GITHUB_ENV}"
+          if command -v cygpath >/dev/null 2>&1; then
+            runner_temp="$(cygpath -u "${runner_temp}")"
+            github_env="$(cygpath -u "${github_env}")"
+          fi
+
+          archive="${runner_temp}/${SING_BOX_ASSET}"
+          curl --fail --location --silent --show-error \
+            --output "${archive}" \
+            "https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/${SING_BOX_ASSET}"
+
+          if command -v shasum >/dev/null 2>&1; then
+            actual_archive_sha256="$(shasum -a 256 "${archive}" | awk '{print $1}')"
+          else
+            actual_archive_sha256="$(sha256sum "${archive}" | awk '{print $1}')"
+          fi
+          if [[ "${actual_archive_sha256}" != "${SING_BOX_ARCHIVE_SHA256}" ]]; then
+            echo "sing-box archive SHA-256 mismatch" >&2
+            exit 1
+          fi
+
+          case "${SING_BOX_ASSET}" in
+            *.tar.gz) tar -xzf "${archive}" -C "${runner_temp}" ;;
+            *.zip) tar -xf "${archive}" -C "${runner_temp}" ;;
+            *) echo "unsupported sing-box archive: ${SING_BOX_ASSET}" >&2; exit 1 ;;
+          esac
+
+          core="${runner_temp}/${SING_BOX_DIRECTORY}/${SING_BOX_FILE_NAME}"
+          license="${runner_temp}/${SING_BOX_DIRECTORY}/LICENSE"
+          [[ -f "${core}" ]] || { echo "sing-box executable is missing" >&2; exit 1; }
+          [[ -f "${license}" ]] || { echo "sing-box license is missing" >&2; exit 1; }
+
+          if command -v shasum >/dev/null 2>&1; then
+            core_sha256="$(shasum -a 256 "${core}" | awk '{print $1}')"
+          else
+            core_sha256="$(sha256sum "${core}" | awk '{print $1}')"
+          fi
+          {
+            printf 'MAGIES_BUNDLED_SING_BOX_BIN=%s\n' "${core}"
+            printf 'MAGIES_BUNDLED_SING_BOX_LICENSE=%s\n' "${license}"
+            printf 'MAGIES_SING_BOX_SHA256=%s\n' "${core_sha256}"
+          } >> "${github_env}"
       # The Intel runner must not silently produce an arm64 artifact.
       - name: Show compiler target
         run: rustc --version --verbose

@@ -14,6 +14,9 @@ set -euo pipefail
 repository="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 desktop="${repository}/apps/desktop"
 output_directory="${1:-${repository}/dist}"
+core="${MAGIES_BUNDLED_SING_BOX_BIN:-}"
+core_sha256="${MAGIES_SING_BOX_SHA256:-}"
+core_license="${MAGIES_BUNDLED_SING_BOX_LICENSE:-}"
 
 version="$(
   sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
@@ -46,6 +49,18 @@ esac
 name="mgclash-${version}-${os}-${cpu}-unsigned"
 mkdir -p "${output_directory}"
 
+scratch="$(mktemp -d)"
+trap 'rm -rf "${scratch}"' EXIT
+if [[ "${os}" == "windows" ]]; then
+  core_file_name="sing-box.exe"
+else
+  core_file_name="sing-box"
+fi
+bash "${repository}/scripts/stage-bundled-core.sh" \
+  "${core}" "${core_sha256}" "${core_license}" \
+  "${scratch}/core" "${core_file_name}"
+export MAGIES_SING_BOX_SHA256="${core_sha256}"
+
 echo "building ${name}"
 cd "${desktop}"
 npm run build
@@ -60,6 +75,9 @@ if [[ "${os}" == "macos" ]]; then
     echo "expected ${app} to exist after bundling" >&2
     exit 1
   }
+  mkdir -p "${app}/Contents/Resources"
+  cp "${scratch}/core/${core_file_name}" "${app}/Contents/Resources/"
+  cp "${scratch}/core/LICENSE-sing-box" "${app}/Contents/Resources/"
   archive="${output_directory}/${name}.tar.gz"
   tar -czf "${archive}" -C "${bundle_directory}" "MgClash.app"
 else
@@ -78,11 +96,12 @@ else
     exit 1
   }
 
-  staging="$(mktemp -d)"
-  trap 'rm -rf "${staging}"' EXIT
+  staging="${scratch}/staging"
   mkdir -p "${staging}/${name}"
   cp "${binary}" "${staging}/${name}/"
   cp "${repository}/README.md" "${staging}/${name}/"
+  cp "${scratch}/core/${core_file_name}" "${staging}/${name}/"
+  cp "${scratch}/core/LICENSE-sing-box" "${staging}/${name}/"
 
   if [[ "${os}" == "windows" ]]; then
     archive="${output_directory}/${name}.zip"

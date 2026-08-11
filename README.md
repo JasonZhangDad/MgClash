@@ -62,15 +62,23 @@ Build one locally with:
 scripts/package-unsigned.sh
 ```
 
-### The Core is not bundled yet
+### The Core is bundled
 
-A downloaded build starts and shows its dashboard, but connecting reports
-`core_not_configured` until a sing-box binary is supplied. Point the app at one:
+Release artifacts include the official sing-box 1.13.18 binary for their target
+platform. The release workflow verifies the downloaded archive, bakes the
+extracted binary's SHA-256 into MgClash, and packages that same binary with its
+license.
+
+Local packaging requires the same three inputs explicitly:
 
 ```sh
-export MAGIES_SING_BOX_BIN=/path/to/sing-box
+export MAGIES_BUNDLED_SING_BOX_BIN=/path/to/sing-box
+export MAGIES_BUNDLED_SING_BOX_LICENSE=/path/to/sing-box/LICENSE
 export MAGIES_SING_BOX_SHA256=$(shasum -a 256 /path/to/sing-box | cut -d' ' -f1)
+scripts/package-unsigned.sh
 ```
 
-See [ADR 0003](docs/adr/0003-unsigned-release-artifacts.md) for why the artifact
-does not ship one yet.
+The `MAGIES_SING_BOX_BIN` and `MAGIES_SING_BOX_SHA256` runtime variables remain
+available for development overrides. See
+[ADR 0003](docs/adr/0003-unsigned-release-artifacts.md) for the packaging and
+pinning decision.
