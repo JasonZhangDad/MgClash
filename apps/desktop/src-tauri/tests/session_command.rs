@@ -66,6 +66,56 @@ fn importing_a_second_link_keeps_both_nodes_and_replaces_the_selection() {
 }
 
 #[test]
+fn records_manual_node_latency_without_changing_the_selection() {
+    let (mut service, _runtime, _fail_start) = service();
+    let tokyo = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
+    let osaka = service
+        .import_node("ss://aes-128-gcm:runtime-secret@edge.example.com:9000#Osaka")
+        .unwrap()
+        .node
+        .unwrap();
+
+    let tested = service
+        .record_node_latency(tokyo.id, Some(42), TimestampMillis::new(100))
+        .unwrap();
+
+    assert_eq!(tested.latency_ms, Some(42));
+    assert_eq!(tested.last_tested_at, Some(100));
+    assert_eq!(service.status().node.unwrap().id, osaka.id);
+    assert_eq!(service.node(tokyo.id).unwrap(), tested);
+}
+
+#[test]
+fn records_failed_subscription_node_latency_on_the_selected_node() {
+    let (mut service, node_id, _runtime) = service_with_subscription_node();
+
+    let tested = service
+        .record_node_latency(node_id, None, TimestampMillis::new(200))
+        .unwrap();
+
+    assert_eq!(tested.latency_ms, None);
+    assert_eq!(tested.last_tested_at, Some(200));
+    assert_eq!(service.status().node.unwrap(), tested);
+}
+
+#[test]
+fn rejects_latency_updates_for_a_missing_node() {
+    let (mut service, _runtime, _fail_start) = service();
+
+    assert_eq!(
+        service
+            .record_node_latency(Uuid::nil(), None, TimestampMillis::new(300))
+            .unwrap_err()
+            .code(),
+        "node_not_found"
+    );
+    assert_eq!(
+        service.node(Uuid::nil()).unwrap_err().code(),
+        "node_not_found"
+    );
+}
+
+#[test]
 fn selects_and_deletes_nodes_while_disconnected() {
     let (mut service, _runtime, _fail_start) = service();
     let tokyo = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();

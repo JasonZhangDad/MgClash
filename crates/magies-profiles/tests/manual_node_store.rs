@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::id;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use magies_domain::{CredentialRef, ProxyNode, ProxyProtocol};
+use magies_domain::{CredentialRef, ProxyNode, ProxyProtocol, TimestampMillis};
 use magies_profiles::{ManualNodeStoreError, SqliteManualNodeStore};
 use uuid::Uuid;
 
@@ -79,6 +79,27 @@ fn rejects_subscription_nodes_and_reports_corrupt_rows() {
     assert!(matches!(
         store.nodes(),
         Err(ManualNodeStoreError::DeserializeNode { .. })
+    ));
+}
+
+#[test]
+fn records_latency_without_changing_the_selected_node() {
+    let mut store = SqliteManualNodeStore::open_in_memory().unwrap();
+    let tokyo = node("Tokyo", 8_388);
+    let osaka = node("Osaka", 9_000);
+    store.save_and_select(&tokyo).unwrap();
+    store.save_and_select(&osaka).unwrap();
+
+    let tested = store
+        .update_latency(tokyo.id, Some(42), TimestampMillis::new(100))
+        .unwrap();
+
+    assert_eq!(tested.latency_ms, Some(42));
+    assert_eq!(tested.last_tested_at, Some(TimestampMillis::new(100)));
+    assert_eq!(store.selected_node().unwrap(), Some(osaka));
+    assert!(matches!(
+        store.update_latency(Uuid::nil(), None, TimestampMillis::new(200)),
+        Err(ManualNodeStoreError::NodeNotFound { .. })
     ));
 }
 

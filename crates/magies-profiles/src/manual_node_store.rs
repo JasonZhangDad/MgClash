@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use magies_domain::ProxyNode;
+use magies_domain::{ProxyNode, TimestampMillis};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use uuid::Uuid;
 
@@ -116,6 +116,39 @@ impl SqliteManualNodeStore {
             [id.to_string()],
         )?;
         transaction.commit()?;
+        Ok(node)
+    }
+
+    /// Records the latest endpoint test without changing node selection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ManualNodeStoreError::NodeNotFound`] when `id` is absent, or
+    /// a typed serialization/database error when the update cannot be stored.
+    pub fn update_latency(
+        &self,
+        id: Uuid,
+        latency_ms: Option<u32>,
+        tested_at: TimestampMillis,
+    ) -> Result<ProxyNode, ManualNodeStoreError> {
+        let json = self
+            .connection
+            .query_row(
+                "SELECT node_json FROM manual_nodes WHERE id = ?1",
+                [id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or(ManualNodeStoreError::NodeNotFound { id })?;
+        let mut node = decode_node(&json)?;
+        node.latency_ms = latency_ms;
+        node.last_tested_at = Some(tested_at);
+        let json = serde_json::to_string(&node)
+            .map_err(|source| ManualNodeStoreError::SerializeNode { source })?;
+        self.connection.execute(
+            "UPDATE manual_nodes SET node_json = ?1 WHERE id = ?2",
+            params![json, id.to_string()],
+        )?;
         Ok(node)
     }
 

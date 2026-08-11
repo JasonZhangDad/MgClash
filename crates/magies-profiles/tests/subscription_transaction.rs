@@ -241,6 +241,40 @@ fn lists_and_selects_only_enabled_subscription_nodes() {
 }
 
 #[test]
+fn records_subscription_node_latency_without_changing_selection() {
+    let mut store = SqliteSubscriptionStore::open_in_memory().unwrap();
+    let subscription = subscription("018f78b5-2cd0-7000-a9a6-3bccf60951e8", "Primary");
+    let node = node(
+        "018f78b5-2cd0-7000-a9a6-3bccf60951e9",
+        ProxyProtocol::Vless,
+        "edge.example.com",
+        "keychain://node/secret",
+    );
+    store.insert_subscription(&subscription).unwrap();
+    store
+        .apply_update(&update(
+            subscription.id,
+            vec![node.clone()],
+            "\"revision-1\"",
+            100,
+        ))
+        .unwrap();
+    store.select_node(node.id).unwrap();
+
+    let tested = store
+        .update_node_latency(node.id, Some(35), TimestampMillis::new(200))
+        .unwrap();
+
+    assert_eq!(tested.latency_ms, Some(35));
+    assert_eq!(tested.last_tested_at, Some(TimestampMillis::new(200)));
+    assert_eq!(store.selected_node().unwrap(), Some(tested));
+    assert!(matches!(
+        store.update_node_latency(Uuid::nil(), None, TimestampMillis::new(300)),
+        Err(SubscriptionTransactionError::NodeNotFound { .. })
+    ));
+}
+
+#[test]
 fn atomically_replaces_nodes_and_updates_subscription_metadata() {
     let mut store = SqliteSubscriptionStore::open_in_memory().unwrap();
     let subscription = subscription("018f78b5-2cd0-7000-a9a6-3bccf60951e8", "Primary");

@@ -2,6 +2,7 @@
 
 pub mod core_control;
 pub mod diagnostics;
+pub mod node_latency;
 pub mod platform_proxy;
 pub mod session;
 mod subscriptions;
@@ -26,6 +27,7 @@ use uuid::Uuid;
 
 use crate::core_control::{LazySingBoxControl, describe};
 use crate::diagnostics::DiagnosticBundle;
+use crate::node_latency::{TcpLatencyError, probe_tcp};
 use crate::platform_proxy::{PlatformProxyControl, PlatformProxyError, SystemProxyStartupStatus};
 use crate::session::{SessionCommandError, SessionDefaults, SessionService, SessionStatus};
 use crate::subscriptions::{
@@ -55,6 +57,9 @@ const SUBSCRIPTION_UPDATE_TICK: Duration = Duration::from_secs(60);
 /// How often the native tray mirrors recovery-driven session changes.
 const TRAY_REFRESH_TICK: Duration = Duration::from_secs(3);
 
+/// A direct node endpoint test has five seconds to complete, including DNS.
+const NODE_TEST_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlatformSummary {
@@ -68,6 +73,42 @@ pub struct PlatformSummary {
 pub struct CommandError {
     pub code: &'static str,
     pub message: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum NodeTestStatus {
+    Success,
+    Timeout,
+    Failed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeTestResult {
+    id: Uuid,
+    status: NodeTestStatus,
+    latency_ms: Option<u32>,
+}
+
+fn node_test_result(id: Uuid, result: &Result<u32, TcpLatencyError>) -> NodeTestResult {
+    match result {
+        Ok(latency_ms) => NodeTestResult {
+            id,
+            status: NodeTestStatus::Success,
+            latency_ms: Some(*latency_ms),
+        },
+        Err(TcpLatencyError::Timeout) => NodeTestResult {
+            id,
+            status: NodeTestStatus::Timeout,
+            latency_ms: None,
+        },
+        Err(_) => NodeTestResult {
+            id,
+            status: NodeTestStatus::Failed,
+            latency_ms: None,
+        },
+    }
 }
 
 /// Creates the serializable platform summary returned to the desktop UI.
@@ -436,6 +477,32 @@ fn session_nodes(
         .map_err(|error| command_error(&error))
 }
 
+#[tauri::command]
+async fn session_test_node(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<NodeTestResult, CommandError> {
+    let id = parse_node_id(&id)?;
+    let node = state
+        .service()
+        .node(id)
+        .map_err(|error| command_error(&error))?;
+    let probe = tauri::async_runtime::spawn_blocking(move || {
+        probe_tcp(&node.server, node.port, NODE_TEST_TIMEOUT)
+    })
+    .await
+    .map_err(|error| CommandError {
+        code: "node_test_task_failed",
+        message: error.to_string(),
+    })?;
+    let result = node_test_result(id, &probe);
+    state
+        .service()
+        .record_node_latency(id, result.latency_ms, current_timestamp())
+        .map_err(|error| command_error(&error))?;
+    Ok(result)
+}
+
 fn parse_node_id(id: &str) -> Result<Uuid, CommandError> {
     Uuid::parse_str(id).map_err(|error| CommandError {
         code: "invalid_node_id",
@@ -774,6 +841,7 @@ pub fn run() {
             session_status,
             session_import_node,
             session_nodes,
+            session_test_node,
             session_select_node,
             session_delete_node,
             session_connect,
@@ -805,10 +873,13 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_subscription_mutation_ready, ensure_system_proxy_ready, parse_node_id,
-        parse_subscription_id, platform_summary,
+        NodeTestStatus, ensure_subscription_mutation_ready, ensure_system_proxy_ready,
+        node_test_result, parse_node_id, parse_subscription_id, platform_summary,
     };
+    use crate::node_latency::TcpLatencyError;
     use crate::platform_proxy::SystemProxyStartupStatus;
+    use std::io;
+    use uuid::Uuid;
 
     #[test]
     fn command_supports_the_build_host() {
@@ -829,6 +900,29 @@ mod tests {
         let error = parse_node_id("not-a-uuid").unwrap_err();
 
         assert_eq!(error.code, "invalid_node_id");
+    }
+
+    #[test]
+    fn node_test_results_separate_success_timeout_and_failure() {
+        let id = Uuid::nil();
+
+        let success = node_test_result(id, &Ok(42));
+        assert_eq!(success.status, NodeTestStatus::Success);
+        assert_eq!(success.latency_ms, Some(42));
+
+        let timeout = node_test_result(id, &Err(TcpLatencyError::Timeout));
+        assert_eq!(timeout.status, NodeTestStatus::Timeout);
+        assert_eq!(timeout.latency_ms, None);
+
+        let failure = node_test_result(
+            id,
+            &Err(TcpLatencyError::Connect(io::Error::new(
+                io::ErrorKind::ConnectionRefused,
+                "refused",
+            ))),
+        );
+        assert_eq!(failure.status, NodeTestStatus::Failed);
+        assert_eq!(failure.latency_ms, None);
     }
 
     #[test]

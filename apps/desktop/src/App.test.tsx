@@ -10,6 +10,8 @@ const loadNodesMock = vi.hoisted(() => vi.fn());
 const importNodeMock = vi.hoisted(() => vi.fn());
 const selectNodeMock = vi.hoisted(() => vi.fn());
 const deleteNodeMock = vi.hoisted(() => vi.fn());
+const testNodeMock = vi.hoisted(() => vi.fn());
+const testAllNodesMock = vi.hoisted(() => vi.fn());
 const connectSessionMock = vi.hoisted(() => vi.fn());
 const disconnectSessionMock = vi.hoisted(() => vi.fn());
 const exportDiagnosticsMock = vi.hoisted(() => vi.fn());
@@ -42,6 +44,8 @@ vi.mock("./session", async () => {
     loadSystemProxyStartupStatus: loadSystemProxyStartupStatusMock,
     recoverSystemProxy: recoverSystemProxyMock,
     selectNode: selectNodeMock,
+    testAllNodes: testAllNodesMock,
+    testNode: testNodeMock,
   };
 });
 
@@ -75,6 +79,8 @@ const SELECTED: SessionStatus = {
   node: {
     deletable: true,
     id: "00000000-0000-0000-0000-000000000001",
+    lastTestedAt: null,
+    latencyMs: null,
     name: "Tokyo Edge",
     port: 8388,
     protocol: "shadowsocks",
@@ -106,6 +112,8 @@ describe("App", () => {
     importNodeMock.mockReset();
     selectNodeMock.mockReset();
     deleteNodeMock.mockReset();
+    testNodeMock.mockReset();
+    testAllNodesMock.mockReset();
     connectSessionMock.mockReset();
     disconnectSessionMock.mockReset();
     exportDiagnosticsMock.mockReset();
@@ -129,6 +137,7 @@ describe("App", () => {
     recoverSystemProxyMock.mockResolvedValue("clean");
     dismissSystemProxyRecoveryMock.mockResolvedValue("clean");
     loadSubscriptionsMock.mockResolvedValue([]);
+    testAllNodesMock.mockResolvedValue(undefined);
 
     localStorage.clear();
     container = document.createElement("div");
@@ -363,6 +372,8 @@ describe("App", () => {
     const osaka = {
       id: "00000000-0000-0000-0000-000000000002",
       deletable: true,
+      lastTestedAt: null,
+      latencyMs: null,
       name: "Osaka",
       port: 9000,
       protocol: "shadowsocks" as const,
@@ -383,6 +394,84 @@ describe("App", () => {
 
     expect(selectNodeMock).toHaveBeenCalledWith(osaka.id);
     expect(container.textContent).toContain("osaka.example.com:9000");
+  });
+
+  it("tests one node and shows its TCP latency", async () => {
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    testNodeMock.mockResolvedValue({
+      id: SELECTED.node?.id,
+      latencyMs: 42,
+      status: "success",
+    });
+    await render();
+
+    const test = container.querySelector<HTMLButtonElement>(
+      "[aria-label='测试 Tokyo Edge']",
+    );
+    if (!test) {
+      throw new Error("node test button is missing");
+    }
+    await act(async () => test.click());
+
+    expect(testNodeMock).toHaveBeenCalledWith(SELECTED.node?.id);
+    expect(
+      container.querySelector("[aria-label='节点列表']")?.textContent,
+    ).toContain("42 ms");
+  });
+
+  it("shows a node test command failure and restores its action", async () => {
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    testNodeMock.mockRejectedValue({
+      code: "node_store_failed",
+      message: "failed to save the node test",
+    });
+    await render();
+
+    const test = container.querySelector<HTMLButtonElement>(
+      "[aria-label='测试 Tokyo Edge']",
+    );
+    if (!test) {
+      throw new Error("node test button is missing");
+    }
+    await act(async () => test.click());
+
+    expect(container.querySelector("[role='alert']")?.textContent).toContain(
+      "failed to save the node test",
+    );
+    expect(test.disabled).toBe(false);
+  });
+
+  it("offers batch node tests and cancels queued work", async () => {
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    let cancelled = () => false;
+    let release = () => {};
+    testAllNodesMock.mockImplementation(
+      async (
+        _ids: string[],
+        _onResult: (result: unknown) => void,
+        isCancelled: () => boolean,
+      ) =>
+        new Promise<void>((resolve) => {
+          cancelled = isCancelled;
+          release = resolve;
+        }),
+    );
+    await render();
+
+    await act(async () => button("全部测速").click());
+    expect(testAllNodesMock).toHaveBeenCalledWith(
+      [SELECTED.node?.id],
+      expect.any(Function),
+      expect.any(Function),
+    );
+
+    await act(async () => button("取消测速").click());
+    expect(cancelled()).toBe(true);
+    await act(async () => release());
+    expect(button("全部测速").disabled).toBe(false);
   });
 
   it("deletes a persisted node", async () => {

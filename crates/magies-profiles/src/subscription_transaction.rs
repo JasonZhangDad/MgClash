@@ -396,6 +396,41 @@ impl SqliteSubscriptionStore {
         Ok(nodes)
     }
 
+    /// Records the latest endpoint test without changing subscription
+    /// ownership, enabled state, or selection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SubscriptionTransactionError::NodeNotFound`] when `id` is
+    /// absent, or a typed database/row error when the update cannot be stored.
+    pub fn update_node_latency(
+        &self,
+        id: Uuid,
+        latency_ms: Option<u32>,
+        tested_at: TimestampMillis,
+    ) -> Result<ProxyNode, SubscriptionTransactionError> {
+        let mut node = {
+            let mut statement = self.connection.prepare(
+                "SELECT id, name, protocol, server, port, credential_ref,
+                        transport_json, tls_json, udp_enabled, subscription_id,
+                        group_id, latency_ms, last_tested_at, enabled
+                 FROM nodes WHERE id = ?1",
+            )?;
+            let mut rows = statement.query([id.to_string()])?;
+            rows.next()?
+                .map(decode_node)
+                .transpose()?
+                .ok_or(SubscriptionTransactionError::NodeNotFound { id })?
+        };
+        self.connection.execute(
+            "UPDATE nodes SET latency_ms = ?1, last_tested_at = ?2 WHERE id = ?3",
+            params![latency_ms.map(i64::from), tested_at.get(), id.to_string()],
+        )?;
+        node.latency_ms = latency_ms;
+        node.last_tested_at = Some(tested_at);
+        Ok(node)
+    }
+
     /// Persists one enabled subscription node as the desktop selection.
     ///
     /// # Errors

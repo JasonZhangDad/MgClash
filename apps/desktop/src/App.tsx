@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { loadPlatformSummary, type PlatformSummary } from "./platform";
 import {
@@ -14,7 +14,10 @@ import {
   loadSystemProxyStartupStatus,
   recoverSystemProxy,
   selectNode,
+  testAllNodes,
+  testNode,
   type NodeSummary,
+  type NodeTestResult,
   type SessionStatus,
   type SystemProxyStartupStatus,
 } from "./session";
@@ -89,7 +92,16 @@ export default function App() {
   const [systemProxyStartup, setSystemProxyStartup] =
     useState<SystemProxyStartupStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [nodeTests, setNodeTests] = useState<
+    Record<string, NodeTestResult | { status: "testing" }>
+  >({});
+  const [testingAllNodes, setTestingAllNodes] = useState(false);
+  const cancelNodeTests = useRef(false);
   const [noticeDismissed, setNoticeDismissed] = useState(noticeWasDismissed);
+
+  const nodeTestInProgress = Object.values(nodeTests).some(
+    (result) => result.status === "testing",
+  );
 
   useEffect(() => {
     loadPlatformSummary().then(setPlatform, (failure: unknown) =>
@@ -209,6 +221,56 @@ export default function App() {
     } finally {
       setBusy(false);
     }
+  }, []);
+
+  const onTestNode = useCallback(async (id: string) => {
+    setError(null);
+    setNodeTests((current) => ({ ...current, [id]: { status: "testing" } }));
+    try {
+      const result = await testNode(id);
+      setNodeTests((current) => ({ ...current, [id]: result }));
+    } catch (failure: unknown) {
+      setNodeTests((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+      setError(describeFailure(failure));
+    }
+  }, []);
+
+  const onTestAllNodes = useCallback(async () => {
+    cancelNodeTests.current = false;
+    setError(null);
+    setTestingAllNodes(true);
+    setNodeTests(
+      Object.fromEntries(
+        nodes.map((candidate) => [candidate.id, { status: "testing" }]),
+      ),
+    );
+    try {
+      await testAllNodes(
+        nodes.map((candidate) => candidate.id),
+        (result) =>
+          setNodeTests((current) => ({ ...current, [result.id]: result })),
+        () => cancelNodeTests.current,
+      );
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setNodeTests((current) =>
+        Object.fromEntries(
+          Object.entries(current).filter(
+            ([, result]) => result.status !== "testing",
+          ),
+        ),
+      );
+      setTestingAllNodes(false);
+    }
+  }, [nodes]);
+
+  const onCancelNodeTests = useCallback(() => {
+    cancelNodeTests.current = true;
   }, []);
 
   const resetSubscriptionForm = useCallback(() => {
@@ -470,6 +532,22 @@ export default function App() {
 
         <h2>节点</h2>
 
+        <div className="actions">
+          {testingAllNodes ? (
+            <button type="button" onClick={onCancelNodeTests}>
+              取消测速
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={busy || nodeTestInProgress || nodes.length === 0}
+              onClick={() => void onTestAllNodes()}
+            >
+              全部测速
+            </button>
+          )}
+        </div>
+
         {nodes.length === 0 ? (
           <p className="hint">尚未导入节点</p>
         ) : (
@@ -479,22 +557,50 @@ export default function App() {
                 <th>名称</th>
                 <th>协议</th>
                 <th>服务器</th>
+                <th>延迟</th>
                 <th>操作</th>
               </tr>
             </thead>
             <tbody>
               {nodes.map((candidate) => {
                 const selected = candidate.id === node?.id;
+                const testResult = nodeTests[candidate.id];
+                let latency =
+                  candidate.latencyMs === null
+                    ? candidate.lastTestedAt === null
+                      ? "—"
+                      : "失败"
+                    : `${candidate.latencyMs} ms`;
+                if (testResult?.status === "testing") {
+                  latency = "测试中";
+                } else if (testResult?.status === "success") {
+                  latency = `${testResult.latencyMs} ms`;
+                } else if (testResult?.status === "timeout") {
+                  latency = "超时";
+                } else if (testResult?.status === "failed") {
+                  latency = "失败";
+                }
                 return (
                   <tr key={candidate.id}>
                     <td>{candidate.name}</td>
                     <td>{candidate.protocol}</td>
                     <td>{`${candidate.server}:${candidate.port}`}</td>
+                    <td>{latency}</td>
                     <td className="node-actions">
                       <button
                         type="button"
+                        aria-label={`测试 ${candidate.name}`}
+                        disabled={busy || nodeTestInProgress}
+                        onClick={() => void onTestNode(candidate.id)}
+                      >
+                        测试
+                      </button>
+                      <button
+                        type="button"
                         aria-label={`选择 ${candidate.name}`}
-                        disabled={busy || connected || selected}
+                        disabled={
+                          busy || connected || selected || nodeTestInProgress
+                        }
                         onClick={() =>
                           void run(() => selectNode(candidate.id))
                         }
@@ -504,7 +610,12 @@ export default function App() {
                       <button
                         type="button"
                         aria-label={`删除 ${candidate.name}`}
-                        disabled={busy || connected || !candidate.deletable}
+                        disabled={
+                          busy ||
+                          connected ||
+                          nodeTestInProgress ||
+                          !candidate.deletable
+                        }
                         onClick={() => void onDeleteNode(candidate.id)}
                       >
                         {candidate.deletable ? "删除" : "订阅管理"}
@@ -522,7 +633,12 @@ export default function App() {
         <div className="actions">
           <button
             type="button"
-            disabled={busy || connected || subscriptions.length === 0}
+            disabled={
+              busy ||
+              connected ||
+              nodeTestInProgress ||
+              subscriptions.length === 0
+            }
             onClick={() => void onRefreshAllSubscriptions()}
           >
             全部更新
@@ -554,7 +670,7 @@ export default function App() {
                     <button
                       type="button"
                       aria-label={`编辑 ${item.name}`}
-                      disabled={busy || connected}
+                      disabled={busy || connected || nodeTestInProgress}
                       onClick={() => onEditSubscription(item)}
                     >
                       编辑
@@ -562,7 +678,9 @@ export default function App() {
                     <button
                       type="button"
                       aria-label={`刷新 ${item.name}`}
-                      disabled={busy || connected || !item.enabled}
+                      disabled={
+                        busy || connected || nodeTestInProgress || !item.enabled
+                      }
                       onClick={() => void onRefreshSubscription(item.id)}
                     >
                       刷新
@@ -570,7 +688,7 @@ export default function App() {
                     <button
                       type="button"
                       aria-label={`删除订阅 ${item.name}`}
-                      disabled={busy || connected}
+                      disabled={busy || connected || nodeTestInProgress}
                       onClick={() => void onDeleteSubscription(item.id)}
                     >
                       删除
