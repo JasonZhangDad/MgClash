@@ -251,6 +251,7 @@ pub fn action_for_menu_id(id: &str) -> Option<TrayAction> {
 
 #[cfg(test)]
 mod tests {
+    use crate::dns_settings::DnsSettings;
     use magies_domain::ProxyProtocol;
     use magies_routing::RoutingMode;
     use uuid::Uuid;
@@ -336,11 +337,12 @@ mod tests {
         }
     }
 
-    const fn status(connected: bool, node: Option<NodeSummary>) -> SessionStatus {
+    fn status(connected: bool, node: Option<NodeSummary>) -> SessionStatus {
         SessionStatus {
             connected,
             node,
             core: "sing-box",
+            dns: DnsSettings::default(),
             mode: "global",
             system_proxy: connected,
             socks_port: 1080,

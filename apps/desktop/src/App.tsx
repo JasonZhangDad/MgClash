@@ -15,12 +15,16 @@ import {
   loadTraffic,
   recoverSystemProxy,
   selectNode,
+  setDnsSettings,
   setRoutingMode,
   testAllNodes,
   testNode,
   testUrl,
   type NodeSummary,
   type NodeTestResult,
+  type DnsMode,
+  type DnsSettings,
+  type DnsStrategy,
   type SessionStatus,
   type RoutingMode,
   type SystemProxyStartupStatus,
@@ -114,6 +118,8 @@ export default function App() {
   const [platform, setPlatform] = useState<PlatformSummary | null>(null);
   const [platformError, setPlatformError] = useState<string | null>(null);
   const [status, setStatus] = useState<SessionStatus | null>(null);
+  const [dnsDraft, setDnsDraft] = useState<DnsSettings | null>(null);
+  const [dnsDirty, setDnsDirty] = useState(false);
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
   const [subscriptions, setSubscriptions] = useState<SubscriptionSummary[]>([]);
   const [uri, setUri] = useState("");
@@ -161,6 +167,12 @@ export default function App() {
       (failure: unknown) => setError(describeFailure(failure)),
     );
   }, []);
+
+  useEffect(() => {
+    if (status !== null && !dnsDirty) {
+      setDnsDraft(status.dns);
+    }
+  }, [dnsDirty, status]);
 
   useEffect(() => {
     // Skip while a command is in flight: it owns the status it is about to set.
@@ -238,6 +250,48 @@ export default function App() {
       setBusy(false);
     }
   }, []);
+
+  const onSaveDns = useCallback(async () => {
+    if (dnsDraft === null) {
+      return;
+    }
+    const server = dnsDraft.server.trim();
+    if (dnsDraft.mode !== "system" && server === "") {
+      setError("请填写 DNS 服务器");
+      return;
+    }
+    if (
+      dnsDraft.mode !== "system" &&
+      (!Number.isInteger(dnsDraft.port) ||
+        dnsDraft.port < 1 ||
+        dnsDraft.port > 65_535)
+    ) {
+      setError("DNS 端口必须是 1 到 65535 的整数");
+      return;
+    }
+    const settings = {
+      ...dnsDraft,
+      dohPath: dnsDraft.dohPath.trim(),
+      server,
+      systemDomains: dnsDraft.systemDomains
+        .flatMap((value) => value.split(/[\n,]/))
+        .map((value) => value.trim())
+        .filter((value) => value !== ""),
+    };
+
+    setBusy(true);
+    setError(null);
+    try {
+      const nextStatus = await setDnsSettings(settings);
+      setStatus(nextStatus);
+      setDnsDraft(nextStatus.dns);
+      setDnsDirty(false);
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, [dnsDraft]);
 
   const resolveSystemProxyStartup = useCallback(
     async (command: () => Promise<SystemProxyStartupStatus>) => {
@@ -679,6 +733,165 @@ export default function App() {
             }
           >
             {connected ? "断开" : "连接"}
+          </button>
+        </div>
+
+        <h2>DNS</h2>
+
+        {dnsDraft === null ? (
+          <p className="hint">正在读取 DNS 设置</p>
+        ) : (
+          <div className="settings-form">
+            <label>
+              模式
+              <select
+                aria-label="DNS 模式"
+                disabled={busy || connected}
+                value={dnsDraft.mode}
+                onChange={(event) => {
+                  const mode = event.target.value as DnsMode;
+                  const upstream =
+                    mode === "doh"
+                      ? { port: 443, server: "cloudflare-dns.com" }
+                      : mode === "dot"
+                        ? {
+                            port: 853,
+                            server: "1dot1dot1dot1.cloudflare-dns.com",
+                          }
+                        : mode === "plainUdp" || mode === "plainTcp"
+                          ? { port: 53, server: "1.1.1.1" }
+                          : {};
+                  setDnsDraft((current) =>
+                    current === null ? null : { ...current, ...upstream, mode },
+                  );
+                  setDnsDirty(true);
+                }}
+              >
+                <option value="system">系统 DNS</option>
+                <option value="plainUdp">UDP</option>
+                <option value="plainTcp">TCP</option>
+                <option value="doh">DoH</option>
+                <option value="dot">DoT</option>
+              </select>
+            </label>
+            {dnsDraft.mode !== "system" && (
+              <>
+                <label>
+                  服务器
+                  <input
+                    aria-label="DNS 服务器"
+                    disabled={busy || connected}
+                    value={dnsDraft.server}
+                    onChange={(event) => {
+                      setDnsDraft({ ...dnsDraft, server: event.target.value });
+                      setDnsDirty(true);
+                    }}
+                  />
+                </label>
+                <label>
+                  端口
+                  <input
+                    aria-label="DNS 端口"
+                    disabled={busy || connected}
+                    min="1"
+                    max="65535"
+                    type="number"
+                    value={dnsDraft.port}
+                    onChange={(event) => {
+                      setDnsDraft({ ...dnsDraft, port: Number(event.target.value) });
+                      setDnsDirty(true);
+                    }}
+                  />
+                </label>
+              </>
+            )}
+            {dnsDraft.mode === "doh" && (
+              <label>
+                DoH 路径
+                <input
+                  aria-label="DoH 路径"
+                  disabled={busy || connected}
+                  value={dnsDraft.dohPath}
+                  onChange={(event) => {
+                    setDnsDraft({ ...dnsDraft, dohPath: event.target.value });
+                    setDnsDirty(true);
+                  }}
+                />
+              </label>
+            )}
+            <label>
+              地址策略
+              <select
+                aria-label="DNS 地址策略"
+                disabled={busy || connected}
+                value={dnsDraft.strategy}
+                onChange={(event) => {
+                  setDnsDraft({
+                    ...dnsDraft,
+                    strategy: event.target.value as DnsStrategy,
+                  });
+                  setDnsDirty(true);
+                }}
+              >
+                <option value="preferIpv4">优先 IPv4</option>
+                <option value="preferIpv6">优先 IPv6</option>
+                <option value="ipv4Only">仅 IPv4</option>
+                <option value="ipv6Only">仅 IPv6</option>
+              </select>
+            </label>
+            <label>
+              系统 DNS 域名后缀
+              <textarea
+                aria-label="系统 DNS 域名后缀"
+                disabled={busy || connected}
+                rows={2}
+                placeholder="每行一个，例如 lan"
+                value={dnsDraft.systemDomains.join("\n")}
+                onChange={(event) => {
+                  setDnsDraft({
+                    ...dnsDraft,
+                    systemDomains: event.target.value.split("\n"),
+                  });
+                  setDnsDirty(true);
+                }}
+              />
+            </label>
+            <label className="checkbox-label">
+              <input
+                aria-label="启用 IPv6 DNS"
+                checked={dnsDraft.ipv6Enabled}
+                disabled={busy || connected}
+                type="checkbox"
+                onChange={(event) => {
+                  setDnsDraft({ ...dnsDraft, ipv6Enabled: event.target.checked });
+                  setDnsDirty(true);
+                }}
+              />
+              IPv6
+            </label>
+            <label className="checkbox-label">
+              <input
+                aria-label="启用 FakeIP"
+                checked={dnsDraft.fakeIpEnabled}
+                disabled={busy || connected}
+                type="checkbox"
+                onChange={(event) => {
+                  setDnsDraft({ ...dnsDraft, fakeIpEnabled: event.target.checked });
+                  setDnsDirty(true);
+                }}
+              />
+              FakeIP
+            </label>
+          </div>
+        )}
+
+        <div className="actions">
+          <button
+            type="button"
+            disabled={busy || connected || dnsDraft === null || !dnsDirty}
+            onClick={() => void onSaveDns()}
+          >
+            保存 DNS
           </button>
         </div>
 

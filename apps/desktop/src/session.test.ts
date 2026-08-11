@@ -18,6 +18,7 @@ import {
   loadSystemProxyStartupStatus,
   recoverSystemProxy,
   selectNode,
+  setDnsSettings,
   setRoutingMode,
   testAllNodes,
   testNode,
@@ -29,6 +30,16 @@ import {
 const IDLE: SessionStatus = {
   connected: false,
   core: "sing-box",
+  dns: {
+    dohPath: "/dns-query",
+    fakeIpEnabled: false,
+    ipv6Enabled: false,
+    mode: "system",
+    port: 53,
+    server: "1.1.1.1",
+    strategy: "preferIpv4",
+    systemDomains: [],
+  },
   httpPort: 10809,
   mode: "global",
   node: null,
@@ -197,6 +208,21 @@ describe("session commands", () => {
 
     expect(invokeMock).toHaveBeenCalledWith("session_set_routing_mode", {
       mode: "rule",
+    });
+  });
+
+  it("saves the complete DNS settings through its own command", async () => {
+    const settings = {
+      ...IDLE.dns,
+      mode: "doh" as const,
+      port: 443,
+      server: "cloudflare-dns.com",
+    };
+
+    await setDnsSettings(settings);
+
+    expect(invokeMock).toHaveBeenCalledWith("session_set_dns_settings", {
+      settings,
     });
   });
 

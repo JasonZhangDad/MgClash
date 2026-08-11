@@ -2,6 +2,7 @@
 
 pub mod core_control;
 pub mod diagnostics;
+pub mod dns_settings;
 pub mod node_latency;
 pub mod platform_proxy;
 pub mod routing_mode;
@@ -31,6 +32,7 @@ use uuid::Uuid;
 
 use crate::core_control::{LazySingBoxControl, describe};
 use crate::diagnostics::DiagnosticBundle;
+use crate::dns_settings::{DnsSettings, SqliteDnsSettingsStore};
 use crate::node_latency::{TcpLatencyError, probe_tcp};
 use crate::platform_proxy::{PlatformProxyControl, PlatformProxyError, SystemProxyStartupStatus};
 use crate::routing_mode::{SqliteRoutingModeStore, parse_routing_mode};
@@ -601,6 +603,21 @@ fn session_set_routing_mode(
     clippy::needless_pass_by_value,
     reason = "Tauri commands receive State and deserialized arguments by value"
 )]
+fn session_set_dns_settings(
+    settings: DnsSettings,
+    state: State<'_, AppState>,
+) -> Result<SessionStatus, CommandError> {
+    state
+        .service()
+        .set_dns_settings(settings)
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
 fn session_import_node(
     uri: String,
     state: State<'_, AppState>,
@@ -959,10 +976,8 @@ pub fn run() {
             let data_directory = app.path().app_data_dir()?;
             let runtime_directory = data_directory.join("runtime");
             std::fs::create_dir_all(&runtime_directory)?;
-
             let defaults = SessionDefaults::v01();
-            let health_address =
-                SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), defaults.socks.port().get());
+            let health_address = SocketAddr::from(([127, 0, 0, 1], defaults.socks.port().get()));
             let system_proxy =
                 PlatformProxyControl::for_host(data_directory.join("system-proxy-recovery.json"));
             let session = DesktopSession::new(
@@ -984,6 +999,7 @@ pub fn run() {
                 nodes,
                 SqliteSubscriptionStore::open(&node_database)?,
                 SqliteRoutingModeStore::open(&node_database)?,
+                SqliteDnsSettingsStore::open(&node_database)?,
             )?));
             let initial_tray_model = {
                 let service = lock(&service);
@@ -1023,6 +1039,7 @@ pub fn run() {
             platform_summary,
             session_status,
             session_set_routing_mode,
+            session_set_dns_settings,
             session_import_node,
             session_nodes,
             session_test_node,

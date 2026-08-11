@@ -17,6 +17,7 @@ const testUrlMock = vi.hoisted(() => vi.fn());
 const connectSessionMock = vi.hoisted(() => vi.fn());
 const disconnectSessionMock = vi.hoisted(() => vi.fn());
 const setRoutingModeMock = vi.hoisted(() => vi.fn());
+const setDnsSettingsMock = vi.hoisted(() => vi.fn());
 const exportDiagnosticsMock = vi.hoisted(() => vi.fn());
 const loadSystemProxyStartupStatusMock = vi.hoisted(() => vi.fn());
 const recoverSystemProxyMock = vi.hoisted(() => vi.fn());
@@ -49,6 +50,7 @@ vi.mock("./session", async () => {
     recoverSystemProxy: recoverSystemProxyMock,
     selectNode: selectNodeMock,
     setRoutingMode: setRoutingModeMock,
+    setDnsSettings: setDnsSettingsMock,
     testAllNodes: testAllNodesMock,
     testNode: testNodeMock,
     testUrl: testUrlMock,
@@ -73,6 +75,16 @@ import type { SessionStatus } from "./session";
 const IDLE: SessionStatus = {
   connected: false,
   core: "sing-box",
+  dns: {
+    dohPath: "/dns-query",
+    fakeIpEnabled: false,
+    ipv6Enabled: false,
+    mode: "system",
+    port: 53,
+    server: "1.1.1.1",
+    strategy: "preferIpv4",
+    systemDomains: [],
+  },
   httpPort: 10809,
   mode: "global",
   node: null,
@@ -125,6 +137,7 @@ describe("App", () => {
     connectSessionMock.mockReset();
     disconnectSessionMock.mockReset();
     setRoutingModeMock.mockReset();
+    setDnsSettingsMock.mockReset();
     exportDiagnosticsMock.mockReset();
     loadSystemProxyStartupStatusMock.mockReset();
     recoverSystemProxyMock.mockReset();
@@ -441,7 +454,9 @@ describe("App", () => {
       .mockResolvedValueOnce([SELECTED.node]);
     await render();
 
-    const field = container.querySelector("textarea");
+    const field = container.querySelector<HTMLTextAreaElement>(
+      "textarea[aria-label='分享链接']",
+    );
     if (!field) {
       throw new Error("no sharing URI field");
     }
@@ -859,6 +874,60 @@ describe("App", () => {
       container.querySelector<HTMLSelectElement>(
         "select[aria-label='路由模式']",
       )?.disabled,
+    ).toBe(true);
+  });
+
+  it("shows and saves the compact DNS settings while disconnected", async () => {
+    const saved: SessionStatus = {
+      ...IDLE,
+      dns: {
+        ...IDLE.dns,
+        dohPath: "/custom-query",
+        mode: "doh",
+        port: 443,
+        server: "cloudflare-dns.com",
+        systemDomains: ["lan", "corp.example"],
+      },
+    };
+    setDnsSettingsMock.mockResolvedValue(saved);
+    await render();
+
+    const mode = container.querySelector<HTMLSelectElement>(
+      "select[aria-label='DNS 模式']",
+    );
+    expect(mode).not.toBeNull();
+    await act(async () => selectValue("doh", mode!));
+    const path = container.querySelector<HTMLInputElement>(
+      "input[aria-label='DoH 路径']",
+    );
+    const domains = container.querySelector<HTMLTextAreaElement>(
+      "textarea[aria-label='系统 DNS 域名后缀']",
+    );
+    expect(path).not.toBeNull();
+    expect(domains).not.toBeNull();
+    await act(async () => {
+      typeInput("/custom-query", path!);
+      type("lan\ncorp.example", domains!);
+    });
+
+    await act(async () => button("保存 DNS").click());
+
+    expect(setDnsSettingsMock).toHaveBeenCalledWith({
+      ...saved.dns,
+      fakeIpEnabled: false,
+      ipv6Enabled: false,
+      strategy: "preferIpv4",
+    });
+  });
+
+  it("locks DNS settings while connected", async () => {
+    loadSessionStatusMock.mockResolvedValue(CONNECTED);
+    await render();
+
+    expect(button("保存 DNS").disabled).toBe(true);
+    expect(
+      container.querySelector<HTMLSelectElement>("select[aria-label='DNS 模式']")
+        ?.disabled,
     ).toBe(true);
   });
 

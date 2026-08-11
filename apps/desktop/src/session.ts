@@ -37,6 +37,7 @@ export interface TrafficSnapshot {
 export interface SessionStatus {
   connected: boolean;
   core: string;
+  dns: DnsSettings;
   httpPort: number;
   mode: RoutingMode;
   node: NodeSummary | null;
@@ -45,6 +46,25 @@ export interface SessionStatus {
 }
 
 export type RoutingMode = "direct" | "global" | "rule";
+
+export type DnsMode = "system" | "plainUdp" | "plainTcp" | "doh" | "dot";
+
+export type DnsStrategy =
+  | "preferIpv4"
+  | "preferIpv6"
+  | "ipv4Only"
+  | "ipv6Only";
+
+export interface DnsSettings {
+  dohPath: string;
+  fakeIpEnabled: boolean;
+  ipv6Enabled: boolean;
+  mode: DnsMode;
+  port: number;
+  server: string;
+  strategy: DnsStrategy;
+  systemDomains: string[];
+}
 
 /** The shape every failed Tauri command returns. */
 export interface CommandError {
@@ -69,6 +89,10 @@ export function loadSessionStatus(): Promise<SessionStatus> {
 
 export function setRoutingMode(mode: RoutingMode): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_set_routing_mode", { mode });
+}
+
+export function setDnsSettings(settings: DnsSettings): Promise<SessionStatus> {
+  return invoke<SessionStatus>("session_set_dns_settings", { settings });
 }
 
 export function importNode(uri: string): Promise<SessionStatus> {
