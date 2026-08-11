@@ -6,7 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadPlatformSummaryMock = vi.hoisted(() => vi.fn());
 const loadSessionStatusMock = vi.hoisted(() => vi.fn());
+const loadNodesMock = vi.hoisted(() => vi.fn());
 const importNodeMock = vi.hoisted(() => vi.fn());
+const selectNodeMock = vi.hoisted(() => vi.fn());
+const deleteNodeMock = vi.hoisted(() => vi.fn());
 const connectSessionMock = vi.hoisted(() => vi.fn());
 const disconnectSessionMock = vi.hoisted(() => vi.fn());
 const exportDiagnosticsMock = vi.hoisted(() => vi.fn());
@@ -27,9 +30,12 @@ vi.mock("./session", async () => {
     exportDiagnostics: exportDiagnosticsMock,
     importNode: importNodeMock,
     isCommandError: actual.isCommandError,
+    deleteNode: deleteNodeMock,
+    loadNodes: loadNodesMock,
     loadSessionStatus: loadSessionStatusMock,
     loadSystemProxyStartupStatus: loadSystemProxyStartupStatusMock,
     recoverSystemProxy: recoverSystemProxyMock,
+    selectNode: selectNodeMock,
   };
 });
 
@@ -52,6 +58,7 @@ const IDLE: SessionStatus = {
 const SELECTED: SessionStatus = {
   ...IDLE,
   node: {
+    id: "00000000-0000-0000-0000-000000000001",
     name: "Tokyo Edge",
     port: 8388,
     protocol: "shadowsocks",
@@ -68,7 +75,10 @@ describe("App", () => {
   beforeEach(() => {
     loadPlatformSummaryMock.mockReset();
     loadSessionStatusMock.mockReset();
+    loadNodesMock.mockReset();
     importNodeMock.mockReset();
+    selectNodeMock.mockReset();
+    deleteNodeMock.mockReset();
     connectSessionMock.mockReset();
     disconnectSessionMock.mockReset();
     exportDiagnosticsMock.mockReset();
@@ -81,6 +91,7 @@ describe("App", () => {
       tunAvailability: "unavailableInUnsignedBuild",
     });
     loadSessionStatusMock.mockResolvedValue(IDLE);
+    loadNodesMock.mockResolvedValue([]);
     loadSystemProxyStartupStatusMock.mockResolvedValue("clean");
     recoverSystemProxyMock.mockResolvedValue("clean");
     dismissSystemProxyRecoveryMock.mockResolvedValue("clean");
@@ -276,6 +287,9 @@ describe("App", () => {
 
   it("imports a share link and enables connecting", async () => {
     importNodeMock.mockResolvedValue(SELECTED);
+    loadNodesMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([SELECTED.node]);
     await render();
 
     const field = container.querySelector("textarea");
@@ -294,6 +308,55 @@ describe("App", () => {
     expect(container.textContent).toContain("shadowsocks");
     expect(container.textContent).toContain("edge.example.com:8388");
     expect(button("连接").disabled).toBe(false);
+    expect(
+      container.querySelector("[aria-label='节点列表']")?.textContent,
+    ).toContain("Tokyo Edge");
+  });
+
+  it("lists persisted nodes and changes the selection", async () => {
+    const osaka = {
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Osaka",
+      port: 9000,
+      protocol: "shadowsocks" as const,
+      server: "osaka.example.com",
+    };
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
+    selectNodeMock.mockResolvedValue({ ...SELECTED, node: osaka });
+    await render();
+
+    const select = container.querySelector<HTMLButtonElement>(
+      "[aria-label='选择 Osaka']",
+    );
+    if (!select) {
+      throw new Error("no Osaka selection button");
+    }
+    await act(async () => select.click());
+
+    expect(selectNodeMock).toHaveBeenCalledWith(osaka.id);
+    expect(container.textContent).toContain("osaka.example.com:9000");
+  });
+
+  it("deletes a persisted node", async () => {
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadNodesMock
+      .mockResolvedValueOnce([SELECTED.node])
+      .mockResolvedValueOnce([]);
+    deleteNodeMock.mockResolvedValue(IDLE);
+    await render();
+
+    const remove = container.querySelector<HTMLButtonElement>(
+      "[aria-label='删除 Tokyo Edge']",
+    );
+    if (!remove) {
+      throw new Error("no Tokyo deletion button");
+    }
+    await act(async () => remove.click());
+
+    expect(deleteNodeMock).toHaveBeenCalledWith(SELECTED.node?.id);
+    expect(container.querySelector("[aria-label='节点列表']")).toBeNull();
+    expect(container.textContent).toContain("尚未导入节点");
   });
 
   it("refuses to import a blank sharing URI", async () => {

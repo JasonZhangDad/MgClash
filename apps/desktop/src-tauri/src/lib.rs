@@ -13,10 +13,12 @@ use std::time::{Duration, Instant, SystemTime};
 
 use magies_platform::network_path::NetworkPathReader;
 use magies_platform::{TargetPlatform, TunAvailability};
+use magies_profiles::SqliteManualNodeStore;
 use magies_session::{DesktopSession, NetworkWatcher, TcpHealthProbe};
 use magies_storage::PlatformSecretStore;
 use serde::Serialize;
 use tauri::{Manager, State};
+use uuid::Uuid;
 
 use crate::core_control::{LazySingBoxControl, describe};
 use crate::diagnostics::DiagnosticBundle;
@@ -197,6 +199,59 @@ fn session_import_node(
     clippy::needless_pass_by_value,
     reason = "Tauri commands receive State by value"
 )]
+fn session_nodes(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::session::NodeSummary>, CommandError> {
+    state
+        .service()
+        .nodes()
+        .map_err(|error| command_error(&error))
+}
+
+fn parse_node_id(id: &str) -> Result<Uuid, CommandError> {
+    Uuid::parse_str(id).map_err(|error| CommandError {
+        code: "invalid_node_id",
+        message: format!("invalid node identifier: {error}"),
+    })
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
+fn session_select_node(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<SessionStatus, CommandError> {
+    let id = parse_node_id(&id)?;
+    state
+        .service()
+        .select_node(id)
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
+fn session_delete_node(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<SessionStatus, CommandError> {
+    let id = parse_node_id(&id)?;
+    state
+        .service()
+        .delete_node(id)
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State by value"
+)]
 fn session_connect(state: State<'_, AppState>) -> Result<SessionStatus, CommandError> {
     let startup_status = state
         .system_proxy
@@ -304,7 +359,8 @@ pub fn run() {
                 system_proxy.clone(),
                 runtime_directory,
             );
-            let service = Arc::new(Mutex::new(SessionService::new(session, defaults)));
+            let nodes = SqliteManualNodeStore::open(data_directory.join("nodes.sqlite"))?;
+            let service = Arc::new(Mutex::new(SessionService::new(session, defaults, nodes)?));
             spawn_recovery_loop(
                 service.clone(),
                 TcpHealthProbe::new(health_address, PROBE_TIMEOUT),
@@ -320,6 +376,9 @@ pub fn run() {
             platform_summary,
             session_status,
             session_import_node,
+            session_nodes,
+            session_select_node,
+            session_delete_node,
             session_connect,
             session_disconnect,
             system_proxy_startup_status,
@@ -333,7 +392,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_system_proxy_ready, platform_summary};
+    use super::{ensure_system_proxy_ready, parse_node_id, platform_summary};
     use crate::platform_proxy::SystemProxyStartupStatus;
 
     #[test]
@@ -348,5 +407,12 @@ mod tests {
         let error =
             ensure_system_proxy_ready(SystemProxyStartupStatus::RestoreRequired).unwrap_err();
         assert_eq!(error.code, "system_proxy_recovery_required");
+    }
+
+    #[test]
+    fn node_commands_reject_an_invalid_identifier() {
+        let error = parse_node_id("not-a-uuid").unwrap_err();
+
+        assert_eq!(error.code, "invalid_node_id");
     }
 }
