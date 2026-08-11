@@ -373,6 +373,94 @@ impl SqliteSubscriptionStore {
         Ok(nodes)
     }
 
+    /// Loads every enabled node owned by an enabled subscription.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when a database row is unreadable or corrupt.
+    pub fn active_nodes(&self) -> Result<Vec<ProxyNode>, SubscriptionTransactionError> {
+        let mut statement = self.connection.prepare(
+            "SELECT n.id, n.name, n.protocol, n.server, n.port, n.credential_ref,
+                    n.transport_json, n.tls_json, n.udp_enabled, n.subscription_id,
+                    n.group_id, n.latency_ms, n.last_tested_at, n.enabled
+             FROM nodes n
+             JOIN subscriptions s ON s.id = n.subscription_id
+             WHERE n.enabled = 1 AND s.enabled = 1
+             ORDER BY s.rowid, n.rowid",
+        )?;
+        let mut rows = statement.query([])?;
+        let mut nodes = Vec::new();
+        while let Some(row) = rows.next()? {
+            nodes.push(decode_node(row)?);
+        }
+        Ok(nodes)
+    }
+
+    /// Persists one enabled subscription node as the desktop selection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SubscriptionTransactionError::NodeNotFound`] when the node or
+    /// its subscription is disabled or absent.
+    pub fn select_node(&mut self, id: Uuid) -> Result<ProxyNode, SubscriptionTransactionError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let node = {
+            let mut statement = transaction.prepare(
+                "SELECT n.id, n.name, n.protocol, n.server, n.port, n.credential_ref,
+                        n.transport_json, n.tls_json, n.udp_enabled, n.subscription_id,
+                        n.group_id, n.latency_ms, n.last_tested_at, n.enabled
+                 FROM nodes n
+                 JOIN subscriptions s ON s.id = n.subscription_id
+                 WHERE n.id = ?1 AND n.enabled = 1 AND s.enabled = 1",
+            )?;
+            let mut rows = statement.query([id.to_string()])?;
+            rows.next()?
+                .map(decode_node)
+                .transpose()?
+                .ok_or(SubscriptionTransactionError::NodeNotFound { id })?
+        };
+        transaction.execute(
+            "INSERT INTO subscription_node_selection (singleton, node_id)
+             VALUES (1, ?1)
+             ON CONFLICT(singleton) DO UPDATE SET node_id = excluded.node_id",
+            [id.to_string()],
+        )?;
+        transaction.commit()?;
+        Ok(node)
+    }
+
+    /// Loads the selected enabled subscription node, if it still exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when the selected database row is unreadable.
+    pub fn selected_node(&self) -> Result<Option<ProxyNode>, SubscriptionTransactionError> {
+        let mut statement = self.connection.prepare(
+            "SELECT n.id, n.name, n.protocol, n.server, n.port, n.credential_ref,
+                    n.transport_json, n.tls_json, n.udp_enabled, n.subscription_id,
+                    n.group_id, n.latency_ms, n.last_tested_at, n.enabled
+             FROM subscription_node_selection selected
+             JOIN nodes n ON n.id = selected.node_id
+             JOIN subscriptions s ON s.id = n.subscription_id
+             WHERE selected.singleton = 1 AND n.enabled = 1 AND s.enabled = 1",
+        )?;
+        let mut rows = statement.query([])?;
+        rows.next()?.map(decode_node).transpose()
+    }
+
+    /// Clears the persisted subscription-node selection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when the selection cannot be removed.
+    pub fn clear_selected_node(&self) -> Result<(), SubscriptionTransactionError> {
+        self.connection
+            .execute("DELETE FROM subscription_node_selection", [])?;
+        Ok(())
+    }
+
     /// Loads the validators and last successful update time for a subscription.
     ///
     /// # Errors
@@ -431,7 +519,11 @@ impl SqliteSubscriptionStore {
                 updated_at INTEGER NOT NULL
              );
              CREATE INDEX IF NOT EXISTS nodes_subscription_id
-             ON nodes(subscription_id);",
+             ON nodes(subscription_id);
+             CREATE TABLE IF NOT EXISTS subscription_node_selection (
+                singleton INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),
+                node_id TEXT NOT NULL
+             );",
         )?;
         Ok(Self { connection })
     }
@@ -451,6 +543,8 @@ pub enum SubscriptionTransactionError {
     DuplicateNodeId { node_id: Uuid },
     #[error("subscription {id} does not exist")]
     SubscriptionNotFound { id: Uuid },
+    #[error("enabled subscription node {id} does not exist")]
+    NodeNotFound { id: Uuid },
     #[error("subscription database operation failed")]
     Database { source: rusqlite::Error },
     #[error("failed to serialize subscription node {field}")]
