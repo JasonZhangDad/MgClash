@@ -1,3 +1,5 @@
+use std::num::NonZeroU16;
+
 use magies_domain::{CoreType, ProxyNode};
 use magies_routing::{RouteProfile, SingBoxRouteConfigGenerator};
 use serde_json::{Value, json};
@@ -15,6 +17,7 @@ pub struct SingBoxRuntimeProfile<'a> {
     route: &'a RouteProfile,
     socks: LocalSocksProfile,
     http: LocalHttpProfile,
+    clash_api_port: Option<NonZeroU16>,
     tun: Option<&'a TunProfile>,
     dns_hijack: bool,
 }
@@ -39,6 +42,7 @@ impl<'a> SingBoxRuntimeProfile<'a> {
             route,
             socks: LocalSocksProfile::default(),
             http: LocalHttpProfile::default(),
+            clash_api_port: None,
             tun: None,
             dns_hijack: false,
         }
@@ -52,6 +56,7 @@ impl<'a> SingBoxRuntimeProfile<'a> {
             route,
             socks: LocalSocksProfile::default(),
             http: LocalHttpProfile::default(),
+            clash_api_port: None,
             tun: None,
             dns_hijack: false,
         }
@@ -72,8 +77,27 @@ impl<'a> SingBoxRuntimeProfile<'a> {
                 port: socks.port().get(),
             });
         }
+        if let Some(port) = self
+            .clash_api_port
+            .filter(|port| *port == socks.port() || *port == http.port())
+        {
+            return Err(RuntimeConfigError::DuplicateLocalPort { port: port.get() });
+        }
         self.socks = socks;
         self.http = http;
+        Ok(self)
+    }
+
+    /// Enables the loopback-only Clash API used for live traffic samples.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when the API would reuse a local proxy port.
+    pub fn with_clash_api_port(mut self, port: NonZeroU16) -> Result<Self, RuntimeConfigError> {
+        if port == self.socks.port() || port == self.http.port() {
+            return Err(RuntimeConfigError::DuplicateLocalPort { port: port.get() });
+        }
+        self.clash_api_port = Some(port);
         Ok(self)
     }
 
@@ -127,16 +151,22 @@ impl SingBoxRuntimeConfigGenerator {
         route["auto_detect_interface"] = Value::Bool(true);
         route["default_domain_resolver"] = Value::String(profile.dns.final_server().to_owned());
 
-        Ok(GeneratedCoreConfig::from_json(
-            CoreType::SingBox,
-            json!({
-                "log": { "level": "warn" },
-                "dns": SingBoxDnsConfigGenerator::generate(profile.dns).json(),
-                "inbounds": inbounds,
-                "outbounds": outbounds,
-                "route": route
-            }),
-        ))
+        let mut config = json!({
+            "log": { "level": "warn" },
+            "dns": SingBoxDnsConfigGenerator::generate(profile.dns).json(),
+            "inbounds": inbounds,
+            "outbounds": outbounds,
+            "route": route
+        });
+        if let Some(port) = profile.clash_api_port {
+            config["experimental"] = json!({
+                "clash_api": {
+                    "external_controller": format!("127.0.0.1:{}", port.get())
+                }
+            });
+        }
+
+        Ok(GeneratedCoreConfig::from_json(CoreType::SingBox, config))
     }
 }
 

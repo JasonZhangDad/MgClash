@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadPlatformSummaryMock = vi.hoisted(() => vi.fn());
 const loadSessionStatusMock = vi.hoisted(() => vi.fn());
+const loadTrafficMock = vi.hoisted(() => vi.fn());
 const loadNodesMock = vi.hoisted(() => vi.fn());
 const importNodeMock = vi.hoisted(() => vi.fn());
 const selectNodeMock = vi.hoisted(() => vi.fn());
@@ -42,6 +43,7 @@ vi.mock("./session", async () => {
     deleteNode: deleteNodeMock,
     loadNodes: loadNodesMock,
     loadSessionStatus: loadSessionStatusMock,
+    loadTraffic: loadTrafficMock,
     loadSystemProxyStartupStatus: loadSystemProxyStartupStatusMock,
     recoverSystemProxy: recoverSystemProxyMock,
     selectNode: selectNodeMock,
@@ -110,6 +112,7 @@ describe("App", () => {
   beforeEach(() => {
     loadPlatformSummaryMock.mockReset();
     loadSessionStatusMock.mockReset();
+    loadTrafficMock.mockReset();
     loadNodesMock.mockReset();
     importNodeMock.mockReset();
     selectNodeMock.mockReset();
@@ -135,6 +138,10 @@ describe("App", () => {
       tunAvailability: "unavailableInUnsignedBuild",
     });
     loadSessionStatusMock.mockResolvedValue(IDLE);
+    loadTrafficMock.mockResolvedValue({
+      downloadBytesPerSecond: 0,
+      uploadBytesPerSecond: 0,
+    });
     loadNodesMock.mockResolvedValue([]);
     loadSystemProxyStartupStatusMock.mockResolvedValue("clean");
     recoverSystemProxyMock.mockResolvedValue("clean");
@@ -260,6 +267,47 @@ describe("App", () => {
     expect(container.textContent).toContain("sing-box");
     expect(container.textContent).toContain("macos-x86_64");
     expect(button("连接").disabled).toBe(true);
+    expect(loadTrafficMock).not.toHaveBeenCalled();
+  });
+
+  it("shows live upload and download rates while connected", async () => {
+    loadSessionStatusMock.mockResolvedValue(CONNECTED);
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    loadTrafficMock.mockResolvedValue({
+      downloadBytesPerSecond: 2_048,
+      uploadBytesPerSecond: 1_048_576,
+    });
+
+    await render();
+
+    expect(loadTrafficMock).toHaveBeenCalledOnce();
+    expect(
+      container.querySelector("[aria-label='下载速率']")?.textContent,
+    ).toBe("2.0 KB/s");
+    expect(
+      container.querySelector("[aria-label='上传速率']")?.textContent,
+    ).toBe("1.0 MB/s");
+  });
+
+  it("keeps background traffic failures out of the user alert", async () => {
+    loadSessionStatusMock.mockResolvedValue(CONNECTED);
+    loadTrafficMock.mockRejectedValue({
+      code: "traffic_sample_timeout",
+      message: "traffic sample timed out",
+    });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await render();
+
+      expect(container.querySelector("[role='alert']")).toBeNull();
+      expect(warning).toHaveBeenCalledWith(
+        "traffic refresh failed",
+        expect.anything(),
+      );
+    } finally {
+      warning.mockRestore();
+    }
   });
 
   it("reports TUN as unavailable in an unsigned macOS build", async () => {

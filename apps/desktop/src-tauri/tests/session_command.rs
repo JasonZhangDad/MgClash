@@ -276,6 +276,24 @@ fn exposes_a_url_test_target_only_while_connected() {
 }
 
 #[test]
+fn exposes_the_loopback_traffic_api_only_while_connected() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+
+    assert_eq!(
+        service.traffic_api_address().unwrap_err().code(),
+        "session_inactive"
+    );
+
+    service.connect().unwrap();
+
+    assert_eq!(
+        service.traffic_api_address().unwrap(),
+        "127.0.0.1:9090".parse().unwrap()
+    );
+}
+
+#[test]
 fn connecting_without_an_imported_node_fails_before_touching_the_core() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let (mut service, _runtime, _fail_start) = service_with_events(&events);
@@ -472,6 +490,7 @@ fn v01_defaults_use_the_documented_loopback_ports() {
 
     assert_eq!(defaults.socks, LocalSocksProfile::default());
     assert_eq!(defaults.http, LocalHttpProfile::default());
+    assert_eq!(defaults.clash_api_port.get(), 9_090);
     assert!(defaults.system_proxy);
 }
 
@@ -547,11 +566,9 @@ impl CoreSessionControl for FakeCore {
 
     fn start(&mut self, config_path: &Path) -> Result<Self::Output, Self::Error> {
         self.events.lock().unwrap().push("core_start");
-        assert!(
-            fs::read_to_string(config_path)
-                .unwrap()
-                .contains("runtime-secret")
-        );
+        let config = fs::read_to_string(config_path).unwrap();
+        assert!(config.contains("runtime-secret"));
+        assert!(config.contains("127.0.0.1:9090"));
         if self.fail_start.load(Ordering::Relaxed) {
             Err(FakeError("core start failed"))
         } else {
