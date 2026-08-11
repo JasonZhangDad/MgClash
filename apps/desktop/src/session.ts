@@ -69,6 +69,10 @@ export function testNode(id: string): Promise<NodeTestResult> {
   return invoke<NodeTestResult>("session_test_node", { id });
 }
 
+export function testUrl(url: string): Promise<NodeTestResult> {
+  return invoke<NodeTestResult>("session_url_test", { url });
+}
+
 export async function testAllNodes(
   ids: string[],
   onResult: (result: NodeTestResult) => void,

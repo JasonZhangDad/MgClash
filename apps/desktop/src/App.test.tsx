@@ -12,6 +12,7 @@ const selectNodeMock = vi.hoisted(() => vi.fn());
 const deleteNodeMock = vi.hoisted(() => vi.fn());
 const testNodeMock = vi.hoisted(() => vi.fn());
 const testAllNodesMock = vi.hoisted(() => vi.fn());
+const testUrlMock = vi.hoisted(() => vi.fn());
 const connectSessionMock = vi.hoisted(() => vi.fn());
 const disconnectSessionMock = vi.hoisted(() => vi.fn());
 const exportDiagnosticsMock = vi.hoisted(() => vi.fn());
@@ -46,6 +47,7 @@ vi.mock("./session", async () => {
     selectNode: selectNodeMock,
     testAllNodes: testAllNodesMock,
     testNode: testNodeMock,
+    testUrl: testUrlMock,
   };
 });
 
@@ -114,6 +116,7 @@ describe("App", () => {
     deleteNodeMock.mockReset();
     testNodeMock.mockReset();
     testAllNodesMock.mockReset();
+    testUrlMock.mockReset();
     connectSessionMock.mockReset();
     disconnectSessionMock.mockReset();
     exportDiagnosticsMock.mockReset();
@@ -472,6 +475,76 @@ describe("App", () => {
     expect(cancelled()).toBe(true);
     await act(async () => release());
     expect(button("全部测速").disabled).toBe(false);
+  });
+
+  it("tests a configurable URL through the connected node and remembers it", async () => {
+    loadSessionStatusMock.mockResolvedValue(CONNECTED);
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    testUrlMock.mockResolvedValue({
+      id: SELECTED.node?.id,
+      latencyMs: 55,
+      status: "success",
+    });
+    await render();
+
+    const field = container.querySelector<HTMLInputElement>(
+      "[aria-label='URL 测试地址']",
+    );
+    if (!field) {
+      throw new Error("URL test address field is missing");
+    }
+    expect(field.value).toBe("https://www.gstatic.com/generate_204");
+    await act(async () => typeInput(" https://probe.example/204 ", field));
+    await act(async () => button("URL 测试").click());
+
+    expect(testUrlMock).toHaveBeenCalledWith("https://probe.example/204");
+    expect(localStorage.getItem("mgclash.urlTestAddress")).toBe(
+      "https://probe.example/204",
+    );
+    expect(
+      container.querySelector("[aria-label='节点列表']")?.textContent,
+    ).toContain("55 ms");
+
+    act(() => root.unmount());
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await render();
+    expect(
+      container.querySelector<HTMLInputElement>(
+        "[aria-label='URL 测试地址']",
+      )?.value,
+    ).toBe("https://probe.example/204");
+  });
+
+  it("does not remember a URL rejected by the backend", async () => {
+    loadSessionStatusMock.mockResolvedValue(CONNECTED);
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    testUrlMock.mockRejectedValue({
+      code: "invalid_url_test",
+      message: "URL 测试地址无效",
+    });
+    await render();
+
+    const field = container.querySelector<HTMLInputElement>(
+      "[aria-label='URL 测试地址']",
+    );
+    if (!field) {
+      throw new Error("URL test address field is missing");
+    }
+    await act(async () => typeInput("file:///tmp/probe", field));
+    await act(async () => button("URL 测试").click());
+
+    expect(localStorage.getItem("mgclash.urlTestAddress")).toBeNull();
+    expect(container.querySelector("[role='alert']")?.textContent).toContain(
+      "URL 测试地址无效",
+    );
+  });
+
+  it("requires a connected node for URL testing", async () => {
+    await render();
+
+    expect(button("URL 测试").disabled).toBe(true);
   });
 
   it("deletes a persisted node", async () => {

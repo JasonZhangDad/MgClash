@@ -19,6 +19,7 @@ import {
   selectNode,
   testAllNodes,
   testNode,
+  testUrl,
   type NodeTestResult,
   type SessionStatus,
 } from "./session";
@@ -77,6 +78,22 @@ describe("session commands", () => {
     await expect(testNode(result.id)).resolves.toEqual(result);
     expect(invokeMock).toHaveBeenCalledWith("session_test_node", {
       id: result.id,
+    });
+  });
+
+  it("tests a URL through the running local HTTP proxy", async () => {
+    const result: NodeTestResult = {
+      id: "00000000-0000-0000-0000-000000000001",
+      latencyMs: 55,
+      status: "success",
+    };
+    invokeMock.mockResolvedValue(result);
+
+    await expect(testUrl("https://www.gstatic.com/generate_204")).resolves.toEqual(
+      result,
+    );
+    expect(invokeMock).toHaveBeenCalledWith("session_url_test", {
+      url: "https://www.gstatic.com/generate_204",
     });
   });
 

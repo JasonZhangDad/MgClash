@@ -16,6 +16,7 @@ import {
   selectNode,
   testAllNodes,
   testNode,
+  testUrl,
   type NodeSummary,
   type NodeTestResult,
   type SessionStatus,
@@ -47,6 +48,8 @@ const TUN_LABEL: Record<PlatformSummary["tunAvailability"], string> = {
  * launch, not only on the download page.
  */
 const UNSIGNED_NOTICE_KEY = "mgclash.unsignedNoticeDismissed";
+const URL_TEST_ADDRESS_KEY = "mgclash.urlTestAddress";
+const DEFAULT_URL_TEST_ADDRESS = "https://www.gstatic.com/generate_204";
 
 const TUN_NOTICE: Record<PlatformSummary["tunAvailability"], string> = {
   requiresElevation: "TUN 需要管理员权限才能启用。",
@@ -61,6 +64,14 @@ function noticeWasDismissed(): boolean {
     // A webview with storage disabled should still start; showing the notice
     // again is the safe direction to fail.
     return false;
+  }
+}
+
+function savedUrlTestAddress(): string {
+  try {
+    return localStorage.getItem(URL_TEST_ADDRESS_KEY)?.trim() || DEFAULT_URL_TEST_ADDRESS;
+  } catch {
+    return DEFAULT_URL_TEST_ADDRESS;
   }
 }
 
@@ -92,6 +103,7 @@ export default function App() {
   const [systemProxyStartup, setSystemProxyStartup] =
     useState<SystemProxyStartupStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [urlTestAddress, setUrlTestAddress] = useState(savedUrlTestAddress);
   const [nodeTests, setNodeTests] = useState<
     Record<string, NodeTestResult | { status: "testing" }>
   >({});
@@ -272,6 +284,42 @@ export default function App() {
   const onCancelNodeTests = useCallback(() => {
     cancelNodeTests.current = true;
   }, []);
+
+  const onTestUrl = useCallback(async () => {
+    const address = urlTestAddress.trim();
+    const selectedNode = status?.node;
+    if (address === "") {
+      setError("请填写 URL 测试地址");
+      return;
+    }
+    if (!status?.connected || selectedNode === null || selectedNode === undefined) {
+      setError("请先连接节点");
+      return;
+    }
+
+    setUrlTestAddress(address);
+    setError(null);
+    setNodeTests((current) => ({
+      ...current,
+      [selectedNode.id]: { status: "testing" },
+    }));
+    try {
+      const result = await testUrl(address);
+      try {
+        localStorage.setItem(URL_TEST_ADDRESS_KEY, address);
+      } catch {
+        // The test can still run when webview storage is unavailable.
+      }
+      setNodeTests((current) => ({ ...current, [result.id]: result }));
+    } catch (failure: unknown) {
+      setNodeTests((current) => {
+        const next = { ...current };
+        delete next[selectedNode.id];
+        return next;
+      });
+      setError(describeFailure(failure));
+    }
+  }, [status, urlTestAddress]);
 
   const resetSubscriptionForm = useCallback(() => {
     setEditingSubscriptionId(null);
@@ -520,7 +568,10 @@ export default function App() {
           <button
             type="button"
             disabled={
-              busy || node === null || systemProxyStartup !== "clean"
+              busy ||
+              nodeTestInProgress ||
+              node === null ||
+              systemProxyStartup !== "clean"
             }
             onClick={() =>
               void run(connected ? disconnectSession : connectSession)
@@ -531,6 +582,25 @@ export default function App() {
         </div>
 
         <h2>节点</h2>
+
+        <div className="url-test">
+          <label>
+            URL 测试地址
+            <input
+              aria-label="URL 测试地址"
+              value={urlTestAddress}
+              disabled={busy || nodeTestInProgress}
+              onChange={(event) => setUrlTestAddress(event.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            disabled={busy || nodeTestInProgress || !connected || node === null}
+            onClick={() => void onTestUrl()}
+          >
+            URL 测试
+          </button>
+        </div>
 
         <div className="actions">
           {testingAllNodes ? (

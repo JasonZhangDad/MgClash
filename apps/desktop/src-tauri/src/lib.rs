@@ -7,6 +7,7 @@ pub mod platform_proxy;
 pub mod session;
 mod subscriptions;
 mod tray;
+pub mod url_test;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -34,6 +35,7 @@ use crate::subscriptions::{
     DesktopSubscriptionController, DesktopSubscriptionError, DesktopSubscriptionSummary,
 };
 use crate::tray::{TrayAction, TrayUi, menu_model};
+use crate::url_test::{UrlTestError, probe_url};
 
 /// How long a started Core has to accept connections on its local SOCKS port.
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -59,6 +61,9 @@ const TRAY_REFRESH_TICK: Duration = Duration::from_secs(3);
 
 /// A direct node endpoint test has five seconds to complete, including DNS.
 const NODE_TEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A real URL test uses the same per-node timeout as TCP Connect.
+const URL_TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -108,6 +113,37 @@ fn node_test_result(id: Uuid, result: &Result<u32, TcpLatencyError>) -> NodeTest
             status: NodeTestStatus::Failed,
             latency_ms: None,
         },
+    }
+}
+
+fn url_test_result(
+    id: Uuid,
+    result: &Result<u32, UrlTestError>,
+) -> Result<NodeTestResult, CommandError> {
+    match result {
+        Ok(latency_ms) => Ok(NodeTestResult {
+            id,
+            status: NodeTestStatus::Success,
+            latency_ms: Some(*latency_ms),
+        }),
+        Err(UrlTestError::TimedOut) => Ok(NodeTestResult {
+            id,
+            status: NodeTestStatus::Timeout,
+            latency_ms: None,
+        }),
+        Err(
+            error @ (UrlTestError::InvalidTimeout
+            | UrlTestError::InvalidUrl(_)
+            | UrlTestError::UnsupportedScheme { .. }),
+        ) => Err(CommandError {
+            code: "invalid_url_test",
+            message: describe(error),
+        }),
+        Err(_) => Ok(NodeTestResult {
+            id,
+            status: NodeTestStatus::Failed,
+            latency_ms: None,
+        }),
     }
 }
 
@@ -503,6 +539,28 @@ async fn session_test_node(
     Ok(result)
 }
 
+#[tauri::command]
+async fn session_url_test(
+    url: String,
+    state: State<'_, AppState>,
+) -> Result<NodeTestResult, CommandError> {
+    let target = state
+        .service()
+        .url_test_target()
+        .map_err(|error| command_error(&error))?;
+    let proxy_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), target.http_port);
+    let probe = probe_url(&url, proxy_address, URL_TEST_TIMEOUT).await;
+    if let Err(error) = &probe {
+        eprintln!("URL test did not succeed: {}", describe(error));
+    }
+    let result = url_test_result(target.node_id, &probe)?;
+    state
+        .service()
+        .record_node_latency(target.node_id, result.latency_ms, current_timestamp())
+        .map_err(|error| command_error(&error))?;
+    Ok(result)
+}
+
 fn parse_node_id(id: &str) -> Result<Uuid, CommandError> {
     Uuid::parse_str(id).map_err(|error| CommandError {
         code: "invalid_node_id",
@@ -842,6 +900,7 @@ pub fn run() {
             session_import_node,
             session_nodes,
             session_test_node,
+            session_url_test,
             session_select_node,
             session_delete_node,
             session_connect,
@@ -874,10 +933,11 @@ pub fn run() {
 mod tests {
     use super::{
         NodeTestStatus, ensure_subscription_mutation_ready, ensure_system_proxy_ready,
-        node_test_result, parse_node_id, parse_subscription_id, platform_summary,
+        node_test_result, parse_node_id, parse_subscription_id, platform_summary, url_test_result,
     };
     use crate::node_latency::TcpLatencyError;
     use crate::platform_proxy::SystemProxyStartupStatus;
+    use crate::url_test::UrlTestError;
     use std::io;
     use uuid::Uuid;
 
@@ -923,6 +983,39 @@ mod tests {
         );
         assert_eq!(failure.status, NodeTestStatus::Failed);
         assert_eq!(failure.latency_ms, None);
+    }
+
+    #[test]
+    fn url_test_results_reject_settings_and_classify_network_outcomes() {
+        let id = Uuid::nil();
+
+        assert_eq!(
+            url_test_result(id, &Ok(35)).unwrap().status,
+            NodeTestStatus::Success
+        );
+        assert_eq!(
+            url_test_result(id, &Err(UrlTestError::TimedOut))
+                .unwrap()
+                .status,
+            NodeTestStatus::Timeout
+        );
+        assert_eq!(
+            url_test_result(id, &Err(UrlTestError::HttpStatus { status: 503 }))
+                .unwrap()
+                .status,
+            NodeTestStatus::Failed
+        );
+        assert_eq!(
+            url_test_result(
+                id,
+                &Err(UrlTestError::UnsupportedScheme {
+                    scheme: "file".to_owned(),
+                }),
+            )
+            .unwrap_err()
+            .code,
+            "invalid_url_test"
+        );
     }
 
     #[test]
