@@ -18,6 +18,7 @@ import {
   loadSystemProxyStartupStatus,
   recoverSystemProxy,
   selectNode,
+  setRoutingMode,
   testAllNodes,
   testNode,
   testUrl,
@@ -189,6 +190,14 @@ describe("session commands", () => {
 
     expect(invokeMock).toHaveBeenNthCalledWith(1, "session_connect");
     expect(invokeMock).toHaveBeenNthCalledWith(2, "session_disconnect");
+  });
+
+  it("changes the persisted routing mode through its own command", async () => {
+    await setRoutingMode("rule");
+
+    expect(invokeMock).toHaveBeenCalledWith("session_set_routing_mode", {
+      mode: "rule",
+    });
   });
 
   it("exports diagnostics through its own command", async () => {

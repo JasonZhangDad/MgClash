@@ -4,6 +4,7 @@ pub mod core_control;
 pub mod diagnostics;
 pub mod node_latency;
 pub mod platform_proxy;
+pub mod routing_mode;
 pub mod session;
 mod subscriptions;
 pub mod traffic;
@@ -32,6 +33,7 @@ use crate::core_control::{LazySingBoxControl, describe};
 use crate::diagnostics::DiagnosticBundle;
 use crate::node_latency::{TcpLatencyError, probe_tcp};
 use crate::platform_proxy::{PlatformProxyControl, PlatformProxyError, SystemProxyStartupStatus};
+use crate::routing_mode::{SqliteRoutingModeStore, parse_routing_mode};
 use crate::session::{SessionCommandError, SessionDefaults, SessionService, SessionStatus};
 use crate::subscriptions::{
     DesktopSubscriptionController, DesktopSubscriptionError, DesktopSubscriptionSummary,
@@ -414,6 +416,12 @@ fn handle_background_tray_action(app: &AppHandle, action: TrayAction) {
     let result = match action {
         TrayAction::Open | TrayAction::Quit => Ok(()),
         TrayAction::Toggle => toggle_from_tray(app),
+        TrayAction::SetRoutingMode(mode) => app
+            .state::<AppState>()
+            .service()
+            .set_routing_mode(mode)
+            .map(|_| ())
+            .map_err(|error| command_error(&error)),
         TrayAction::SelectNode(id) => app
             .state::<AppState>()
             .service()
@@ -567,6 +575,25 @@ fn ensure_subscription_mutation_ready(connected: bool) -> Result<(), CommandErro
 )]
 fn session_status(state: State<'_, AppState>) -> SessionStatus {
     state.service().status()
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
+fn session_set_routing_mode(
+    mode: String,
+    state: State<'_, AppState>,
+) -> Result<SessionStatus, CommandError> {
+    let mode = parse_routing_mode(&mode).map_err(|error| CommandError {
+        code: "invalid_routing_mode",
+        message: error.to_string(),
+    })?;
+    state
+        .service()
+        .set_routing_mode(mode)
+        .map_err(|error| command_error(&error))
 }
 
 #[tauri::command]
@@ -956,6 +983,7 @@ pub fn run() {
                 defaults,
                 nodes,
                 SqliteSubscriptionStore::open(&node_database)?,
+                SqliteRoutingModeStore::open(&node_database)?,
             )?));
             let initial_tray_model = {
                 let service = lock(&service);
@@ -994,6 +1022,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             platform_summary,
             session_status,
+            session_set_routing_mode,
             session_import_node,
             session_nodes,
             session_test_node,

@@ -38,11 +38,13 @@ export interface SessionStatus {
   connected: boolean;
   core: string;
   httpPort: number;
-  mode: string;
+  mode: RoutingMode;
   node: NodeSummary | null;
   socksPort: number;
   systemProxy: boolean;
 }
+
+export type RoutingMode = "direct" | "global" | "rule";
 
 /** The shape every failed Tauri command returns. */
 export interface CommandError {
@@ -63,6 +65,10 @@ export function isCommandError(value: unknown): value is CommandError {
 
 export function loadSessionStatus(): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_status");
+}
+
+export function setRoutingMode(mode: RoutingMode): Promise<SessionStatus> {
+  return invoke<SessionStatus>("session_set_routing_mode", { mode });
 }
 
 export function importNode(uri: string): Promise<SessionStatus> {
