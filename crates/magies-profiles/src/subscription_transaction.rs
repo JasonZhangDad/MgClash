@@ -2,7 +2,8 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use magies_domain::{
-    CredentialRef, NodeModelError, ProxyNode, ProxyProtocol, Subscription, TimestampMillis,
+    CredentialRef, NodeModelError, ProxyNode, ProxyProtocol, Subscription, SubscriptionModelError,
+    TimestampMillis,
 };
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 use serde::Serialize;
@@ -72,6 +73,12 @@ pub struct SubscriptionState {
     pub last_updated_at: Option<TimestampMillis>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeletedSubscription {
+    pub subscription: Subscription,
+    pub nodes: Vec<ProxyNode>,
+}
+
 #[derive(Debug)]
 pub struct SqliteSubscriptionStore {
     connection: Connection,
@@ -123,6 +130,141 @@ impl SqliteSubscriptionStore {
             ],
         )?;
         Ok(())
+    }
+
+    /// Loads every subscription in insertion order.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed database or model error when a row cannot be read.
+    pub fn subscriptions(&self) -> Result<Vec<Subscription>, SubscriptionTransactionError> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, name, url_secret_ref, auto_update, update_interval,
+                    etag, last_modified, last_updated_at, enabled
+             FROM subscriptions ORDER BY rowid",
+        )?;
+        let mut rows = statement.query([])?;
+        let mut subscriptions = Vec::new();
+        while let Some(row) = rows.next()? {
+            subscriptions.push(decode_subscription(row)?);
+        }
+        Ok(subscriptions)
+    }
+
+    /// Loads one subscription by identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed database or model error when a row cannot be read.
+    pub fn subscription(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<Subscription>, SubscriptionTransactionError> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, name, url_secret_ref, auto_update, update_interval,
+                    etag, last_modified, last_updated_at, enabled
+             FROM subscriptions WHERE id = ?1",
+        )?;
+        let mut rows = statement.query([id.to_string()])?;
+        rows.next()?.map(decode_subscription).transpose()
+    }
+
+    /// Updates user-editable subscription settings without changing fetch state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SubscriptionTransactionError::SubscriptionNotFound`] when the
+    /// subscription is absent, or a database error when the update fails.
+    pub fn update_subscription_settings(
+        &self,
+        subscription: &Subscription,
+    ) -> Result<(), SubscriptionTransactionError> {
+        let updated = self.connection.execute(
+            "UPDATE subscriptions
+             SET name = ?1, auto_update = ?2, update_interval = ?3, enabled = ?4
+             WHERE id = ?5",
+            params![
+                subscription.name.as_str(),
+                subscription.auto_update,
+                i64::from(subscription.update_interval_minutes.get()),
+                subscription.enabled,
+                subscription.id.to_string(),
+            ],
+        )?;
+        ensure_subscription_updated(updated, subscription.id)
+    }
+
+    /// Records a successful not-modified fetch without replacing its nodes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SubscriptionTransactionError::SubscriptionNotFound`] when the
+    /// subscription is absent, or a database error when the update fails.
+    pub fn touch_subscription(
+        &self,
+        id: Uuid,
+        validators: &SubscriptionValidators,
+        updated_at: TimestampMillis,
+    ) -> Result<(), SubscriptionTransactionError> {
+        let updated = self.connection.execute(
+            "UPDATE subscriptions
+             SET etag = ?1, last_modified = ?2, last_updated_at = ?3
+             WHERE id = ?4",
+            params![
+                validators.etag(),
+                validators.last_modified(),
+                updated_at.get(),
+                id.to_string(),
+            ],
+        )?;
+        ensure_subscription_updated(updated, id)
+    }
+
+    /// Deletes a subscription and returns its metadata and cascaded nodes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SubscriptionTransactionError::SubscriptionNotFound`] when the
+    /// subscription is absent. Database and row-decoding failures roll back.
+    pub fn delete_subscription(
+        &mut self,
+        id: Uuid,
+    ) -> Result<DeletedSubscription, SubscriptionTransactionError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let subscription = {
+            let mut statement = transaction.prepare(
+                "SELECT id, name, url_secret_ref, auto_update, update_interval,
+                        etag, last_modified, last_updated_at, enabled
+                 FROM subscriptions WHERE id = ?1",
+            )?;
+            let mut rows = statement.query([id.to_string()])?;
+            rows.next()?
+                .map(decode_subscription)
+                .transpose()?
+                .ok_or(SubscriptionTransactionError::SubscriptionNotFound { id })?
+        };
+        let nodes = {
+            let mut statement = transaction.prepare(
+                "SELECT id, name, protocol, server, port, credential_ref,
+                        transport_json, tls_json, udp_enabled, subscription_id,
+                        group_id, latency_ms, last_tested_at, enabled
+                 FROM nodes WHERE subscription_id = ?1 ORDER BY id",
+            )?;
+            let mut rows = statement.query([id.to_string()])?;
+            let mut nodes = Vec::new();
+            while let Some(row) = rows.next()? {
+                nodes.push(decode_node(row)?);
+            }
+            nodes
+        };
+        transaction.execute("DELETE FROM subscriptions WHERE id = ?1", [id.to_string()])?;
+        transaction.commit()?;
+        Ok(DeletedSubscription {
+            subscription,
+            nodes,
+        })
     }
 
     /// Atomically replaces all nodes for a subscription and updates fetch metadata.
@@ -325,11 +467,43 @@ pub enum SubscriptionTransactionError {
     InvalidStoredProtocol { value: String },
     #[error("stored subscription node failed domain validation")]
     InvalidStoredNode { source: NodeModelError },
+    #[error("stored subscription failed domain validation")]
+    InvalidStoredSubscription { source: SubscriptionModelError },
     #[error("stored subscription node has invalid JSON in {column}")]
     InvalidStoredJson {
         column: &'static str,
         source: serde_json::Error,
     },
+}
+
+fn ensure_subscription_updated(
+    updated: usize,
+    id: Uuid,
+) -> Result<(), SubscriptionTransactionError> {
+    if updated == 0 {
+        Err(SubscriptionTransactionError::SubscriptionNotFound { id })
+    } else {
+        Ok(())
+    }
+}
+
+fn decode_subscription(row: &Row<'_>) -> Result<Subscription, SubscriptionTransactionError> {
+    let id = decode_uuid(&row.get::<_, String>(0)?, "id")?;
+    let url_secret_ref = CredentialRef::new(row.get::<_, String>(2)?)
+        .map_err(|source| SubscriptionTransactionError::InvalidStoredNode { source })?;
+    let mut subscription = Subscription::new(
+        id,
+        row.get::<_, String>(1)?,
+        url_secret_ref,
+        row.get::<_, u32>(4)?,
+    )
+    .map_err(|source| SubscriptionTransactionError::InvalidStoredSubscription { source })?;
+    subscription.auto_update = row.get(3)?;
+    subscription.etag = row.get(5)?;
+    subscription.last_modified = row.get(6)?;
+    subscription.last_updated_at = row.get::<_, Option<i64>>(7)?.map(TimestampMillis::new);
+    subscription.enabled = row.get(8)?;
+    Ok(subscription)
 }
 
 impl From<rusqlite::Error> for SubscriptionTransactionError {
