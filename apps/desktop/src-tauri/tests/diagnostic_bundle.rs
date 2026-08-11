@@ -8,11 +8,13 @@ use magies_desktop_lib::session::{NodeSummary, SessionStatus};
 use magies_domain::ProxyProtocol;
 use magies_profiles::REDACTED;
 use serde_json::Value;
+use uuid::Uuid;
 
 fn status() -> SessionStatus {
     SessionStatus {
         connected: true,
         node: Some(NodeSummary {
+            id: Uuid::nil(),
             name: "Tokyo Edge".to_owned(),
             protocol: ProxyProtocol::Shadowsocks,
             server: "edge.example.com".to_owned(),

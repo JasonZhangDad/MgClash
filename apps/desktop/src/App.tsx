@@ -3,14 +3,18 @@ import { useCallback, useEffect, useState } from "react";
 import { loadPlatformSummary, type PlatformSummary } from "./platform";
 import {
   connectSession,
+  deleteNode,
   dismissSystemProxyRecovery,
   disconnectSession,
   exportDiagnostics,
   importNode,
   isCommandError,
+  loadNodes,
   loadSessionStatus,
   loadSystemProxyStartupStatus,
   recoverSystemProxy,
+  selectNode,
+  type NodeSummary,
   type SessionStatus,
   type SystemProxyStartupStatus,
 } from "./session";
@@ -60,6 +64,7 @@ export default function App() {
   const [platform, setPlatform] = useState<PlatformSummary | null>(null);
   const [platformError, setPlatformError] = useState<string | null>(null);
   const [status, setStatus] = useState<SessionStatus | null>(null);
+  const [nodes, setNodes] = useState<NodeSummary[]>([]);
   const [uri, setUri] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [exportedTo, setExportedTo] = useState<string | null>(null);
@@ -73,6 +78,9 @@ export default function App() {
       setPlatformError(describeFailure(failure)),
     );
     loadSessionStatus().then(setStatus, (failure: unknown) =>
+      setError(describeFailure(failure)),
+    );
+    loadNodes().then(setNodes, (failure: unknown) =>
       setError(describeFailure(failure)),
     );
     loadSystemProxyStartupStatus().then(
@@ -145,14 +153,39 @@ export default function App() {
     setNoticeDismissed(true);
   }, []);
 
-  const onImport = useCallback(() => {
+  const onImport = useCallback(async () => {
     const sharingUri = uri.trim();
     if (sharingUri === "") {
       setError("请先粘贴分享链接");
       return;
     }
-    void run(() => importNode(sharingUri));
-  }, [run, uri]);
+    setBusy(true);
+    setError(null);
+    setExportedTo(null);
+    try {
+      setStatus(await importNode(sharingUri));
+      setNodes(await loadNodes());
+      setUri("");
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, [uri]);
+
+  const onDeleteNode = useCallback(async (id: string) => {
+    setBusy(true);
+    setError(null);
+    setExportedTo(null);
+    try {
+      setStatus(await deleteNode(id));
+      setNodes(await loadNodes());
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
 
   const connected = status?.connected ?? false;
   const node = status?.node ?? null;
@@ -276,19 +309,72 @@ export default function App() {
           </button>
         </div>
 
+        <h2>节点</h2>
+
+        {nodes.length === 0 ? (
+          <p className="hint">尚未导入节点</p>
+        ) : (
+          <table className="node-list" aria-label="节点列表">
+            <thead>
+              <tr>
+                <th>名称</th>
+                <th>协议</th>
+                <th>服务器</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {nodes.map((candidate) => {
+                const selected = candidate.id === node?.id;
+                return (
+                  <tr key={candidate.id}>
+                    <td>{candidate.name}</td>
+                    <td>{candidate.protocol}</td>
+                    <td>{`${candidate.server}:${candidate.port}`}</td>
+                    <td className="node-actions">
+                      <button
+                        type="button"
+                        aria-label={`选择 ${candidate.name}`}
+                        disabled={busy || connected || selected}
+                        onClick={() =>
+                          void run(() => selectNode(candidate.id))
+                        }
+                      >
+                        {selected ? "当前" : "选择"}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`删除 ${candidate.name}`}
+                        disabled={busy || connected}
+                        onClick={() => void onDeleteNode(candidate.id)}
+                      >
+                        删除
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+
         <h2>导入节点</h2>
 
         <textarea
           aria-label="分享链接"
           rows={3}
           value={uri}
-          disabled={busy}
+          disabled={busy || connected}
           placeholder="vless:// vmess:// trojan:// ss:// hysteria2://"
           onChange={(event) => setUri(event.target.value)}
         />
 
         <div className="actions">
-          <button type="button" disabled={busy} onClick={onImport}>
+          <button
+            type="button"
+            disabled={busy || connected}
+            onClick={() => void onImport()}
+          >
             导入
           </button>
         </div>

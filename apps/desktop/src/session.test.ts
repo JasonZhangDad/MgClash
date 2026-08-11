@@ -11,9 +11,12 @@ import {
   exportDiagnostics,
   importNode,
   isCommandError,
+  deleteNode,
+  loadNodes,
   loadSessionStatus,
   loadSystemProxyStartupStatus,
   recoverSystemProxy,
+  selectNode,
   type SessionStatus,
 } from "./session";
 
@@ -43,6 +46,20 @@ describe("session commands", () => {
 
     expect(invokeMock).toHaveBeenCalledWith("session_import_node", {
       uri: "ss://aes-128-gcm:secret@edge.example.com:8388",
+    });
+  });
+
+  it("lists, selects, and deletes persisted nodes", async () => {
+    await loadNodes();
+    await selectNode("00000000-0000-0000-0000-000000000001");
+    await deleteNode("00000000-0000-0000-0000-000000000002");
+
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "session_nodes");
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "session_select_node", {
+      id: "00000000-0000-0000-0000-000000000001",
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(3, "session_delete_node", {
+      id: "00000000-0000-0000-0000-000000000002",
     });
   });
 

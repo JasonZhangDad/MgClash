@@ -10,12 +10,13 @@ use std::time::Instant;
 use magies_desktop_lib::session::{SessionCommandError, SessionDefaults, SessionService};
 use magies_domain::ProxyProtocol;
 use magies_platform::system_proxy::SystemProxyState;
-use magies_profiles::{LocalHttpProfile, LocalSocksProfile};
+use magies_profiles::{LocalHttpProfile, LocalSocksProfile, SqliteManualNodeStore};
 use magies_session::{
     CoreSessionControl, DesktopSession, NetworkEvent, RecoveryOutcome, SessionHealthProbe,
     SystemProxySessionControl,
 };
 use magies_storage::MemorySecretStore;
+use uuid::Uuid;
 
 const SHADOWSOCKS_LINK: &str = "ss://aes-128-gcm:runtime-secret@edge.example.com:8388#Tokyo%20Edge";
 
@@ -48,7 +49,7 @@ fn importing_a_share_link_stores_the_credential_and_selects_the_node() {
 }
 
 #[test]
-fn importing_a_second_link_replaces_the_selected_node() {
+fn importing_a_second_link_keeps_both_nodes_and_replaces_the_selection() {
     let (mut service, _runtime, _fail_start) = service();
     service.import_node(SHADOWSOCKS_LINK).unwrap();
 
@@ -58,6 +59,45 @@ fn importing_a_second_link_replaces_the_selected_node() {
 
     assert_eq!(status.node.as_ref().unwrap().name, "Osaka");
     assert_eq!(status.node.as_ref().unwrap().port, 9000);
+    assert_eq!(service.nodes().unwrap().len(), 2);
+}
+
+#[test]
+fn selects_and_deletes_nodes_while_disconnected() {
+    let (mut service, _runtime, _fail_start) = service();
+    let tokyo = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
+    service
+        .import_node("ss://aes-128-gcm:runtime-secret@edge.example.com:9000#Osaka")
+        .unwrap();
+
+    let status = service.select_node(tokyo.id).unwrap();
+    assert_eq!(status.node.as_ref().unwrap().name, "Tokyo Edge");
+
+    let status = service.delete_node(tokyo.id).unwrap();
+    assert!(status.node.is_none());
+    let nodes = service.nodes().unwrap();
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].name, "Osaka");
+}
+
+#[test]
+fn refuses_to_change_nodes_while_connected() {
+    let (mut service, _runtime, _fail_start) = service();
+    let node = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
+    service.connect().unwrap();
+
+    assert_eq!(
+        service.select_node(node.id).unwrap_err().code(),
+        "session_active"
+    );
+    assert_eq!(
+        service.delete_node(node.id).unwrap_err().code(),
+        "session_active"
+    );
+    assert_eq!(
+        service.import_node(SHADOWSOCKS_LINK).unwrap_err().code(),
+        "session_active"
+    );
 }
 
 #[test]
@@ -122,7 +162,9 @@ fn surfaces_a_failing_core_start_as_a_session_error() {
             runtime.path(),
         ),
         SessionDefaults::v01(),
-    );
+        SqliteManualNodeStore::open_in_memory().unwrap(),
+    )
+    .unwrap();
     service.import_node(SHADOWSOCKS_LINK).unwrap();
 
     assert!(matches!(
@@ -162,7 +204,9 @@ fn service_with_events(
             runtime.path(),
         ),
         SessionDefaults::v01(),
-    );
+        SqliteManualNodeStore::open_in_memory().unwrap(),
+    )
+    .unwrap();
     (service, runtime, fail_start)
 }
 
@@ -221,6 +265,10 @@ fn every_session_failure_carries_a_stable_code_for_the_ui() {
         "invalid_share_link"
     );
     assert_eq!(service.disconnect().unwrap_err().code(), "session_failed");
+    assert_eq!(
+        service.select_node(Uuid::nil()).unwrap_err().code(),
+        "node_not_found"
+    );
 }
 
 #[test]

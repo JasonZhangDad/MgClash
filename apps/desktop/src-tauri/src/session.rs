@@ -10,7 +10,8 @@ use std::time::Instant;
 use magies_domain::{CredentialRef, NodeModelError, ProxyNode, ProxyProtocol};
 use magies_profiles::{
     CredentialCodec, CredentialCodecError, DnsProfile, DnsServer, DnsStrategy, LocalHttpProfile,
-    LocalSocksProfile, ShareLinkParseError, ShareLinkParser,
+    LocalSocksProfile, ManualNodeStoreError, ShareLinkParseError, ShareLinkParser,
+    SqliteManualNodeStore,
 };
 use magies_routing::{RouteOutbound, RouteProfile, RoutingMode};
 use magies_session::{
@@ -77,6 +78,7 @@ impl SessionDefaults {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeSummary {
+    pub id: Uuid,
     pub name: String,
     pub protocol: ProxyProtocol,
     pub server: String,
@@ -86,6 +88,7 @@ pub struct NodeSummary {
 impl From<&ProxyNode> for NodeSummary {
     fn from(node: &ProxyNode) -> Self {
         Self {
+            id: node.id,
             name: node.name.as_str().to_owned(),
             protocol: node.protocol_type,
             server: node.server.as_str().to_owned(),
@@ -112,6 +115,7 @@ pub struct SessionService<S, C, P> {
     session: DesktopSession<S, C, P>,
     defaults: SessionDefaults,
     node: Option<ProxyNode>,
+    nodes: SqliteManualNodeStore,
     recovery: NetworkRecoveryPolicy,
 }
 
@@ -121,14 +125,25 @@ where
     C: CoreSessionControl,
     P: SystemProxySessionControl,
 {
-    #[must_use]
-    pub fn new(session: DesktopSession<S, C, P>, defaults: SessionDefaults) -> Self {
-        Self {
+    /// Restores the selected manual node when constructing the service.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed node-store error when the persisted selection cannot be
+    /// read.
+    pub fn new(
+        session: DesktopSession<S, C, P>,
+        defaults: SessionDefaults,
+        nodes: SqliteManualNodeStore,
+    ) -> Result<Self, ManualNodeStoreError> {
+        let node = nodes.selected_node()?;
+        Ok(Self {
             session,
             defaults,
-            node: None,
+            node,
+            nodes,
             recovery: NetworkRecoveryPolicy::default(),
-        }
+        })
     }
 
     /// Records a network change or wake so the next [`Self::recover`] pass can
@@ -168,6 +183,9 @@ where
         &mut self,
         uri: &str,
     ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
+        if self.session.is_running() {
+            return Err(SessionCommandError::SessionActive);
+        }
         let id = Uuid::new_v4();
         let credential_ref =
             CredentialRef::new(format!("node/{id}")).map_err(SessionCommandError::CredentialRef)?;
@@ -182,7 +200,76 @@ where
             .put(&node.credential_ref, &secret)
             .map_err(SessionCommandError::Secret)?;
 
+        if let Err(store) = self.nodes.save_and_select(&node) {
+            return match self.session.secret_store().delete(&node.credential_ref) {
+                Ok(()) => Err(SessionCommandError::NodeStore(store)),
+                Err(secret) => {
+                    Err(SessionCommandError::NodeStoreAndSecretRollback { store, secret })
+                }
+            };
+        }
+
         self.node = Some(node);
+        Ok(self.status())
+    }
+
+    /// Lists every persisted manual node without exposing credentials.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed storage error when the node database is unreadable.
+    pub fn nodes(&self) -> Result<Vec<NodeSummary>, SessionCommandError<C::Error, P::Error>> {
+        self.nodes
+            .nodes()
+            .map(|nodes| nodes.iter().map(NodeSummary::from).collect())
+            .map_err(SessionCommandError::NodeStore)
+    }
+
+    /// Selects a persisted node while the session is disconnected.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error while connected, when the node is missing, or when
+    /// the node database cannot be updated.
+    pub fn select_node(
+        &mut self,
+        id: Uuid,
+    ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
+        if self.session.is_running() {
+            return Err(SessionCommandError::SessionActive);
+        }
+        let node = self
+            .nodes
+            .select(id)
+            .map_err(SessionCommandError::NodeStore)?;
+        self.node = Some(node);
+        Ok(self.status())
+    }
+
+    /// Deletes a persisted node and its operating-system credential.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error while connected, when the node is missing, or when
+    /// storage cannot delete the node metadata or credential.
+    pub fn delete_node(
+        &mut self,
+        id: Uuid,
+    ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
+        if self.session.is_running() {
+            return Err(SessionCommandError::SessionActive);
+        }
+        let node = self
+            .nodes
+            .delete(id)
+            .map_err(SessionCommandError::NodeStore)?;
+        if self.node.as_ref().is_some_and(|selected| selected.id == id) {
+            self.node = None;
+        }
+        self.session
+            .secret_store()
+            .delete(&node.credential_ref)
+            .map_err(SessionCommandError::DeleteSecret)?;
         Ok(self.status())
     }
 
@@ -258,6 +345,17 @@ where
     Credential(#[source] CredentialCodecError),
     #[error("failed to save the node credential")]
     Secret(#[source] SecretStoreError),
+    #[error("failed to change the manual node store")]
+    NodeStore(#[source] ManualNodeStoreError),
+    #[error("failed to save the node and roll back its credential")]
+    NodeStoreAndSecretRollback {
+        store: ManualNodeStoreError,
+        secret: SecretStoreError,
+    },
+    #[error("failed to delete the node credential")]
+    DeleteSecret(#[source] SecretStoreError),
+    #[error("nodes cannot be changed while the session is connected")]
+    SessionActive,
     #[error("failed to change the desktop proxy session")]
     Session(#[source] DesktopSessionError<C, P>),
 }
@@ -275,7 +373,10 @@ where
             Self::CredentialRef(_) => "invalid_credential_reference",
             Self::ShareLink(_) => "invalid_share_link",
             Self::Credential(_) => "credential_encode_failed",
-            Self::Secret(_) => "secret_store_failed",
+            Self::Secret(_) | Self::DeleteSecret(_) => "secret_store_failed",
+            Self::NodeStore(ManualNodeStoreError::NodeNotFound { .. }) => "node_not_found",
+            Self::NodeStore(_) | Self::NodeStoreAndSecretRollback { .. } => "node_store_failed",
+            Self::SessionActive => "session_active",
             Self::Session(_) => "session_failed",
         }
     }

@@ -109,6 +109,30 @@ textarea {
   resize: vertical;
 }
 
+.node-list {
+  width: 100%;
+  margin: 0 0 24px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.node-list th,
+.node-list td {
+  padding: 10px 8px;
+  border-bottom: 1px solid #d8dee4;
+  text-align: left;
+}
+
+.node-list th {
+  color: #64748b;
+  font-weight: 500;
+}
+
+.node-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .notice {
   margin: 0 0 24px;
   padding: 12px 16px;

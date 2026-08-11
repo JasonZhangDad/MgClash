@@ -5,6 +5,7 @@ mod diagnostics;
 mod dns_config;
 mod hysteria2;
 mod local_proxy_config;
+mod manual_node_store;
 mod node_dedup;
 mod shadowsocks;
 mod share_link;
@@ -30,6 +31,7 @@ pub use local_proxy_config::{
     DEFAULT_HTTP_PORT, DEFAULT_SOCKS_PORT, GeneratedCoreConfig, LocalHttpConfigGenerator,
     LocalHttpProfile, LocalProxyConfigError, LocalSocksConfigGenerator, LocalSocksProfile,
 };
+pub use manual_node_store::{ManualNodeStoreError, SqliteManualNodeStore};
 pub use node_dedup::{
     CredentialIdentity, NodeDedupCandidate, NodeDedupResult, NodeDedupSummary, NodeDeduplicator,
     NodeFingerprint,

@@ -8,6 +8,7 @@ export type ProxyProtocol =
   | "vmess";
 
 export interface NodeSummary {
+  id: string;
   name: string;
   port: number;
   protocol: ProxyProtocol;
@@ -47,6 +48,18 @@ export function loadSessionStatus(): Promise<SessionStatus> {
 
 export function importNode(uri: string): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_import_node", { uri });
+}
+
+export function loadNodes(): Promise<NodeSummary[]> {
+  return invoke<NodeSummary[]>("session_nodes");
+}
+
+export function selectNode(id: string): Promise<SessionStatus> {
+  return invoke<SessionStatus>("session_select_node", { id });
+}
+
+export function deleteNode(id: string): Promise<SessionStatus> {
+  return invoke<SessionStatus>("session_delete_node", { id });
 }
 
 export function connectSession(): Promise<SessionStatus> {
