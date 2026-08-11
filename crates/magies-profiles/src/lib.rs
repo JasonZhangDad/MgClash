@@ -55,8 +55,8 @@ pub use subscription_content::{
     ParsedSubscriptionNode, SubscriptionContentError, SubscriptionContentParser,
 };
 pub use subscription_transaction::{
-    SqliteSubscriptionStore, SubscriptionCommit, SubscriptionState, SubscriptionTransactionError,
-    SubscriptionUpdate,
+    DeletedSubscription, SqliteSubscriptionStore, SubscriptionCommit, SubscriptionState,
+    SubscriptionTransactionError, SubscriptionUpdate,
 };
 pub use trojan::{ParsedTrojanNode, TrojanCredential, TrojanParseError, TrojanParser};
 pub use tun_config::{SingBoxTunConfigGenerator, TunProfile, TunProfileError, TunRouteSettings};

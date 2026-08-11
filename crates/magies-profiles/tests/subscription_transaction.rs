@@ -1,8 +1,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use magies_domain::{
-    CredentialRef, GrpcMode, ProxyNode, ProxyProtocol, Subscription, TimestampMillis, TlsConfig,
-    TransportConfig,
+    CredentialRef, GrpcMode, ProxyNode, ProxyProtocol, Subscription, SubscriptionName,
+    TimestampMillis, TlsConfig, TransportConfig,
 };
 use magies_profiles::{
     SqliteSubscriptionStore, SubscriptionTransactionError, SubscriptionUpdate,
@@ -12,6 +12,110 @@ use uuid::Uuid;
 
 const LAST_MODIFIED: &str = "Sun, 09 Aug 2026 12:00:00 GMT";
 static NEXT_DATABASE_ID: AtomicU64 = AtomicU64::new(0);
+
+#[test]
+fn lists_reads_and_edits_subscription_settings_without_losing_fetch_state() {
+    let store = SqliteSubscriptionStore::open_in_memory().unwrap();
+    let mut primary = subscription("018f78b5-2cd0-7000-a9a6-3bccf60951e8", "Primary");
+    primary.auto_update = true;
+    let backup = subscription("018f78b5-2cd0-7000-a9a6-3bccf60951ef", "Backup");
+    store.insert_subscription(&primary).unwrap();
+    store.insert_subscription(&backup).unwrap();
+    store
+        .touch_subscription(
+            primary.id,
+            &SubscriptionValidators::new(Some("\"revision-1\"".to_owned()), None),
+            TimestampMillis::new(100),
+        )
+        .unwrap();
+
+    let subscriptions = store.subscriptions().unwrap();
+    assert_eq!(subscriptions.len(), 2);
+    assert_eq!(subscriptions[0].id, primary.id);
+    assert_eq!(subscriptions[1].id, backup.id);
+
+    let mut edited = store.subscription(primary.id).unwrap().unwrap();
+    edited.name = SubscriptionName::new("Primary edited").unwrap();
+    edited.update_interval_minutes = std::num::NonZeroU32::new(120).unwrap();
+    edited.auto_update = false;
+    edited.enabled = false;
+    store.update_subscription_settings(&edited).unwrap();
+
+    let loaded = store.subscription(primary.id).unwrap().unwrap();
+    assert_eq!(loaded.name.as_str(), "Primary edited");
+    assert_eq!(loaded.update_interval_minutes.get(), 120);
+    assert!(!loaded.auto_update);
+    assert!(!loaded.enabled);
+    assert_eq!(loaded.etag.as_deref(), Some("\"revision-1\""));
+    assert_eq!(loaded.last_updated_at, Some(TimestampMillis::new(100)));
+    assert!(store.subscription(Uuid::nil()).unwrap().is_none());
+    assert!(matches!(
+        store.touch_subscription(
+            Uuid::nil(),
+            &SubscriptionValidators::default(),
+            TimestampMillis::new(200),
+        ),
+        Err(SubscriptionTransactionError::SubscriptionNotFound { .. })
+    ));
+    edited.id = Uuid::nil();
+    assert!(matches!(
+        store.update_subscription_settings(&edited),
+        Err(SubscriptionTransactionError::SubscriptionNotFound { .. })
+    ));
+}
+
+#[test]
+fn deletes_a_subscription_and_returns_its_cascaded_nodes() {
+    let mut store = SqliteSubscriptionStore::open_in_memory().unwrap();
+    let subscription = subscription("018f78b5-2cd0-7000-a9a6-3bccf60951e8", "Delete me");
+    store.insert_subscription(&subscription).unwrap();
+    store
+        .apply_update(&update(
+            subscription.id,
+            vec![node(
+                "018f78b5-2cd0-7000-a9a6-3bccf60951e9",
+                ProxyProtocol::Trojan,
+                "delete.example.com",
+                "keychain://node/delete-secret",
+            )],
+            "\"revision-1\"",
+            100,
+        ))
+        .unwrap();
+
+    let deleted = store.delete_subscription(subscription.id).unwrap();
+
+    assert_eq!(deleted.subscription, subscription_with_state(subscription));
+    assert_eq!(deleted.nodes.len(), 1);
+    assert_eq!(deleted.nodes[0].server.as_str(), "delete.example.com");
+    assert!(
+        store
+            .subscription(subscription_id(&deleted))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .subscription_nodes(subscription_id(&deleted))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        store.delete_subscription(subscription_id(&deleted)),
+        Err(SubscriptionTransactionError::SubscriptionNotFound { .. })
+    ));
+}
+
+fn subscription_id(deleted: &magies_profiles::DeletedSubscription) -> Uuid {
+    deleted.subscription.id
+}
+
+fn subscription_with_state(mut subscription: Subscription) -> Subscription {
+    subscription.etag = Some("\"revision-1\"".to_owned());
+    subscription.last_modified = Some(LAST_MODIFIED.to_owned());
+    subscription.last_updated_at = Some(TimestampMillis::new(100));
+    subscription
+}
 
 #[test]
 fn persists_a_committed_update_when_the_database_is_reopened() {
