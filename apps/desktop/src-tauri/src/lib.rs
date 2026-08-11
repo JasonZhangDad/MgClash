@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use chrono::Local;
 use magies_domain::TimestampMillis;
 use magies_platform::network_path::NetworkPathReader;
 use magies_platform::{TargetPlatform, TunAvailability};
@@ -35,7 +36,7 @@ use crate::session::{SessionCommandError, SessionDefaults, SessionService, Sessi
 use crate::subscriptions::{
     DesktopSubscriptionController, DesktopSubscriptionError, DesktopSubscriptionSummary,
 };
-use crate::traffic::{TrafficRate, TrafficSampleError, sample_traffic};
+use crate::traffic::{SqliteTrafficCounter, TrafficCounterError, TrafficSnapshot, sample_traffic};
 use crate::tray::{TrayAction, TrayUi, menu_model};
 use crate::url_test::{UrlTestError, probe_url};
 
@@ -69,6 +70,9 @@ const URL_TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The Core emits a traffic sample every second; keep the PRD's bounded timeout.
 const TRAFFIC_SAMPLE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Avoid a hot retry loop while the session is stopped or the Core API fails.
+const TRAFFIC_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -152,15 +156,20 @@ fn url_test_result(
     }
 }
 
-fn traffic_command_error(error: &TrafficSampleError) -> CommandError {
+fn traffic_counter_command_error(error: &TrafficCounterError) -> CommandError {
     CommandError {
         code: match error {
-            TrafficSampleError::InvalidTimeout => "invalid_traffic_sample",
-            TrafficSampleError::TimedOut => "traffic_sample_timeout",
-            _ => "traffic_sample_failed",
+            TrafficCounterError::CounterOverflow => "traffic_counter_overflow",
+            _ => "traffic_persist_failed",
         },
         message: describe(error),
     }
+}
+
+fn open_traffic_counter(
+    path: &std::path::Path,
+) -> Result<SqliteTrafficCounter, TrafficCounterError> {
+    SqliteTrafficCounter::open(path, Local::now().date_naive(), Instant::now())
 }
 
 /// Creates the serializable platform summary returned to the desktop UI.
@@ -197,6 +206,7 @@ type HostSessionService =
 struct AppState {
     service: Arc<Mutex<HostSessionService>>,
     subscriptions: Arc<DesktopSubscriptionController<PlatformSecretStore>>,
+    traffic: Arc<Mutex<SqliteTrafficCounter>>,
     system_proxy: PlatformProxyControl,
     /// Where an exported diagnostic bundle is written.
     export_directory: PathBuf,
@@ -209,12 +219,69 @@ impl AppState {
     fn service(&self) -> MutexGuard<'_, HostSessionService> {
         lock(&self.service)
     }
+
+    fn traffic(&self) -> MutexGuard<'_, SqliteTrafficCounter> {
+        lock(&self.traffic)
+    }
 }
 
 /// A poisoned lock means an earlier command panicked; the session state itself
 /// stays valid, so recover it rather than break every later command.
-fn lock(service: &Mutex<HostSessionService>) -> MutexGuard<'_, HostSessionService> {
-    service.lock().unwrap_or_else(PoisonError::into_inner)
+fn lock<T>(value: &Mutex<T>) -> MutexGuard<'_, T> {
+    value.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Samples Core traffic for the lifetime of the app, independent of whether
+/// the main window is visible.
+fn spawn_traffic_loop(
+    service: Arc<Mutex<HostSessionService>>,
+    traffic: Arc<Mutex<SqliteTrafficCounter>>,
+) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let api_address = lock(&service).traffic_api_address().ok();
+            let Some(api_address) = api_address else {
+                if let Err(error) = lock(&traffic).tick(Local::now().date_naive(), Instant::now()) {
+                    eprintln!(
+                        "traffic counters could not be persisted: {}",
+                        describe(&error)
+                    );
+                }
+                tokio::time::sleep(TRAFFIC_RETRY_DELAY).await;
+                continue;
+            };
+
+            match sample_traffic(api_address, TRAFFIC_SAMPLE_TIMEOUT).await {
+                Ok(rate) => {
+                    let still_current =
+                        lock(&service).traffic_api_address().ok() == Some(api_address);
+                    let result = if still_current {
+                        lock(&traffic).record(Local::now().date_naive(), rate, Instant::now())
+                    } else {
+                        lock(&traffic).tick(Local::now().date_naive(), Instant::now())
+                    };
+                    if let Err(error) = result {
+                        eprintln!(
+                            "traffic counters could not be updated: {}",
+                            describe(&error)
+                        );
+                    }
+                }
+                Err(error) => {
+                    eprintln!("traffic sample failed: {}", describe(&error));
+                    if let Err(error) =
+                        lock(&traffic).tick(Local::now().date_naive(), Instant::now())
+                    {
+                        eprintln!(
+                            "traffic counters could not be persisted: {}",
+                            describe(&error)
+                        );
+                    }
+                    tokio::time::sleep(TRAFFIC_RETRY_DELAY).await;
+                }
+            }
+        }
+    });
 }
 
 /// Watches for network changes and wakes, and reconnects when the Core stopped
@@ -415,14 +482,16 @@ fn toggle_from_tray(app: &AppHandle) -> Result<(), CommandError> {
 
 fn disconnect_for_quit(app: &AppHandle) -> Result<(), CommandError> {
     let state = app.state::<AppState>();
-    if !state.service().status().connected {
-        return Ok(());
+    if state.service().status().connected {
+        state
+            .service()
+            .disconnect()
+            .map_err(|error| command_error(&error))?;
     }
     state
-        .service()
-        .disconnect()
-        .map(|_| ())
-        .map_err(|error| command_error(&error))
+        .traffic()
+        .flush()
+        .map_err(|error| traffic_counter_command_error(&error))
 }
 
 fn show_main_window(app: &AppHandle) {
@@ -578,17 +647,12 @@ async fn session_url_test(
 }
 
 #[tauri::command]
-async fn session_traffic(state: State<'_, AppState>) -> Result<TrafficRate, CommandError> {
-    let api_address = state
-        .service()
-        .traffic_api_address()
-        .map_err(|error| command_error(&error))?;
-    sample_traffic(api_address, TRAFFIC_SAMPLE_TIMEOUT)
-        .await
-        .map_err(|error| {
-            eprintln!("traffic sample failed: {}", describe(&error));
-            traffic_command_error(&error)
-        })
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State by value"
+)]
+fn session_traffic(state: State<'_, AppState>) -> TrafficSnapshot {
+    state.traffic().snapshot()
 }
 
 fn parse_node_id(id: &str) -> Result<Uuid, CommandError> {
@@ -886,6 +950,7 @@ pub fn run() {
                 SqliteSubscriptionStore::open(&node_database)?,
                 PlatformSecretStore,
             ));
+            let traffic = Arc::new(Mutex::new(open_traffic_counter(&node_database)?));
             let service = Arc::new(Mutex::new(SessionService::new(
                 session,
                 defaults,
@@ -900,6 +965,7 @@ pub fn run() {
             app.manage(AppState {
                 service: service.clone(),
                 subscriptions: subscriptions.clone(),
+                traffic: traffic.clone(),
                 system_proxy,
                 export_directory: data_directory,
                 tray,
@@ -911,6 +977,7 @@ pub fn run() {
                 TcpHealthProbe::new(health_address, PROBE_TIMEOUT),
             );
             spawn_subscription_update_loop(subscriptions.clone(), service.clone());
+            spawn_traffic_loop(service.clone(), traffic);
             spawn_tray_refresh_loop(app.handle().clone());
             Ok(())
         })
@@ -965,11 +1032,11 @@ mod tests {
     use super::{
         NodeTestStatus, ensure_subscription_mutation_ready, ensure_system_proxy_ready,
         node_test_result, parse_node_id, parse_subscription_id, platform_summary,
-        traffic_command_error, url_test_result,
+        traffic_counter_command_error, url_test_result,
     };
     use crate::node_latency::TcpLatencyError;
     use crate::platform_proxy::SystemProxyStartupStatus;
-    use crate::traffic::TrafficSampleError;
+    use crate::traffic::TrafficCounterError;
     use crate::url_test::UrlTestError;
     use std::io;
     use uuid::Uuid;
@@ -1052,14 +1119,10 @@ mod tests {
     }
 
     #[test]
-    fn traffic_failures_keep_timeouts_distinct_from_other_api_errors() {
+    fn traffic_counter_failures_have_a_stable_command_code() {
         assert_eq!(
-            traffic_command_error(&TrafficSampleError::TimedOut).code,
-            "traffic_sample_timeout"
-        );
-        assert_eq!(
-            traffic_command_error(&TrafficSampleError::HttpStatus { status: 503 }).code,
-            "traffic_sample_failed"
+            traffic_counter_command_error(&TrafficCounterError::CounterOverflow).code,
+            "traffic_counter_overflow"
         );
     }
 

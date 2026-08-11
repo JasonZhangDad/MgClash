@@ -22,7 +22,7 @@ import {
   type NodeTestResult,
   type SessionStatus,
   type SystemProxyStartupStatus,
-  type TrafficRate,
+  type TrafficSnapshot,
 } from "./session";
 import {
   createSubscription,
@@ -40,8 +40,11 @@ import {
  */
 const REFRESH_INTERVAL_MS = 3_000;
 const TRAFFIC_REFRESH_INTERVAL_MS = 1_000;
-const EMPTY_TRAFFIC: TrafficRate = {
+const EMPTY_TRAFFIC: TrafficSnapshot = {
   downloadBytesPerSecond: 0,
+  monthBytes: 0,
+  todayBytes: 0,
+  totalBytes: 0,
   uploadBytesPerSecond: 0,
 };
 
@@ -93,6 +96,10 @@ function formatRate(bytesPerSecond: number): string {
   return unit === 0 ? `${value} ${units[unit]}` : `${value.toFixed(1)} ${units[unit]}`;
 }
 
+function formatBytes(bytes: number): string {
+  return formatRate(bytes).replace("/s", "");
+}
+
 /** Command rejections are typed values from Rust, not `Error` instances. */
 function describeFailure(error: unknown): string {
   if (isCommandError(error)) {
@@ -121,7 +128,7 @@ export default function App() {
   const [systemProxyStartup, setSystemProxyStartup] =
     useState<SystemProxyStartupStatus | null>(null);
   const [busy, setBusy] = useState(false);
-  const [traffic, setTraffic] = useState<TrafficRate>(EMPTY_TRAFFIC);
+  const [traffic, setTraffic] = useState<TrafficSnapshot>(EMPTY_TRAFFIC);
   const [urlTestAddress, setUrlTestAddress] = useState(savedUrlTestAddress);
   const [nodeTests, setNodeTests] = useState<
     Record<string, NodeTestResult | { status: "testing" }>
@@ -171,11 +178,6 @@ export default function App() {
   }, [busy]);
 
   useEffect(() => {
-    if (!status?.connected) {
-      setTraffic(EMPTY_TRAFFIC);
-      return undefined;
-    }
-
     let active = true;
     let loading = false;
     const refresh = async () => {
@@ -190,7 +192,11 @@ export default function App() {
         }
       } catch (failure: unknown) {
         if (active) {
-          setTraffic(EMPTY_TRAFFIC);
+          setTraffic((current) => ({
+            ...current,
+            downloadBytesPerSecond: 0,
+            uploadBytesPerSecond: 0,
+          }));
           console.warn("traffic refresh failed", failure);
         }
       } finally {
@@ -203,7 +209,7 @@ export default function App() {
       active = false;
       clearInterval(timer);
     };
-  }, [status?.connected]);
+  }, []);
 
   const run = useCallback(async (command: () => Promise<SessionStatus>) => {
     setBusy(true);
@@ -583,6 +589,18 @@ export default function App() {
             <dd aria-label="上传速率">
               {connected ? formatRate(traffic.uploadBytesPerSecond) : "—"}
             </dd>
+          </div>
+          <div>
+            <dt>今日</dt>
+            <dd aria-label="今日流量">{formatBytes(traffic.todayBytes)}</dd>
+          </div>
+          <div>
+            <dt>本月</dt>
+            <dd aria-label="本月流量">{formatBytes(traffic.monthBytes)}</dd>
+          </div>
+          <div>
+            <dt>累计</dt>
+            <dd aria-label="累计流量">{formatBytes(traffic.totalBytes)}</dd>
           </div>
           <div>
             <dt>节点</dt>

@@ -140,6 +140,9 @@ describe("App", () => {
     loadSessionStatusMock.mockResolvedValue(IDLE);
     loadTrafficMock.mockResolvedValue({
       downloadBytesPerSecond: 0,
+      monthBytes: 0,
+      todayBytes: 0,
+      totalBytes: 0,
       uploadBytesPerSecond: 0,
     });
     loadNodesMock.mockResolvedValue([]);
@@ -267,7 +270,29 @@ describe("App", () => {
     expect(container.textContent).toContain("sing-box");
     expect(container.textContent).toContain("macos-x86_64");
     expect(button("连接").disabled).toBe(true);
-    expect(loadTrafficMock).not.toHaveBeenCalled();
+    expect(loadTrafficMock).toHaveBeenCalledOnce();
+  });
+
+  it("shows persisted traffic totals while disconnected", async () => {
+    loadTrafficMock.mockResolvedValue({
+      downloadBytesPerSecond: 0,
+      monthBytes: 1_048_576,
+      todayBytes: 2_048,
+      totalBytes: 1_073_741_824,
+      uploadBytesPerSecond: 0,
+    });
+
+    await render();
+
+    expect(container.querySelector("[aria-label='今日流量']")?.textContent).toBe(
+      "2.0 KB",
+    );
+    expect(container.querySelector("[aria-label='本月流量']")?.textContent).toBe(
+      "1.0 MB",
+    );
+    expect(container.querySelector("[aria-label='累计流量']")?.textContent).toBe(
+      "1.0 GB",
+    );
   });
 
   it("shows live upload and download rates while connected", async () => {
@@ -275,6 +300,9 @@ describe("App", () => {
     loadNodesMock.mockResolvedValue([SELECTED.node]);
     loadTrafficMock.mockResolvedValue({
       downloadBytesPerSecond: 2_048,
+      monthBytes: 3_072,
+      todayBytes: 3_072,
+      totalBytes: 4_096,
       uploadBytesPerSecond: 1_048_576,
     });
 

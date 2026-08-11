@@ -1,20 +1,282 @@
 //! Live traffic samples from sing-box's loopback-only Clash API.
 
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::path::Path;
+use std::time::{Duration, Instant};
 
+use chrono::{Datelike, NaiveDate};
 use magies_profiles::ensure_rustls_crypto_provider;
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 const SAMPLE_BODY_LIMIT: usize = 1_024;
+const PERSIST_INTERVAL: Duration = Duration::from_secs(60);
+const MAX_TRAFFIC_BYTES: u64 = i64::MAX as u64;
 
 /// Upload and download bytes observed during the previous second.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrafficRate {
     pub upload_bytes_per_second: u64,
     pub download_bytes_per_second: u64,
+}
+
+/// Current live rate and the three V0.1 persisted traffic counters.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrafficSnapshot {
+    pub upload_bytes_per_second: u64,
+    pub download_bytes_per_second: u64,
+    pub today_bytes: u64,
+    pub month_bytes: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TrafficTotals {
+    day: NaiveDate,
+    today_bytes: u64,
+    month_bytes: u64,
+    total_bytes: u64,
+}
+
+impl TrafficTotals {
+    const fn empty(day: NaiveDate) -> Self {
+        Self {
+            day,
+            today_bytes: 0,
+            month_bytes: 0,
+            total_bytes: 0,
+        }
+    }
+
+    fn rolled_to(mut self, day: NaiveDate) -> (Self, bool) {
+        if self.day == day {
+            return (self, false);
+        }
+        if self.day.year() != day.year() || self.day.month() != day.month() {
+            self.month_bytes = 0;
+        }
+        self.day = day;
+        self.today_bytes = 0;
+        (self, true)
+    }
+
+    fn with_added_bytes(mut self, bytes: u64) -> Result<Self, TrafficCounterError> {
+        self.today_bytes = checked_counter_add(self.today_bytes, bytes)?;
+        self.month_bytes = checked_counter_add(self.month_bytes, bytes)?;
+        self.total_bytes = checked_counter_add(self.total_bytes, bytes)?;
+        Ok(self)
+    }
+}
+
+/// SQLite-backed aggregate traffic counter. It stores no destination or
+/// per-connection data.
+#[derive(Debug)]
+pub struct SqliteTrafficCounter {
+    connection: Connection,
+    totals: TrafficTotals,
+    rate: TrafficRate,
+    dirty: bool,
+    last_persisted_at: Instant,
+}
+
+impl SqliteTrafficCounter {
+    /// Opens the traffic counter and rolls persisted values to `today`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed database or stored-value error.
+    pub fn open(
+        path: impl AsRef<Path>,
+        today: NaiveDate,
+        now: Instant,
+    ) -> Result<Self, TrafficCounterError> {
+        Self::from_connection(Connection::open(path)?, today, now)
+    }
+
+    /// Creates an isolated counter for tests.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed database error when the schema cannot be initialized.
+    pub fn open_in_memory(today: NaiveDate, now: Instant) -> Result<Self, TrafficCounterError> {
+        Self::from_connection(Connection::open_in_memory()?, today, now)
+    }
+
+    /// Adds a one-second Core sample and persists once per minute.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed overflow or database error. Failed persistence leaves
+    /// the in-memory counters dirty so the next sample retries the write.
+    pub fn record(
+        &mut self,
+        today: NaiveDate,
+        rate: TrafficRate,
+        now: Instant,
+    ) -> Result<(), TrafficCounterError> {
+        let bytes = rate
+            .upload_bytes_per_second
+            .checked_add(rate.download_bytes_per_second)
+            .filter(|bytes| *bytes <= MAX_TRAFFIC_BYTES)
+            .ok_or(TrafficCounterError::CounterOverflow)?;
+        let (totals, _) = self.totals.rolled_to(today);
+        self.totals = totals.with_added_bytes(bytes)?;
+        self.rate = rate;
+        self.dirty = true;
+        self.persist_if_due(now)
+    }
+
+    /// Advances the calendar and clears a stale live rate while idle.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed database error when a due write fails.
+    pub fn tick(&mut self, today: NaiveDate, now: Instant) -> Result<(), TrafficCounterError> {
+        self.rate = TrafficRate::default();
+        let (totals, rolled) = self.totals.rolled_to(today);
+        self.totals = totals;
+        self.dirty |= rolled;
+        self.persist_if_due(now)
+    }
+
+    #[must_use]
+    pub const fn snapshot(&self) -> TrafficSnapshot {
+        TrafficSnapshot {
+            upload_bytes_per_second: self.rate.upload_bytes_per_second,
+            download_bytes_per_second: self.rate.download_bytes_per_second,
+            today_bytes: self.totals.today_bytes,
+            month_bytes: self.totals.month_bytes,
+            total_bytes: self.totals.total_bytes,
+        }
+    }
+
+    /// Writes pending counters immediately, including during app shutdown.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed database error and keeps the counter dirty on failure.
+    pub fn flush(&mut self) -> Result<(), TrafficCounterError> {
+        if !self.dirty {
+            return Ok(());
+        }
+        self.connection.execute(
+            "INSERT INTO traffic_totals (
+                 id, day, today_bytes, month_bytes, total_bytes
+             ) VALUES (1, ?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET
+                 day = excluded.day,
+                 today_bytes = excluded.today_bytes,
+                 month_bytes = excluded.month_bytes,
+                 total_bytes = excluded.total_bytes",
+            params![
+                self.totals.day.format("%Y-%m-%d").to_string(),
+                self.totals.today_bytes,
+                self.totals.month_bytes,
+                self.totals.total_bytes,
+            ],
+        )?;
+        self.dirty = false;
+        Ok(())
+    }
+
+    fn from_connection(
+        connection: Connection,
+        today: NaiveDate,
+        now: Instant,
+    ) -> Result<Self, TrafficCounterError> {
+        connection.execute_batch(
+            "CREATE TABLE IF NOT EXISTS traffic_totals (
+                 id INTEGER PRIMARY KEY CHECK (id = 1),
+                 day TEXT NOT NULL,
+                 today_bytes INTEGER NOT NULL CHECK (today_bytes >= 0),
+                 month_bytes INTEGER NOT NULL CHECK (month_bytes >= 0),
+                 total_bytes INTEGER NOT NULL CHECK (total_bytes >= 0)
+             );",
+        )?;
+        let stored = connection
+            .query_row(
+                "SELECT day, today_bytes, month_bytes, total_bytes
+                 FROM traffic_totals WHERE id = 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let totals = match stored {
+            None => TrafficTotals::empty(today),
+            Some((day, today_bytes, month_bytes, total_bytes)) => TrafficTotals {
+                day: NaiveDate::parse_from_str(&day, "%Y-%m-%d").map_err(|source| {
+                    TrafficCounterError::InvalidStoredDay { value: day, source }
+                })?,
+                today_bytes: decode_counter("today_bytes", today_bytes)?,
+                month_bytes: decode_counter("month_bytes", month_bytes)?,
+                total_bytes: decode_counter("total_bytes", total_bytes)?,
+            },
+        };
+        let (totals, dirty) = totals.rolled_to(today);
+        Ok(Self {
+            connection,
+            totals,
+            rate: TrafficRate::default(),
+            dirty,
+            last_persisted_at: now,
+        })
+    }
+
+    fn persist_if_due(&mut self, now: Instant) -> Result<(), TrafficCounterError> {
+        if now.saturating_duration_since(self.last_persisted_at) < PERSIST_INTERVAL {
+            return Ok(());
+        }
+        self.flush()?;
+        self.last_persisted_at = now;
+        Ok(())
+    }
+}
+
+fn checked_counter_add(current: u64, added: u64) -> Result<u64, TrafficCounterError> {
+    current
+        .checked_add(added)
+        .filter(|value| *value <= MAX_TRAFFIC_BYTES)
+        .ok_or(TrafficCounterError::CounterOverflow)
+}
+
+fn decode_counter(column: &'static str, value: i64) -> Result<u64, TrafficCounterError> {
+    u64::try_from(value).map_err(|_| TrafficCounterError::InvalidStoredCounter { column, value })
+}
+
+/// Why aggregate traffic values could not be updated or persisted.
+#[derive(Debug, Error)]
+pub enum TrafficCounterError {
+    #[error("the traffic counter exceeded SQLite's integer range")]
+    CounterOverflow,
+    #[error("traffic counter database operation failed")]
+    Database {
+        #[source]
+        source: rusqlite::Error,
+    },
+    #[error("stored traffic day {value} is invalid")]
+    InvalidStoredDay {
+        value: String,
+        #[source]
+        source: chrono::ParseError,
+    },
+    #[error("stored traffic counter {column} is negative: {value}")]
+    InvalidStoredCounter { column: &'static str, value: i64 },
+}
+
+impl From<rusqlite::Error> for TrafficCounterError {
+    fn from(source: rusqlite::Error) -> Self {
+        Self::Database { source }
+    }
 }
 
 #[derive(Debug, Deserialize)]
