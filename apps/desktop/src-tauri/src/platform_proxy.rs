@@ -77,14 +77,14 @@ impl PlatformProxyControl {
             &PlatformRecoveryManager,
         ) -> Result<
             T,
-            SystemProxyRecoveryError<PlatformAdapterError, JsonRecoveryStoreError>,
+            Box<SystemProxyRecoveryError<PlatformAdapterError, JsonRecoveryStoreError>>,
         >,
     ) -> Result<T, PlatformProxyError> {
         let manager = self.manager();
         let manager = manager
             .as_ref()
             .map_err(|source| PlatformProxyError::Setup(source.clone()))?;
-        operation(manager).map_err(|source| PlatformProxyError::Recovery(Box::new(source)))
+        operation(manager).map_err(PlatformProxyError::Recovery)
     }
 
     /// Inspects the persisted proxy snapshot before a new desktop session can
@@ -111,7 +111,7 @@ impl PlatformProxyControl {
     ///
     /// Returns a typed platform or recovery-store error.
     pub fn recover_startup(&self) -> Result<SystemProxyStartupStatus, PlatformProxyError> {
-        self.with_manager(SystemProxyRecoveryManager::recover)?;
+        self.with_manager(|manager| manager.recover().map_err(Box::new))?;
         Ok(SystemProxyStartupStatus::Clean)
     }
 
@@ -121,7 +121,7 @@ impl PlatformProxyControl {
     ///
     /// Returns a typed recovery-store error.
     pub fn dismiss_startup(&self) -> Result<SystemProxyStartupStatus, PlatformProxyError> {
-        self.with_manager(SystemProxyRecoveryManager::dismiss)?;
+        self.with_manager(|manager| manager.dismiss().map_err(Box::new))?;
         Ok(SystemProxyStartupStatus::Clean)
     }
 }
@@ -147,7 +147,7 @@ impl SystemProxySessionControl for PlatformProxyControl {
     type Error = PlatformProxyError;
 
     fn enable(&mut self, state: &SystemProxyState) -> Result<(), Self::Error> {
-        self.with_manager(|manager| manager.enable(state))
+        self.with_manager(|manager| manager.enable(state).map_err(Box::new))
     }
 
     fn stop(&mut self) -> Result<(), Self::Error> {
