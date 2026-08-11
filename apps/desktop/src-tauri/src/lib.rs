@@ -4,16 +4,18 @@ pub mod core_control;
 pub mod diagnostics;
 pub mod platform_proxy;
 pub mod session;
+mod subscriptions;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use magies_domain::TimestampMillis;
 use magies_platform::network_path::NetworkPathReader;
 use magies_platform::{TargetPlatform, TunAvailability};
-use magies_profiles::SqliteManualNodeStore;
+use magies_profiles::{SqliteManualNodeStore, SqliteSubscriptionStore};
 use magies_session::{DesktopSession, NetworkWatcher, TcpHealthProbe};
 use magies_storage::PlatformSecretStore;
 use serde::Serialize;
@@ -24,6 +26,9 @@ use crate::core_control::{LazySingBoxControl, describe};
 use crate::diagnostics::DiagnosticBundle;
 use crate::platform_proxy::{PlatformProxyControl, PlatformProxyError, SystemProxyStartupStatus};
 use crate::session::{SessionCommandError, SessionDefaults, SessionService, SessionStatus};
+use crate::subscriptions::{
+    DesktopSubscriptionController, DesktopSubscriptionError, DesktopSubscriptionSummary,
+};
 
 /// How long a started Core has to accept connections on its local SOCKS port.
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -89,6 +94,7 @@ type HostSessionService =
 
 struct AppState {
     service: Arc<Mutex<HostSessionService>>,
+    subscriptions: Arc<DesktopSubscriptionController<PlatformSecretStore>>,
     system_proxy: PlatformProxyControl,
     /// Where an exported diagnostic bundle is written.
     export_directory: PathBuf,
@@ -156,6 +162,21 @@ fn system_proxy_error(error: &PlatformProxyError) -> CommandError {
         code: error.code(),
         message: describe(error),
     }
+}
+
+fn subscription_error(error: &DesktopSubscriptionError) -> CommandError {
+    CommandError {
+        code: error.code(),
+        message: describe(error),
+    }
+}
+
+fn current_timestamp() -> TimestampMillis {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    TimestampMillis::new(i64::try_from(millis).unwrap_or(i64::MAX))
 }
 
 fn ensure_system_proxy_ready(status: SystemProxyStartupStatus) -> Result<(), CommandError> {
@@ -336,6 +357,102 @@ fn export_diagnostics(state: State<'_, AppState>) -> Result<PathBuf, CommandErro
         })
 }
 
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State by value"
+)]
+fn subscription_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<DesktopSubscriptionSummary>, CommandError> {
+    state
+        .subscriptions
+        .list()
+        .map_err(|error| subscription_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
+fn subscription_create(
+    name: String,
+    url: String,
+    update_interval_minutes: u32,
+    auto_update: bool,
+    state: State<'_, AppState>,
+) -> Result<DesktopSubscriptionSummary, CommandError> {
+    state
+        .subscriptions
+        .create(&name, &url, update_interval_minutes, auto_update)
+        .map_err(|error| subscription_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
+fn subscription_update(
+    id: String,
+    name: String,
+    update_interval_minutes: u32,
+    auto_update: bool,
+    enabled: bool,
+    url: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<DesktopSubscriptionSummary, CommandError> {
+    let id = parse_subscription_id(&id)?;
+    state
+        .subscriptions
+        .update(
+            id,
+            &name,
+            update_interval_minutes,
+            auto_update,
+            enabled,
+            url.as_deref(),
+        )
+        .map_err(|error| subscription_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
+fn subscription_delete(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
+    let id = parse_subscription_id(&id)?;
+    state
+        .subscriptions
+        .delete(id)
+        .map_err(|error| subscription_error(&error))
+}
+
+#[tauri::command]
+async fn subscription_refresh(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<DesktopSubscriptionSummary, CommandError> {
+    let id = parse_subscription_id(&id)?;
+    let subscriptions = Arc::clone(&state.subscriptions);
+    tauri::async_runtime::spawn_blocking(move || subscriptions.refresh(id, current_timestamp()))
+        .await
+        .map_err(|error| CommandError {
+            code: "subscription_task_failed",
+            message: error.to_string(),
+        })?
+        .map_err(|error| subscription_error(&error))
+}
+
+fn parse_subscription_id(id: &str) -> Result<Uuid, CommandError> {
+    Uuid::parse_str(id).map_err(|error| CommandError {
+        code: "invalid_subscription_id",
+        message: format!("invalid subscription identifier: {error}"),
+    })
+}
+
 /// Starts the desktop application event loop.
 ///
 /// # Panics
@@ -359,7 +476,12 @@ pub fn run() {
                 system_proxy.clone(),
                 runtime_directory,
             );
-            let nodes = SqliteManualNodeStore::open(data_directory.join("nodes.sqlite"))?;
+            let node_database = data_directory.join("nodes.sqlite");
+            let nodes = SqliteManualNodeStore::open(&node_database)?;
+            let subscriptions = Arc::new(DesktopSubscriptionController::new(
+                SqliteSubscriptionStore::open(&node_database)?,
+                PlatformSecretStore,
+            ));
             let service = Arc::new(Mutex::new(SessionService::new(session, defaults, nodes)?));
             spawn_recovery_loop(
                 service.clone(),
@@ -367,6 +489,7 @@ pub fn run() {
             );
             app.manage(AppState {
                 service,
+                subscriptions,
                 system_proxy,
                 export_directory: data_directory,
             });
@@ -384,7 +507,12 @@ pub fn run() {
             system_proxy_startup_status,
             system_proxy_recover,
             system_proxy_dismiss,
-            export_diagnostics
+            export_diagnostics,
+            subscription_list,
+            subscription_create,
+            subscription_update,
+            subscription_delete,
+            subscription_refresh
         ])
         .run(tauri::generate_context!())
         .expect("failed to run MgClash desktop shell");
@@ -392,7 +520,9 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_system_proxy_ready, parse_node_id, platform_summary};
+    use super::{
+        ensure_system_proxy_ready, parse_node_id, parse_subscription_id, platform_summary,
+    };
     use crate::platform_proxy::SystemProxyStartupStatus;
 
     #[test]
@@ -414,5 +544,12 @@ mod tests {
         let error = parse_node_id("not-a-uuid").unwrap_err();
 
         assert_eq!(error.code, "invalid_node_id");
+    }
+
+    #[test]
+    fn subscription_commands_reject_an_invalid_identifier() {
+        let error = parse_subscription_id("not-a-uuid").unwrap_err();
+
+        assert_eq!(error.code, "invalid_subscription_id");
     }
 }

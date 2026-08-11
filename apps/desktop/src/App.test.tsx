@@ -16,6 +16,11 @@ const exportDiagnosticsMock = vi.hoisted(() => vi.fn());
 const loadSystemProxyStartupStatusMock = vi.hoisted(() => vi.fn());
 const recoverSystemProxyMock = vi.hoisted(() => vi.fn());
 const dismissSystemProxyRecoveryMock = vi.hoisted(() => vi.fn());
+const loadSubscriptionsMock = vi.hoisted(() => vi.fn());
+const createSubscriptionMock = vi.hoisted(() => vi.fn());
+const updateSubscriptionMock = vi.hoisted(() => vi.fn());
+const refreshSubscriptionMock = vi.hoisted(() => vi.fn());
+const deleteSubscriptionMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./platform", () => ({
   loadPlatformSummary: loadPlatformSummaryMock,
@@ -38,6 +43,14 @@ vi.mock("./session", async () => {
     selectNode: selectNodeMock,
   };
 });
+
+vi.mock("./subscriptions", () => ({
+  createSubscription: createSubscriptionMock,
+  deleteSubscription: deleteSubscriptionMock,
+  loadSubscriptions: loadSubscriptionsMock,
+  refreshSubscription: refreshSubscriptionMock,
+  updateSubscription: updateSubscriptionMock,
+}));
 
 import App from "./App";
 import type { SessionStatus } from "./session";
@@ -68,6 +81,16 @@ const SELECTED: SessionStatus = {
 
 const CONNECTED: SessionStatus = { ...SELECTED, connected: true };
 
+const SUBSCRIPTION = {
+  autoUpdate: true,
+  enabled: true,
+  id: "00000000-0000-0000-0000-000000000010",
+  lastUpdatedAt: null,
+  name: "Airport",
+  nodeCount: 3,
+  updateIntervalMinutes: 60,
+};
+
 describe("App", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -85,6 +108,11 @@ describe("App", () => {
     loadSystemProxyStartupStatusMock.mockReset();
     recoverSystemProxyMock.mockReset();
     dismissSystemProxyRecoveryMock.mockReset();
+    loadSubscriptionsMock.mockReset();
+    createSubscriptionMock.mockReset();
+    updateSubscriptionMock.mockReset();
+    refreshSubscriptionMock.mockReset();
+    deleteSubscriptionMock.mockReset();
 
     loadPlatformSummaryMock.mockResolvedValue({
       artifactIdentifier: "macos-x86_64",
@@ -95,6 +123,7 @@ describe("App", () => {
     loadSystemProxyStartupStatusMock.mockResolvedValue("clean");
     recoverSystemProxyMock.mockResolvedValue("clean");
     dismissSystemProxyRecoveryMock.mockResolvedValue("clean");
+    loadSubscriptionsMock.mockResolvedValue([]);
 
     localStorage.clear();
     container = document.createElement("div");
@@ -119,6 +148,18 @@ describe("App", () => {
     )?.set;
     if (!setter) {
       throw new Error("no textarea value setter to drive React with");
+    }
+    setter.call(field, value);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  function typeInput(value: string, field: HTMLInputElement): void {
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    if (!setter) {
+      throw new Error("no input value setter to drive React with");
     }
     setter.call(field, value);
     field.dispatchEvent(new Event("input", { bubbles: true }));
@@ -357,6 +398,104 @@ describe("App", () => {
     expect(deleteNodeMock).toHaveBeenCalledWith(SELECTED.node?.id);
     expect(container.querySelector("[aria-label='节点列表']")).toBeNull();
     expect(container.textContent).toContain("尚未导入节点");
+  });
+
+  it("adds a subscription without exposing its URL in the list", async () => {
+    createSubscriptionMock.mockResolvedValue(SUBSCRIPTION);
+    await render();
+
+    const name = container.querySelector<HTMLInputElement>(
+      "[aria-label='订阅名称']",
+    );
+    const url = container.querySelector<HTMLInputElement>(
+      "[aria-label='订阅地址']",
+    );
+    if (!name || !url) {
+      throw new Error("subscription form is missing");
+    }
+    await act(async () => {
+      typeInput("Airport", name);
+      typeInput("https://example.com/secret", url);
+    });
+    await act(async () => button("添加订阅").click());
+
+    expect(createSubscriptionMock).toHaveBeenCalledWith({
+      autoUpdate: true,
+      name: "Airport",
+      updateIntervalMinutes: 60,
+      url: "https://example.com/secret",
+    });
+    expect(
+      container.querySelector("[aria-label='订阅列表']")?.textContent,
+    ).toContain("Airport");
+    expect(container.textContent).not.toContain("https://example.com/secret");
+  });
+
+  it("edits subscription metadata without replacing its saved URL", async () => {
+    loadSubscriptionsMock.mockResolvedValue([SUBSCRIPTION]);
+    updateSubscriptionMock.mockResolvedValue({
+      ...SUBSCRIPTION,
+      name: "Airport 2",
+    });
+    await render();
+
+    const edit = container.querySelector<HTMLButtonElement>(
+      "[aria-label='编辑 Airport']",
+    );
+    if (!edit) {
+      throw new Error("subscription edit button is missing");
+    }
+    await act(async () => edit.click());
+
+    const name = container.querySelector<HTMLInputElement>(
+      "[aria-label='订阅名称']",
+    );
+    if (!name) {
+      throw new Error("subscription name field is missing");
+    }
+    await act(async () => typeInput("Airport 2", name));
+    await act(async () => button("保存修改").click());
+
+    expect(updateSubscriptionMock).toHaveBeenCalledWith({
+      autoUpdate: true,
+      enabled: true,
+      id: SUBSCRIPTION.id,
+      name: "Airport 2",
+      updateIntervalMinutes: 60,
+      url: null,
+    });
+    expect(container.textContent).toContain("Airport 2");
+  });
+
+  it("refreshes and deletes a subscription", async () => {
+    loadSubscriptionsMock.mockResolvedValue([SUBSCRIPTION]);
+    refreshSubscriptionMock.mockResolvedValue({
+      ...SUBSCRIPTION,
+      lastUpdatedAt: 1_723_456_789,
+      nodeCount: 4,
+    });
+    deleteSubscriptionMock.mockResolvedValue(undefined);
+    await render();
+
+    const refresh = container.querySelector<HTMLButtonElement>(
+      "[aria-label='刷新 Airport']",
+    );
+    if (!refresh) {
+      throw new Error("subscription refresh button is missing");
+    }
+    await act(async () => refresh.click());
+    expect(refreshSubscriptionMock).toHaveBeenCalledWith(SUBSCRIPTION.id);
+    expect(container.textContent).toContain("4");
+
+    const remove = container.querySelector<HTMLButtonElement>(
+      "[aria-label='删除订阅 Airport']",
+    );
+    if (!remove) {
+      throw new Error("subscription delete button is missing");
+    }
+    await act(async () => remove.click());
+    expect(deleteSubscriptionMock).toHaveBeenCalledWith(SUBSCRIPTION.id);
+    expect(container.querySelector("[aria-label='订阅列表']")).toBeNull();
   });
 
   it("refuses to import a blank sharing URI", async () => {
