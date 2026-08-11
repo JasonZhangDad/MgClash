@@ -57,8 +57,8 @@ no compiled-in digest is refused rather than trusted.
   | Windows x86_64 | `65045155ffdc506334f01a4353889657ddfc024f72b394081a9abaef34dfbef3` |
   | Linux x86_64 | `d34d987ed6ae39ca3760269264fb502b867e5477db45518c829b07776245c495` |
 
-- Windows additionally needs the Authenticode-verified Wintun 0.14.1 DLL beside
-  `sing-box.exe` for TUN, per ADR 0002.
+- The Windows artifact also contains the Authenticode-verified Wintun 0.14.1
+  amd64 DLL and its license, per ADR 0002.
 - Gatekeeper and SmartScreen prompts are expected and documented in `README.md`
   and in the app's first-run notice; they are not defects.
 

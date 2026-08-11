@@ -58,7 +58,9 @@ The same warning is shown inside the app on first launch.
 
 `mgclash-<version>-<os>-<cpu>-unsigned.<ext>`, for example
 `mgclash-0.1.0-linux-x86_64-unsigned.tar.gz`. macOS ships a `.app` in a
-tarball, Windows a portable ZIP, Linux a tarball.
+tarball, Windows a portable ZIP, Linux a tarball. The Windows ZIP includes the
+officially signed Wintun 0.14.1 DLL and its license; MgClash itself remains
+unsigned.
 
 Build one locally with:
 

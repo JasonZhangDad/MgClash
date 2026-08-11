@@ -17,6 +17,8 @@ output_directory="${1:-${repository}/dist}"
 core="${MAGIES_BUNDLED_SING_BOX_BIN:-}"
 core_sha256="${MAGIES_SING_BOX_SHA256:-}"
 core_license="${MAGIES_BUNDLED_SING_BOX_LICENSE:-}"
+wintun="${MAGIES_BUNDLED_WINTUN_DLL:-}"
+wintun_license="${MAGIES_BUNDLED_WINTUN_LICENSE:-}"
 
 version="$(
   sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
@@ -59,6 +61,10 @@ fi
 bash "${repository}/scripts/stage-bundled-core.sh" \
   "${core}" "${core_sha256}" "${core_license}" \
   "${scratch}/core" "${core_file_name}"
+if [[ "${os}" == "windows" ]]; then
+  bash "${repository}/scripts/stage-bundled-wintun.sh" \
+    "${wintun}" "${wintun_license}" "${scratch}/wintun"
+fi
 export MAGIES_SING_BOX_SHA256="${core_sha256}"
 
 echo "building ${name}"
@@ -102,6 +108,10 @@ else
   cp "${repository}/README.md" "${staging}/${name}/"
   cp "${scratch}/core/${core_file_name}" "${staging}/${name}/"
   cp "${scratch}/core/LICENSE-sing-box" "${staging}/${name}/"
+  if [[ "${os}" == "windows" ]]; then
+    cp "${scratch}/wintun/wintun.dll" "${staging}/${name}/"
+    cp "${scratch}/wintun/LICENSE-wintun" "${staging}/${name}/"
+  fi
 
   if [[ "${os}" == "windows" ]]; then
     archive="${output_directory}/${name}.zip"
