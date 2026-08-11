@@ -10,10 +10,20 @@ export type ProxyProtocol =
 export interface NodeSummary {
   deletable: boolean;
   id: string;
+  lastTestedAt: number | null;
+  latencyMs: number | null;
   name: string;
   port: number;
   protocol: ProxyProtocol;
   server: string;
+}
+
+export type NodeTestStatus = "failed" | "success" | "timeout";
+
+export interface NodeTestResult {
+  id: string;
+  latencyMs: number | null;
+  status: NodeTestStatus;
 }
 
 export interface SessionStatus {
@@ -53,6 +63,44 @@ export function importNode(uri: string): Promise<SessionStatus> {
 
 export function loadNodes(): Promise<NodeSummary[]> {
   return invoke<NodeSummary[]>("session_nodes");
+}
+
+export function testNode(id: string): Promise<NodeTestResult> {
+  return invoke<NodeTestResult>("session_test_node", { id });
+}
+
+export async function testAllNodes(
+  ids: string[],
+  onResult: (result: NodeTestResult) => void,
+  isCancelled: () => boolean,
+): Promise<void> {
+  let nextIndex = 0;
+  let firstFailure: unknown;
+  let hasFailure = false;
+  const workers = Array.from(
+    { length: Math.min(8, ids.length) },
+    async () => {
+      while (!isCancelled() && !hasFailure) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= ids.length) {
+          return;
+        }
+        try {
+          onResult(await testNode(ids[index]));
+        } catch (failure: unknown) {
+          if (!hasFailure) {
+            firstFailure = failure;
+            hasFailure = true;
+          }
+        }
+      }
+    },
+  );
+  await Promise.all(workers);
+  if (hasFailure) {
+    throw firstFailure;
+  }
 }
 
 export function selectNode(id: string): Promise<SessionStatus> {

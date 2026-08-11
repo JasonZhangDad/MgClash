@@ -263,6 +263,8 @@ mod tests {
             server: "example.com".to_owned(),
             port: 443,
             deletable: true,
+            latency_ms: None,
+            last_tested_at: None,
         }
     }
 

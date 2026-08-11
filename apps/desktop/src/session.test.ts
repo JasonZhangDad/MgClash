@@ -17,6 +17,9 @@ import {
   loadSystemProxyStartupStatus,
   recoverSystemProxy,
   selectNode,
+  testAllNodes,
+  testNode,
+  type NodeTestResult,
   type SessionStatus,
 } from "./session";
 
@@ -61,6 +64,91 @@ describe("session commands", () => {
     expect(invokeMock).toHaveBeenNthCalledWith(3, "session_delete_node", {
       id: "00000000-0000-0000-0000-000000000002",
     });
+  });
+
+  it("tests one node through the Rust command", async () => {
+    const result: NodeTestResult = {
+      id: "00000000-0000-0000-0000-000000000001",
+      latencyMs: 42,
+      status: "success",
+    };
+    invokeMock.mockResolvedValue(result);
+
+    await expect(testNode(result.id)).resolves.toEqual(result);
+    expect(invokeMock).toHaveBeenCalledWith("session_test_node", {
+      id: result.id,
+    });
+  });
+
+  it("tests at most eight nodes concurrently and cancels queued tests", async () => {
+    const ids = Array.from(
+      { length: 10 },
+      (_, index) => `00000000-0000-0000-0000-${String(index).padStart(12, "0")}`,
+    );
+    const releases = new Map<string, (result: NodeTestResult) => void>();
+    invokeMock.mockImplementation(
+      (_command: string, arguments_: { id: string }) =>
+        new Promise<NodeTestResult>((resolve) => {
+          releases.set(arguments_.id, resolve);
+        }),
+    );
+    let cancelled = false;
+    const onResult = vi.fn();
+
+    const batch = testAllNodes(ids, onResult, () => cancelled);
+    expect(invokeMock).toHaveBeenCalledTimes(8);
+
+    releases.get(ids[0])?.({ id: ids[0], latencyMs: 10, status: "success" });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(invokeMock).toHaveBeenCalledTimes(9);
+
+    cancelled = true;
+    for (const [id, release] of releases) {
+      release({ id, latencyMs: null, status: "timeout" });
+    }
+    await batch;
+
+    expect(invokeMock).toHaveBeenCalledTimes(9);
+    expect(onResult).toHaveBeenCalledTimes(9);
+  });
+
+  it("stops queuing after a command failure and waits for in-flight tests", async () => {
+    const ids = Array.from(
+      { length: 10 },
+      (_, index) => `00000000-0000-0000-0001-${String(index).padStart(12, "0")}`,
+    );
+    const pending = new Map<
+      string,
+      {
+        reject: (error: unknown) => void;
+        resolve: (result: NodeTestResult) => void;
+      }
+    >();
+    invokeMock.mockImplementation(
+      (_command: string, arguments_: { id: string }) =>
+        new Promise<NodeTestResult>((resolve, reject) => {
+          pending.set(arguments_.id, { reject, resolve });
+        }),
+    );
+    const failure = { code: "node_store_failed", message: "write failed" };
+    let settled = false;
+
+    const batch = testAllNodes(ids, vi.fn(), () => false).catch(() => {
+      settled = true;
+    });
+    pending.get(ids[0])?.reject(failure);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+    for (const [id, operation] of pending) {
+      operation.resolve({ id, latencyMs: 10, status: "success" });
+    }
+    await batch;
+
+    expect(settled).toBe(true);
+    expect(invokeMock).toHaveBeenCalledTimes(8);
   });
 
   it("connects and disconnects through their own commands", async () => {

@@ -7,7 +7,7 @@
 use std::path::Path;
 use std::time::Instant;
 
-use magies_domain::{CredentialRef, NodeModelError, ProxyNode, ProxyProtocol};
+use magies_domain::{CredentialRef, NodeModelError, ProxyNode, ProxyProtocol, TimestampMillis};
 use magies_profiles::{
     CredentialCodec, CredentialCodecError, DnsProfile, DnsServer, DnsStrategy, LocalHttpProfile,
     LocalSocksProfile, ManualNodeStoreError, ShareLinkParseError, ShareLinkParser,
@@ -84,6 +84,8 @@ pub struct NodeSummary {
     pub server: String,
     pub port: u16,
     pub deletable: bool,
+    pub latency_ms: Option<u32>,
+    pub last_tested_at: Option<i64>,
 }
 
 impl From<&ProxyNode> for NodeSummary {
@@ -95,6 +97,8 @@ impl From<&ProxyNode> for NodeSummary {
             server: node.server.as_str().to_owned(),
             port: node.port.get(),
             deletable: node.subscription_id.is_none(),
+            latency_ms: node.latency_ms,
+            last_tested_at: node.last_tested_at.map(TimestampMillis::get),
         }
     }
 }
@@ -240,6 +244,46 @@ where
                 .map_err(SessionCommandError::SubscriptionNodeStore)?,
         );
         Ok(nodes.iter().map(NodeSummary::from).collect())
+    }
+
+    /// Returns one active persisted node without exposing its credential.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed not-found error when `id` is not a manual or active
+    /// subscription node, or a typed storage error when the database is unreadable.
+    pub fn node(&self, id: Uuid) -> Result<NodeSummary, SessionCommandError<C::Error, P::Error>> {
+        self.nodes()?
+            .into_iter()
+            .find(|node| node.id == id)
+            .ok_or(SessionCommandError::NodeStore(
+                ManualNodeStoreError::NodeNotFound { id },
+            ))
+    }
+
+    /// Records the latest endpoint test without changing the selected node.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed not-found or storage error when the node cannot be updated.
+    pub fn record_node_latency(
+        &mut self,
+        id: Uuid,
+        latency_ms: Option<u32>,
+        tested_at: TimestampMillis,
+    ) -> Result<NodeSummary, SessionCommandError<C::Error, P::Error>> {
+        let node = match self.manual_nodes.update_latency(id, latency_ms, tested_at) {
+            Ok(node) => node,
+            Err(ManualNodeStoreError::NodeNotFound { .. }) => self
+                .subscription_nodes
+                .update_node_latency(id, latency_ms, tested_at)
+                .map_err(SessionCommandError::SubscriptionNodeStore)?,
+            Err(error) => return Err(SessionCommandError::NodeStore(error)),
+        };
+        if self.node.as_ref().is_some_and(|selected| selected.id == id) {
+            self.node = Some(node.clone());
+        }
+        Ok(NodeSummary::from(&node))
     }
 
     /// Selects a persisted node while the session is disconnected.
