@@ -16,6 +16,7 @@ const testAllNodesMock = vi.hoisted(() => vi.fn());
 const testUrlMock = vi.hoisted(() => vi.fn());
 const connectSessionMock = vi.hoisted(() => vi.fn());
 const disconnectSessionMock = vi.hoisted(() => vi.fn());
+const setRoutingModeMock = vi.hoisted(() => vi.fn());
 const exportDiagnosticsMock = vi.hoisted(() => vi.fn());
 const loadSystemProxyStartupStatusMock = vi.hoisted(() => vi.fn());
 const recoverSystemProxyMock = vi.hoisted(() => vi.fn());
@@ -47,6 +48,7 @@ vi.mock("./session", async () => {
     loadSystemProxyStartupStatus: loadSystemProxyStartupStatusMock,
     recoverSystemProxy: recoverSystemProxyMock,
     selectNode: selectNodeMock,
+    setRoutingMode: setRoutingModeMock,
     testAllNodes: testAllNodesMock,
     testNode: testNodeMock,
     testUrl: testUrlMock,
@@ -122,6 +124,7 @@ describe("App", () => {
     testUrlMock.mockReset();
     connectSessionMock.mockReset();
     disconnectSessionMock.mockReset();
+    setRoutingModeMock.mockReset();
     exportDiagnosticsMock.mockReset();
     loadSystemProxyStartupStatusMock.mockReset();
     recoverSystemProxyMock.mockReset();
@@ -165,6 +168,18 @@ describe("App", () => {
 
   async function render(): Promise<void> {
     await act(async () => root.render(<App />));
+  }
+
+  function selectValue(value: string, field: HTMLSelectElement): void {
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLSelectElement.prototype,
+      "value",
+    )?.set;
+    if (!setter) {
+      throw new Error("no select value setter to drive React with");
+    }
+    setter.call(field, value);
+    field.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
   /** React tracks the DOM value itself, so a plain assignment is ignored. */
@@ -819,6 +834,32 @@ describe("App", () => {
 
     expect(disconnectSessionMock).toHaveBeenCalledOnce();
     expect(container.textContent).toContain("未连接");
+  });
+
+  it("switches routing mode while disconnected", async () => {
+    const ruleStatus: SessionStatus = { ...IDLE, mode: "rule" };
+    setRoutingModeMock.mockResolvedValue(ruleStatus);
+    await render();
+    const field = container.querySelector<HTMLSelectElement>(
+      "select[aria-label='路由模式']",
+    );
+    expect(field).not.toBeNull();
+
+    await act(async () => selectValue("rule", field!));
+
+    expect(setRoutingModeMock).toHaveBeenCalledWith("rule");
+    expect(field?.value).toBe("rule");
+  });
+
+  it("locks routing mode while connected", async () => {
+    loadSessionStatusMock.mockResolvedValue(CONNECTED);
+    await render();
+
+    expect(
+      container.querySelector<HTMLSelectElement>(
+        "select[aria-label='路由模式']",
+      )?.disabled,
+    ).toBe(true);
   });
 
   it("picks up a reconnect that automatic recovery performed", async () => {

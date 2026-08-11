@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use magies_desktop_lib::routing_mode::SqliteRoutingModeStore;
 use magies_desktop_lib::session::{SessionCommandError, SessionDefaults, SessionService};
 use magies_domain::{CredentialRef, ProxyProtocol, Subscription, TimestampMillis};
 use magies_platform::system_proxy::SystemProxyState;
@@ -14,6 +15,7 @@ use magies_profiles::{
     CredentialCodec, LocalHttpProfile, LocalSocksProfile, SqliteManualNodeStore,
     SqliteSubscriptionStore, SubscriptionContentParser, SubscriptionUpdate, SubscriptionValidators,
 };
+use magies_routing::RoutingMode;
 use magies_session::{
     CoreSessionControl, DesktopSession, NetworkEvent, RecoveryOutcome, SessionHealthProbe,
     SystemProxySessionControl,
@@ -222,6 +224,32 @@ fn refuses_to_change_nodes_while_connected() {
 }
 
 #[test]
+fn changes_the_route_while_disconnected_and_uses_it_for_the_next_connection() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+
+    let status = service.set_routing_mode(RoutingMode::Direct).unwrap();
+
+    assert_eq!(status.mode, "direct");
+    service.connect().unwrap();
+    let config: serde_json::Value =
+        serde_json::from_slice(&fs::read(service.runtime_config_path().unwrap()).unwrap()).unwrap();
+    assert_eq!(config["route"]["final"], "direct");
+}
+
+#[test]
+fn refuses_to_change_the_route_while_connected() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    service.connect().unwrap();
+
+    let error = service.set_routing_mode(RoutingMode::Rule).unwrap_err();
+
+    assert_eq!(error.code(), "session_active");
+    assert_eq!(service.status().mode, "global");
+}
+
+#[test]
 fn rejects_an_unsupported_share_link_without_selecting_a_node() {
     let (mut service, _runtime, _fail_start) = service();
 
@@ -320,6 +348,7 @@ fn surfaces_a_failing_core_start_as_a_session_error() {
         SessionDefaults::v01(),
         SqliteManualNodeStore::open_in_memory().unwrap(),
         SqliteSubscriptionStore::open_in_memory().unwrap(),
+        SqliteRoutingModeStore::open_in_memory().unwrap(),
     )
     .unwrap();
     service.import_node(SHADOWSOCKS_LINK).unwrap();
@@ -363,6 +392,7 @@ fn service_with_events(
         SessionDefaults::v01(),
         SqliteManualNodeStore::open_in_memory().unwrap(),
         SqliteSubscriptionStore::open_in_memory().unwrap(),
+        SqliteRoutingModeStore::open_in_memory().unwrap(),
     )
     .unwrap();
     (service, runtime, fail_start)
@@ -418,6 +448,7 @@ fn service_with_subscription_node() -> (TestService, Uuid, RuntimeDirectory) {
         SessionDefaults::v01(),
         SqliteManualNodeStore::open(&database).unwrap(),
         subscriptions,
+        SqliteRoutingModeStore::open(&database).unwrap(),
     )
     .unwrap();
     (service, node_id, runtime)
@@ -567,7 +598,12 @@ impl CoreSessionControl for FakeCore {
     fn start(&mut self, config_path: &Path) -> Result<Self::Output, Self::Error> {
         self.events.lock().unwrap().push("core_start");
         let config = fs::read_to_string(config_path).unwrap();
-        assert!(config.contains("runtime-secret"));
+        let parsed: serde_json::Value = serde_json::from_str(&config).unwrap();
+        if parsed["route"]["final"] == "direct" {
+            assert!(!config.contains("runtime-secret"));
+        } else {
+            assert!(config.contains("runtime-secret"));
+        }
         assert!(config.contains("127.0.0.1:9090"));
         if self.fail_start.load(Ordering::Relaxed) {
             Err(FakeError("core start failed"))

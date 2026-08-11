@@ -15,12 +15,14 @@ import {
   loadTraffic,
   recoverSystemProxy,
   selectNode,
+  setRoutingMode,
   testAllNodes,
   testNode,
   testUrl,
   type NodeSummary,
   type NodeTestResult,
   type SessionStatus,
+  type RoutingMode,
   type SystemProxyStartupStatus,
   type TrafficSnapshot,
 } from "./session";
@@ -620,7 +622,22 @@ export default function App() {
           </div>
           <div>
             <dt>模式</dt>
-            <dd>{status ? status.mode : "—"}</dd>
+            <dd>
+              <select
+                aria-label="路由模式"
+                disabled={busy || connected || status === null}
+                value={status?.mode ?? "global"}
+                onChange={(event) =>
+                  void run(() =>
+                    setRoutingMode(event.target.value as RoutingMode),
+                  )
+                }
+              >
+                <option value="global">全局</option>
+                <option value="rule">规则</option>
+                <option value="direct">直连</option>
+              </select>
+            </dd>
           </div>
           <div>
             <dt>本地代理</dt>

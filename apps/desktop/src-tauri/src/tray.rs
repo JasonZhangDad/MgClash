@@ -1,5 +1,6 @@
 use std::sync::{Mutex, PoisonError};
 
+use magies_routing::RoutingMode;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
 use tauri::{App, AppHandle, Wry};
@@ -11,12 +12,17 @@ pub const OPEN_MENU_ID: &str = "tray:open";
 pub const TOGGLE_MENU_ID: &str = "tray:toggle";
 pub const QUIT_MENU_ID: &str = "tray:quit";
 const NODE_MENU_PREFIX: &str = "tray:node:";
+const MODE_GLOBAL_MENU_ID: &str = "tray:mode:global";
+const MODE_RULE_MENU_ID: &str = "tray:mode:rule";
+const MODE_DIRECT_MENU_ID: &str = "tray:mode:direct";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TrayMenuModel {
     pub status_text: String,
     pub toggle_text: &'static str,
     pub toggle_enabled: bool,
+    pub mode: RoutingMode,
+    pub mode_enabled: bool,
     pub nodes: Vec<TrayNodeItem>,
 }
 
@@ -32,6 +38,7 @@ pub struct TrayNodeItem {
 pub enum TrayAction {
     Open,
     Toggle,
+    SetRoutingMode(RoutingMode),
     SelectNode(Uuid),
     Quit,
 }
@@ -39,6 +46,7 @@ pub enum TrayAction {
 pub struct TrayUi {
     status: MenuItem<Wry>,
     toggle: MenuItem<Wry>,
+    modes: Submenu<Wry>,
     nodes: Submenu<Wry>,
     last_model: Mutex<Option<TrayMenuModel>>,
 }
@@ -64,11 +72,16 @@ impl TrayUi {
             initial.toggle_enabled,
             None::<&str>,
         )?;
+        let modes = Submenu::new(app, "模式", true)?;
+        replace_mode_items(app.handle(), &modes, initial.mode, initial.mode_enabled)?;
         let nodes = Submenu::new(app, "节点", true)?;
         replace_node_items(app.handle(), &nodes, &initial.nodes)?;
         let separator = PredefinedMenuItem::separator(app)?;
         let quit = MenuItem::with_id(app, QUIT_MENU_ID, "退出", true, None::<&str>)?;
-        let menu = Menu::with_items(app, &[&open, &status, &toggle, &nodes, &separator, &quit])?;
+        let menu = Menu::with_items(
+            app,
+            &[&open, &status, &toggle, &modes, &nodes, &separator, &quit],
+        )?;
         let mut builder = TrayIconBuilder::with_id("main")
             .menu(&menu)
             .tooltip("MgClash")
@@ -85,6 +98,7 @@ impl TrayUi {
         Ok(Self {
             status,
             toggle,
+            modes,
             nodes,
             last_model: Mutex::new(Some(initial)),
         })
@@ -108,6 +122,7 @@ impl TrayUi {
         self.status.set_text(&model.status_text)?;
         self.toggle.set_text(model.toggle_text)?;
         self.toggle.set_enabled(model.toggle_enabled)?;
+        replace_mode_items(app, &self.modes, model.mode, model.mode_enabled)?;
         replace_node_items(app, &self.nodes, &model.nodes)?;
         *last_model = Some(model);
         Ok(())
@@ -118,6 +133,33 @@ impl TrayUi {
             eprintln!("tray failure status update failed: {error}");
         }
     }
+}
+
+fn replace_mode_items(
+    app: &AppHandle,
+    submenu: &Submenu<Wry>,
+    selected: RoutingMode,
+    enabled: bool,
+) -> tauri::Result<()> {
+    let item_count = submenu.items()?.len();
+    for _ in 0..item_count {
+        let _ = submenu.remove_at(0)?;
+    }
+    for (id, label, mode) in [
+        (MODE_GLOBAL_MENU_ID, "全局", RoutingMode::Global),
+        (MODE_RULE_MENU_ID, "规则", RoutingMode::Rule),
+        (MODE_DIRECT_MENU_ID, "直连", RoutingMode::Direct),
+    ] {
+        submenu.append(&CheckMenuItem::with_id(
+            app,
+            id,
+            label,
+            enabled,
+            selected == mode,
+            None::<&str>,
+        )?)?;
+    }
+    Ok(())
 }
 
 fn replace_node_items(
@@ -155,15 +197,22 @@ pub fn menu_model(status: &SessionStatus, nodes: &[NodeSummary]) -> TrayMenuMode
     } else {
         "未连接"
     };
+    let (mode, mode_text) = match status.mode {
+        "rule" => (RoutingMode::Rule, "规则"),
+        "direct" => (RoutingMode::Direct, "直连"),
+        _ => (RoutingMode::Global, "全局"),
+    };
     let status_text = status.node.as_ref().map_or_else(
-        || state.to_owned(),
-        |node| format!("{state} · {}", node.name),
+        || format!("{state} · {mode_text}"),
+        |node| format!("{state} · {} · {mode_text}", node.name),
     );
 
     TrayMenuModel {
         status_text,
         toggle_text: if status.connected { "断开" } else { "连接" },
         toggle_enabled: status.connected || selected_id.is_some(),
+        mode,
+        mode_enabled: !status.connected,
         nodes: nodes
             .iter()
             .map(|node| {
@@ -190,6 +239,9 @@ pub fn action_for_menu_id(id: &str) -> Option<TrayAction> {
         OPEN_MENU_ID => Some(TrayAction::Open),
         TOGGLE_MENU_ID => Some(TrayAction::Toggle),
         QUIT_MENU_ID => Some(TrayAction::Quit),
+        MODE_GLOBAL_MENU_ID => Some(TrayAction::SetRoutingMode(RoutingMode::Global)),
+        MODE_RULE_MENU_ID => Some(TrayAction::SetRoutingMode(RoutingMode::Rule)),
+        MODE_DIRECT_MENU_ID => Some(TrayAction::SetRoutingMode(RoutingMode::Direct)),
         _ => id
             .strip_prefix(NODE_MENU_PREFIX)
             .and_then(|id| Uuid::parse_str(id).ok())
@@ -200,6 +252,7 @@ pub fn action_for_menu_id(id: &str) -> Option<TrayAction> {
 #[cfg(test)]
 mod tests {
     use magies_domain::ProxyProtocol;
+    use magies_routing::RoutingMode;
     use uuid::Uuid;
 
     use super::{TrayAction, action_for_menu_id, menu_model, node_menu_id};
@@ -214,9 +267,11 @@ mod tests {
             &[selected.clone(), other.clone()],
         );
 
-        assert_eq!(model.status_text, "未连接 · Tokyo");
+        assert_eq!(model.status_text, "未连接 · Tokyo · 全局");
         assert_eq!(model.toggle_text, "连接");
         assert!(model.toggle_enabled);
+        assert_eq!(model.mode, RoutingMode::Global);
+        assert!(model.mode_enabled);
         assert_eq!(model.nodes.len(), 2);
         assert!(model.nodes[0].selected);
         assert!(!model.nodes[0].enabled);
@@ -235,13 +290,18 @@ mod tests {
             std::slice::from_ref(&selected),
         );
 
-        assert_eq!(model.status_text, "已连接 · Tokyo");
+        assert_eq!(model.status_text, "已连接 · Tokyo · 全局");
         assert_eq!(model.toggle_text, "断开");
         assert!(model.toggle_enabled);
+        assert!(!model.mode_enabled);
         assert!(!model.nodes[0].enabled);
         assert_eq!(action_for_menu_id("tray:toggle"), Some(TrayAction::Toggle));
         assert_eq!(action_for_menu_id("tray:open"), Some(TrayAction::Open));
         assert_eq!(action_for_menu_id("tray:quit"), Some(TrayAction::Quit));
+        assert_eq!(
+            action_for_menu_id("tray:mode:direct"),
+            Some(TrayAction::SetRoutingMode(RoutingMode::Direct))
+        );
         assert_eq!(action_for_menu_id("tray:unknown"), None);
     }
 
@@ -249,10 +309,18 @@ mod tests {
     fn menu_without_a_selected_node_cannot_connect() {
         let model = menu_model(&status(false, None), &[]);
 
-        assert_eq!(model.status_text, "未连接");
+        assert_eq!(model.status_text, "未连接 · 全局");
         assert_eq!(model.toggle_text, "连接");
         assert!(!model.toggle_enabled);
         assert!(model.nodes.is_empty());
+    }
+
+    #[test]
+    fn menu_displays_the_current_routing_mode() {
+        let mut current = status(false, None);
+        current.mode = "rule";
+
+        assert_eq!(menu_model(&current, &[]).status_text, "未连接 · 规则");
     }
 
     fn node(value: u128, name: &str) -> NodeSummary {

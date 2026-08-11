@@ -15,7 +15,7 @@ use magies_profiles::{
     LocalSocksProfile, ManualNodeStoreError, ShareLinkParseError, ShareLinkParser,
     SqliteManualNodeStore, SqliteSubscriptionStore, SubscriptionTransactionError,
 };
-use magies_routing::{RouteOutbound, RouteProfile, RoutingMode};
+use magies_routing::{RouteProfile, RoutingMode};
 use magies_session::{
     CoreSessionControl, DesktopSession, DesktopSessionError, DesktopSessionProfile, NetworkEvent,
     NetworkRecoveryPolicy, RecoveryError, RecoveryOutcome, SessionHealthProbe,
@@ -25,6 +25,10 @@ use magies_storage::{SecretStore, SecretStoreError};
 use serde::Serialize;
 use thiserror::Error;
 use uuid::Uuid;
+
+use crate::routing_mode::{
+    RoutingModeStoreError, SqliteRoutingModeStore, route_profile_for, routing_mode_name,
+};
 
 /// The Core the V0.1 desktop shell drives.
 const CORE_NAME: &str = "sing-box";
@@ -63,18 +67,13 @@ impl SessionDefaults {
                 false,
             )
             .expect("the single system resolver is a valid DNS profile"),
-            route: RouteProfile::new(RoutingMode::Global, Vec::new(), RouteOutbound::Proxy)
-                .expect("Global mode with a proxy final outbound is valid"),
+            route: route_profile_for(RoutingMode::Global),
             system_proxy: true,
         }
     }
 
     fn mode(&self) -> &'static str {
-        match self.route.mode() {
-            RoutingMode::Global => "global",
-            RoutingMode::Rule => "rule",
-            RoutingMode::Direct => "direct",
-        }
+        routing_mode_name(self.route.mode())
     }
 }
 
@@ -133,6 +132,7 @@ pub struct SessionService<S, C, P> {
     node: Option<ProxyNode>,
     manual_nodes: SqliteManualNodeStore,
     subscription_nodes: SqliteSubscriptionStore,
+    routing_mode: SqliteRoutingModeStore,
     recovery: NetworkRecoveryPolicy,
 }
 
@@ -153,16 +153,20 @@ where
         defaults: SessionDefaults,
         manual_nodes: SqliteManualNodeStore,
         subscription_nodes: SqliteSubscriptionStore,
+        routing_mode: SqliteRoutingModeStore,
     ) -> Result<Self, SessionInitializationError> {
         let node = subscription_nodes
             .selected_node()?
             .or(manual_nodes.selected_node()?);
+        let mut defaults = defaults;
+        defaults.route = route_profile_for(routing_mode.load()?);
         Ok(Self {
             session,
             defaults,
             node,
             manual_nodes,
             subscription_nodes,
+            routing_mode,
             recovery: NetworkRecoveryPolicy::default(),
         })
     }
@@ -323,6 +327,25 @@ where
             Err(error) => return Err(SessionCommandError::NodeStore(error)),
         };
         self.node = Some(node);
+        Ok(self.status())
+    }
+
+    /// Saves the routing mode used by the next connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed active-session or persistence error.
+    pub fn set_routing_mode(
+        &mut self,
+        mode: RoutingMode,
+    ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
+        if self.session.is_running() {
+            return Err(SessionCommandError::SessionActive);
+        }
+        self.routing_mode
+            .save(mode)
+            .map_err(SessionCommandError::RoutingModeStore)?;
+        self.defaults.route = route_profile_for(mode);
         Ok(self.status())
     }
 
@@ -490,6 +513,8 @@ pub enum SessionInitializationError {
     ManualNodeStore(#[from] ManualNodeStoreError),
     #[error("failed to read the subscription node selection")]
     SubscriptionNodeStore(#[from] SubscriptionTransactionError),
+    #[error("failed to load the routing mode")]
+    RoutingModeStore(#[from] RoutingModeStoreError),
 }
 
 #[derive(Debug, Error)]
@@ -512,6 +537,8 @@ where
     NodeStore(#[source] ManualNodeStoreError),
     #[error("failed to change the subscription node store")]
     SubscriptionNodeStore(#[source] SubscriptionTransactionError),
+    #[error("failed to save the routing mode")]
+    RoutingModeStore(#[source] RoutingModeStoreError),
     #[error("subscription node {id} is managed by its subscription")]
     SubscriptionNodeReadOnly { id: Uuid },
     #[error("failed to save the node and roll back its credential")]
@@ -551,6 +578,7 @@ where
             | Self::NodeStoreAndSecretRollback { .. }
             | Self::SubscriptionNodeStore(_) => "node_store_failed",
             Self::SubscriptionNodeReadOnly { .. } => "subscription_node_read_only",
+            Self::RoutingModeStore(_) => "routing_mode_store_failed",
             Self::SessionActive => "session_active",
             Self::SessionInactive => "session_inactive",
             Self::Session(_) => "session_failed",
