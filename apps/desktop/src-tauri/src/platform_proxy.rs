@@ -17,6 +17,7 @@ use magies_platform::system_proxy_recovery::{
 use magies_session::SystemProxySessionControl;
 use thiserror::Error;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::core_control::describe;
 
 #[cfg(target_os = "linux")]
@@ -74,12 +75,14 @@ impl SystemProxySessionControl for PlatformProxyControl {
     fn enable(&mut self, state: &SystemProxyState) -> Result<(), Self::Error> {
         self.manager()?
             .enable(state)
-            .map_err(PlatformProxyError::Recovery)
+            .map_err(|source| PlatformProxyError::Recovery(Box::new(source)))
     }
 
     fn stop(&mut self) -> Result<(), Self::Error> {
         match self.manager.as_ref() {
-            Ok(manager) => manager.stop().map_err(PlatformProxyError::Recovery),
+            Ok(manager) => manager
+                .stop()
+                .map_err(|source| PlatformProxyError::Recovery(Box::new(source))),
             Err(_) => Ok(()),
         }
     }
@@ -105,7 +108,7 @@ pub enum PlatformProxyError {
     #[error("System Proxy is unavailable on this desktop")]
     Setup(#[source] PlatformProxySetupError),
     #[error("the System Proxy change failed")]
-    Recovery(#[source] SystemProxyRecoveryError<PlatformAdapterError, JsonRecoveryStoreError>),
+    Recovery(#[source] Box<SystemProxyRecoveryError<PlatformAdapterError, JsonRecoveryStoreError>>),
 }
 
 impl PlatformProxyError {
