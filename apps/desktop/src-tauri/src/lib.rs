@@ -393,9 +393,10 @@ fn refresh_tray(app: &AppHandle) -> Result<(), CommandError> {
         let nodes = service.nodes().map_err(|error| command_error(&error))?;
         (status, nodes)
     };
+    let traffic = state.traffic().snapshot();
     state
         .tray
-        .refresh(app, menu_model(&status, &nodes))
+        .refresh(app, menu_model(&status, &nodes, traffic))
         .map_err(|error| CommandError {
             code: "tray_update_failed",
             message: error.to_string(),
@@ -1020,8 +1021,8 @@ pub fn run() {
                 SqliteDnsSettingsStore::open(&node_database)?,
             )?));
             let initial_tray_model = {
-                let service = lock(&service);
-                menu_model(&service.status(), &service.nodes()?)
+                let (service, traffic) = (lock(&service), lock(&traffic).snapshot());
+                menu_model(&service.status(), &service.nodes()?, traffic)
             };
             let tray = TrayUi::install(app, initial_tray_model, handle_tray_action)?;
             app.manage(AppState {
