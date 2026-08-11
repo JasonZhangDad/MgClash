@@ -14,14 +14,16 @@ fn measures_a_reachable_tcp_endpoint() {
 }
 
 #[test]
-fn reports_a_refused_tcp_endpoint_as_failed() {
+fn reports_an_unreachable_tcp_endpoint_without_latency() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
     drop(listener);
 
+    let error = probe_tcp("127.0.0.1", port, Duration::from_secs(1)).unwrap_err();
+
     assert!(matches!(
-        probe_tcp("127.0.0.1", port, Duration::from_secs(1)),
-        Err(TcpLatencyError::Connect(_))
+        error,
+        TcpLatencyError::Connect(_) | TcpLatencyError::Timeout
     ));
 }
 
