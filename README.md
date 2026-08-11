@@ -31,6 +31,10 @@ Microsoft Authenticode, no Linux repository or GPG signature. This is a
 deliberate decision for the current phase (see ADR 0001/0002), not an oversight,
 and it has consequences you should understand before running a build:
 
+On Apple Silicon, Apple's linker may add an automatic ad-hoc signature. It has
+no Developer ID or Team ID and is not notarization; this is still an unsigned
+release under the definition in the cross-platform PRD.
+
 - **macOS** — Gatekeeper blocks the app on first launch. You must open it
   explicitly (right-click → Open, or System Settings → Privacy & Security).
   **TUN mode is unavailable**: `NEPacketTunnelProvider` requires an Apple-issued
@@ -41,8 +45,8 @@ and it has consequences you should understand before running a build:
 - **Linux** — the tarball is not installed from a signed repository. TUN
   requires `CAP_NET_ADMIN`.
 
-Because nothing is signed, **verify the SHA-256 yourself**. Every artifact ships
-with a `.sha256` next to it:
+Because there is no publisher identity signature, **verify the SHA-256
+yourself**. Every artifact ships with a `.sha256` next to it:
 
 ```sh
 shasum -a 256 -c mgclash-0.1.0-macos-aarch64-unsigned.tar.gz.sha256

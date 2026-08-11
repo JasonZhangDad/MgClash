@@ -25,8 +25,10 @@ The name is `mgclash-<version>-<os>-<cpu>-unsigned.<ext>`. Every artifact ships 
 `.sha256` sidecar: with no signature, a published digest is the only integrity
 check a downloader has.
 
-Nothing is signed, notarized, or stapled. `codesign -dv` on the produced `.app`
-reports `code object is not signed at all`, which is the intended state.
+Nothing receives a publisher identity signature, notarization, or stapling.
+macOS x86_64 reports `code object is not signed at all`. Apple's arm64 linker
+adds an automatic ad-hoc signature; it has no Developer ID or Team ID and is
+allowed by the unsigned-release definition in the cross-platform PRD.
 
 ### Locating the Core
 
@@ -75,4 +77,12 @@ shasum -a 256 -c …tar.gz.sha256                       OK
 codesign -dv MgClash.app                              code object is not signed at all
 ```
 
-Windows and Linux packaging has not been executed; only the macOS path has run.
+Actions run `31461933876` then built and uploaded all four target artifacts. The
+downloaded artifacts were independently checked:
+
+- every archive matched its `.sha256` sidecar;
+- MgClash and sing-box had the expected arm64 or x86_64 format;
+- every artifact contained sing-box and `LICENSE-sing-box`;
+- each Core digest was present in its paired MgClash executable;
+- macOS x86_64 was completely unsigned; macOS arm64 was linker-signed ad-hoc
+  with no Team ID.
