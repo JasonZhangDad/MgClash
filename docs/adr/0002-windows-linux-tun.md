@@ -28,6 +28,10 @@ Windows packages the unmodified official Wintun 0.14.1 amd64 DLL beside
 - sing-box Windows ZIP SHA256
   `65045155ffdc506334f01a4353889657ddfc024f72b394081a9abaef34dfbef3`.
 
+The Windows release job performs both Wintun checks before passing the DLL and
+license to `scripts/package-unsigned.sh`. The portable ZIP places `wintun.dll`
+beside `sing-box.exe` and includes `LICENSE-wintun`.
+
 ## Verification
 
 CI downloads the pinned upstream artifacts, verifies hashes and the Windows

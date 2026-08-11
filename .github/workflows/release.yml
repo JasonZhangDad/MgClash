@@ -11,6 +11,8 @@ permissions:
 
 env:
   SING_BOX_VERSION: "1.13.18"
+  WINTUN_VERSION: "0.14.1"
+  WINTUN_ARCHIVE_SHA256: 07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51
 
 jobs:
   package:
@@ -66,7 +68,9 @@ jobs:
         run: npm ci
       - name: Test release scripts
         shell: bash
-        run: bash scripts/tests/stage-bundled-core.sh
+        run: |
+          bash scripts/tests/stage-bundled-core.sh
+          bash scripts/tests/stage-bundled-wintun.sh
       - name: Prepare pinned sing-box
         shell: bash
         env:
@@ -119,6 +123,41 @@ jobs:
             printf 'MAGIES_BUNDLED_SING_BOX_BIN=%s\n' "${core}"
             printf 'MAGIES_BUNDLED_SING_BOX_LICENSE=%s\n' "${license}"
             printf 'MAGIES_SING_BOX_SHA256=%s\n' "${core_sha256}"
+          } >> "${github_env}"
+      - name: Verify official Wintun
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tools = Join-Path $env:RUNNER_TEMP "mgclash-wintun"
+          New-Item -ItemType Directory -Force -Path $tools | Out-Null
+          $archive = Join-Path $tools "wintun-$env:WINTUN_VERSION.zip"
+          Invoke-WebRequest -Uri "https://www.wintun.net/builds/wintun-$env:WINTUN_VERSION.zip" -OutFile $archive
+
+          $actualHash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          if ($actualHash -ne $env:WINTUN_ARCHIVE_SHA256) {
+            throw "Wintun archive SHA-256 mismatch"
+          }
+
+          Expand-Archive -Path $archive -DestinationPath $tools
+          $dll = Join-Path $tools "wintun/bin/amd64/wintun.dll"
+          if ((Get-AuthenticodeSignature $dll).Status -ne "Valid") {
+            throw "Wintun Authenticode signature is invalid"
+          }
+      - name: Expose Wintun packaging inputs
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          runner_temp="$(cygpath -u "${RUNNER_TEMP}")"
+          github_env="$(cygpath -u "${GITHUB_ENV}")"
+          wintun="${runner_temp}/mgclash-wintun/wintun/bin/amd64/wintun.dll"
+          license="${runner_temp}/mgclash-wintun/wintun/LICENSE.txt"
+          [[ -f "${wintun}" ]] || { echo "Wintun DLL is missing" >&2; exit 1; }
+          [[ -f "${license}" ]] || { echo "Wintun license is missing" >&2; exit 1; }
+          {
+            printf 'MAGIES_BUNDLED_WINTUN_DLL=%s\n' "${wintun}"
+            printf 'MAGIES_BUNDLED_WINTUN_LICENSE=%s\n' "${license}"
           } >> "${github_env}"
       # The Intel runner must not silently produce an arm64 artifact.
       - name: Show compiler target
