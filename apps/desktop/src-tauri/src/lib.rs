@@ -5,9 +5,11 @@ pub mod diagnostics;
 pub mod platform_proxy;
 pub mod session;
 mod subscriptions;
+mod tray;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -19,7 +21,7 @@ use magies_profiles::{SqliteManualNodeStore, SqliteSubscriptionStore};
 use magies_session::{DesktopSession, NetworkWatcher, TcpHealthProbe};
 use magies_storage::PlatformSecretStore;
 use serde::Serialize;
-use tauri::{Manager, State};
+use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
 use crate::core_control::{LazySingBoxControl, describe};
@@ -29,6 +31,7 @@ use crate::session::{SessionCommandError, SessionDefaults, SessionService, Sessi
 use crate::subscriptions::{
     DesktopSubscriptionController, DesktopSubscriptionError, DesktopSubscriptionSummary,
 };
+use crate::tray::{TrayAction, TrayUi, menu_model};
 
 /// How long a started Core has to accept connections on its local SOCKS port.
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -48,6 +51,9 @@ const SLEEP_THRESHOLD: Duration = Duration::from_secs(30);
 
 /// How often enabled subscriptions are checked for an elapsed update interval.
 const SUBSCRIPTION_UPDATE_TICK: Duration = Duration::from_secs(60);
+
+/// How often the native tray mirrors recovery-driven session changes.
+const TRAY_REFRESH_TICK: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -101,6 +107,9 @@ struct AppState {
     system_proxy: PlatformProxyControl,
     /// Where an exported diagnostic bundle is written.
     export_directory: PathBuf,
+    tray: TrayUi,
+    allow_exit: AtomicBool,
+    exit_in_progress: AtomicBool,
 }
 
 impl AppState {
@@ -197,6 +206,138 @@ fn spawn_subscription_update_loop(
             }
         }
     });
+}
+
+fn spawn_tray_refresh_loop(app: AppHandle) {
+    thread::spawn(move || {
+        loop {
+            thread::sleep(TRAY_REFRESH_TICK);
+            if let Err(error) = refresh_tray(&app) {
+                eprintln!("tray refresh failed: {}", error.message);
+            }
+        }
+    });
+}
+
+fn refresh_tray(app: &AppHandle) -> Result<(), CommandError> {
+    let state = app.state::<AppState>();
+    let (status, nodes) = {
+        let service = state.service();
+        let status = service.status();
+        let nodes = service.nodes().map_err(|error| command_error(&error))?;
+        (status, nodes)
+    };
+    state
+        .tray
+        .refresh(app, menu_model(&status, &nodes))
+        .map_err(|error| CommandError {
+            code: "tray_update_failed",
+            message: error.to_string(),
+        })
+}
+
+fn handle_tray_action(app: &AppHandle, action: TrayAction) {
+    if action == TrayAction::Open {
+        show_main_window(app);
+        return;
+    }
+    if action == TrayAction::Quit {
+        request_app_exit(app);
+        return;
+    }
+
+    let app = app.clone();
+    thread::spawn(move || handle_background_tray_action(&app, action));
+}
+
+fn handle_background_tray_action(app: &AppHandle, action: TrayAction) {
+    let result = match action {
+        TrayAction::Open | TrayAction::Quit => Ok(()),
+        TrayAction::Toggle => toggle_from_tray(app),
+        TrayAction::SelectNode(id) => app
+            .state::<AppState>()
+            .service()
+            .select_node(id)
+            .map(|_| ())
+            .map_err(|error| command_error(&error)),
+    };
+
+    match result {
+        Ok(()) => {
+            if let Err(error) = refresh_tray(app) {
+                eprintln!("tray refresh failed: {}", error.message);
+            }
+        }
+        Err(error) => {
+            eprintln!("tray action failed: {}", error.message);
+            app.state::<AppState>().tray.show_action_failure();
+        }
+    }
+}
+
+fn request_app_exit(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    if state.exit_in_progress.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    let app = app.clone();
+    thread::spawn(move || match disconnect_for_quit(&app) {
+        Ok(()) => {
+            app.state::<AppState>()
+                .allow_exit
+                .store(true, Ordering::Release);
+            app.exit(0);
+        }
+        Err(error) => {
+            eprintln!("application exit cleanup failed: {}", error.message);
+            let state = app.state::<AppState>();
+            state.exit_in_progress.store(false, Ordering::Release);
+            state.tray.show_action_failure();
+        }
+    });
+}
+
+fn toggle_from_tray(app: &AppHandle) -> Result<(), CommandError> {
+    let state = app.state::<AppState>();
+    if state.service().status().connected {
+        return state
+            .service()
+            .disconnect()
+            .map(|_| ())
+            .map_err(|error| command_error(&error));
+    }
+
+    let startup_status = state
+        .system_proxy
+        .startup_status()
+        .map_err(|error| system_proxy_error(&error))?;
+    ensure_system_proxy_ready(startup_status)?;
+    state
+        .service()
+        .connect()
+        .map(|_| ())
+        .map_err(|error| command_error(&error))
+}
+
+fn disconnect_for_quit(app: &AppHandle) -> Result<(), CommandError> {
+    let state = app.state::<AppState>();
+    if !state.service().status().connected {
+        return Ok(());
+    }
+    state
+        .service()
+        .disconnect()
+        .map(|_| ())
+        .map_err(|error| command_error(&error))
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        if let Err(error) = window.show().and_then(|()| window.set_focus()) {
+            eprintln!("main window could not be shown: {error}");
+        }
+    }
 }
 
 /// Keeps the developer-facing cause chain out of the UI's control flow: the UI
@@ -596,18 +737,37 @@ pub fn run() {
                 nodes,
                 SqliteSubscriptionStore::open(&node_database)?,
             )?));
+            let initial_tray_model = {
+                let service = lock(&service);
+                menu_model(&service.status(), &service.nodes()?)
+            };
+            let tray = TrayUi::install(app, initial_tray_model, handle_tray_action)?;
+            app.manage(AppState {
+                service: service.clone(),
+                subscriptions: subscriptions.clone(),
+                system_proxy,
+                export_directory: data_directory,
+                tray,
+                allow_exit: AtomicBool::new(false),
+                exit_in_progress: AtomicBool::new(false),
+            });
             spawn_recovery_loop(
                 service.clone(),
                 TcpHealthProbe::new(health_address, PROBE_TIMEOUT),
             );
             spawn_subscription_update_loop(subscriptions.clone(), service.clone());
-            app.manage(AppState {
-                service,
-                subscriptions,
-                system_proxy,
-                export_directory: data_directory,
-            });
+            spawn_tray_refresh_loop(app.handle().clone());
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    if let Err(error) = window.hide() {
+                        eprintln!("main window could not be hidden: {error}");
+                    }
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             platform_summary,
@@ -629,8 +789,17 @@ pub fn run() {
             subscription_refresh,
             subscription_refresh_all
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run MgClash desktop shell");
+        .build(tauri::generate_context!())
+        .expect("failed to build MgClash desktop shell")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                let state = app.state::<AppState>();
+                if !state.allow_exit.load(Ordering::Acquire) {
+                    api.prevent_exit();
+                    request_app_exit(app);
+                }
+            }
+        });
 }
 
 #[cfg(test)]
