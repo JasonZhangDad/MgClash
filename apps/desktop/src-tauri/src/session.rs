@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use magies_domain::{CredentialRef, NodeModelError, ProxyNode, ProxyProtocol, TimestampMillis};
 use magies_profiles::{
-    CredentialCodec, CredentialCodecError, DnsProfile, DnsServer, DnsStrategy, LocalHttpProfile,
+    CredentialCodec, CredentialCodecError, DnsConfigError, DnsProfile, LocalHttpProfile,
     LocalSocksProfile, ManualNodeStoreError, ShareLinkParseError, ShareLinkParser,
     SqliteManualNodeStore, SqliteSubscriptionStore, SubscriptionTransactionError,
 };
@@ -26,6 +26,7 @@ use serde::Serialize;
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::dns_settings::{DnsSettings, DnsSettingsStoreError, SqliteDnsSettingsStore};
 use crate::routing_mode::{
     RoutingModeStoreError, SqliteRoutingModeStore, route_profile_for, routing_mode_name,
 };
@@ -58,15 +59,9 @@ impl SessionDefaults {
             socks: LocalSocksProfile::default(),
             http: LocalHttpProfile::default(),
             clash_api_port: NonZeroU16::new(9_090).expect("the Clash API port is nonzero"),
-            dns: DnsProfile::new(
-                vec![DnsServer::system("system").expect("\"system\" is a valid DNS server tag")],
-                Vec::new(),
-                "system",
-                DnsStrategy::PreferIpv4,
-                false,
-                false,
-            )
-            .expect("the single system resolver is a valid DNS profile"),
+            dns: DnsSettings::default()
+                .profile()
+                .expect("the default DNS settings are valid"),
             route: route_profile_for(RoutingMode::Global),
             system_proxy: true,
         }
@@ -113,6 +108,7 @@ pub struct SessionStatus {
     pub connected: bool,
     pub node: Option<NodeSummary>,
     pub core: &'static str,
+    pub dns: DnsSettings,
     pub mode: &'static str,
     pub system_proxy: bool,
     pub socks_port: u16,
@@ -133,6 +129,8 @@ pub struct SessionService<S, C, P> {
     manual_nodes: SqliteManualNodeStore,
     subscription_nodes: SqliteSubscriptionStore,
     routing_mode: SqliteRoutingModeStore,
+    dns_settings: SqliteDnsSettingsStore,
+    current_dns_settings: DnsSettings,
     recovery: NetworkRecoveryPolicy,
 }
 
@@ -154,12 +152,15 @@ where
         manual_nodes: SqliteManualNodeStore,
         subscription_nodes: SqliteSubscriptionStore,
         routing_mode: SqliteRoutingModeStore,
+        dns_settings: SqliteDnsSettingsStore,
     ) -> Result<Self, SessionInitializationError> {
         let node = subscription_nodes
             .selected_node()?
             .or(manual_nodes.selected_node()?);
         let mut defaults = defaults;
         defaults.route = route_profile_for(routing_mode.load()?);
+        let current_dns_settings = dns_settings.load()?;
+        defaults.dns = current_dns_settings.profile()?;
         Ok(Self {
             session,
             defaults,
@@ -167,6 +168,8 @@ where
             manual_nodes,
             subscription_nodes,
             routing_mode,
+            dns_settings,
+            current_dns_settings,
             recovery: NetworkRecoveryPolicy::default(),
         })
     }
@@ -349,6 +352,29 @@ where
         Ok(self.status())
     }
 
+    /// Saves the DNS settings used by the next connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed active-session, validation, or persistence error.
+    pub fn set_dns_settings(
+        &mut self,
+        settings: DnsSettings,
+    ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
+        if self.session.is_running() {
+            return Err(SessionCommandError::SessionActive);
+        }
+        let profile = settings
+            .profile()
+            .map_err(SessionCommandError::InvalidDnsSettings)?;
+        self.dns_settings
+            .save(&settings)
+            .map_err(SessionCommandError::DnsSettingsStore)?;
+        self.defaults.dns = profile;
+        self.current_dns_settings = settings;
+        Ok(self.status())
+    }
+
     /// Deletes a persisted node and its operating-system credential.
     ///
     /// # Errors
@@ -460,6 +486,7 @@ where
             connected: self.session.is_running(),
             node: self.node.as_ref().map(NodeSummary::from),
             core: CORE_NAME,
+            dns: self.current_dns_settings.clone(),
             mode: self.defaults.mode(),
             system_proxy: self.defaults.system_proxy,
             socks_port: self.defaults.socks.port().get(),
@@ -515,6 +542,10 @@ pub enum SessionInitializationError {
     SubscriptionNodeStore(#[from] SubscriptionTransactionError),
     #[error("failed to load the routing mode")]
     RoutingModeStore(#[from] RoutingModeStoreError),
+    #[error("failed to load the DNS settings")]
+    DnsSettingsStore(#[from] DnsSettingsStoreError),
+    #[error("the saved DNS settings are invalid")]
+    DnsSettings(#[from] DnsConfigError),
 }
 
 #[derive(Debug, Error)]
@@ -539,6 +570,10 @@ where
     SubscriptionNodeStore(#[source] SubscriptionTransactionError),
     #[error("failed to save the routing mode")]
     RoutingModeStore(#[source] RoutingModeStoreError),
+    #[error("invalid DNS settings")]
+    InvalidDnsSettings(#[source] DnsConfigError),
+    #[error("failed to save the DNS settings")]
+    DnsSettingsStore(#[source] DnsSettingsStoreError),
     #[error("subscription node {id} is managed by its subscription")]
     SubscriptionNodeReadOnly { id: Uuid },
     #[error("failed to save the node and roll back its credential")]
@@ -579,6 +614,8 @@ where
             | Self::SubscriptionNodeStore(_) => "node_store_failed",
             Self::SubscriptionNodeReadOnly { .. } => "subscription_node_read_only",
             Self::RoutingModeStore(_) => "routing_mode_store_failed",
+            Self::InvalidDnsSettings(_) => "invalid_dns_settings",
+            Self::DnsSettingsStore(_) => "dns_settings_store_failed",
             Self::SessionActive => "session_active",
             Self::SessionInactive => "session_inactive",
             Self::Session(_) => "session_failed",
