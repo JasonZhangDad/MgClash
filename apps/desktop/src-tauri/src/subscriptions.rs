@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use magies_domain::{Subscription, TimestampMillis};
@@ -21,19 +22,22 @@ pub struct DesktopSubscriptionSummary {
     pub last_updated_at: Option<i64>,
     pub enabled: bool,
     pub node_count: usize,
+    pub last_error: Option<String>,
 }
 
 pub struct DesktopSubscriptionController<S: SecretStore> {
     store: Mutex<SqliteSubscriptionStore>,
     secret_store: S,
+    errors: Mutex<HashMap<Uuid, String>>,
 }
 
 impl<S: SecretStore> DesktopSubscriptionController<S> {
     #[must_use]
-    pub const fn new(store: SqliteSubscriptionStore, secret_store: S) -> Self {
+    pub fn new(store: SqliteSubscriptionStore, secret_store: S) -> Self {
         Self {
             store: Mutex::new(store),
             secret_store,
+            errors: Mutex::new(HashMap::new()),
         }
     }
 
@@ -44,10 +48,13 @@ impl<S: SecretStore> DesktopSubscriptionController<S> {
     /// Returns a typed store error when metadata or node counts cannot be read.
     pub fn list(&self) -> Result<Vec<DesktopSubscriptionSummary>, DesktopSubscriptionError> {
         let store = self.store();
+        let errors = self.errors();
         store
             .subscriptions()?
             .iter()
-            .map(|subscription| summary(&store, subscription))
+            .map(|subscription| {
+                summary(&store, subscription, errors.get(&subscription.id).cloned())
+            })
             .collect()
     }
 
@@ -66,7 +73,7 @@ impl<S: SecretStore> DesktopSubscriptionController<S> {
         let mut store = self.store();
         let subscription = SubscriptionManagementService::new(&mut store, &self.secret_store)
             .create(name, url, update_interval_minutes, auto_update)?;
-        summary(&store, &subscription)
+        summary(&store, &subscription, None)
     }
 
     /// Updates editable settings and optionally replaces the URL credential.
@@ -86,7 +93,11 @@ impl<S: SecretStore> DesktopSubscriptionController<S> {
         let mut store = self.store();
         let subscription = SubscriptionManagementService::new(&mut store, &self.secret_store)
             .update(id, name, update_interval_minutes, auto_update, enabled, url)?;
-        summary(&store, &subscription)
+        summary(
+            &store,
+            &subscription,
+            self.errors().get(&subscription.id).cloned(),
+        )
     }
 
     /// Deletes one subscription and every owned credential.
@@ -96,7 +107,50 @@ impl<S: SecretStore> DesktopSubscriptionController<S> {
     /// Returns a typed store or credential-cleanup error.
     pub fn delete(&self, id: Uuid) -> Result<(), DesktopSubscriptionError> {
         SubscriptionManagementService::new(&mut self.store(), &self.secret_store).delete(id)?;
+        self.errors().remove(&id);
         Ok(())
+    }
+
+    /// Returns enabled automatic subscriptions whose interval has elapsed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed store error when subscription metadata cannot be read.
+    pub fn due_auto_update_ids(
+        &self,
+        now: TimestampMillis,
+    ) -> Result<Vec<Uuid>, DesktopSubscriptionError> {
+        Ok(self
+            .store()
+            .subscriptions()?
+            .into_iter()
+            .filter(|subscription| subscription_is_due(subscription, now))
+            .map(|subscription| subscription.id)
+            .collect())
+    }
+
+    /// Refreshes every enabled subscription and records individual failures.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed store error when the enabled subscription list or final
+    /// summaries cannot be read. Individual refresh failures remain visible in
+    /// each returned summary.
+    pub fn refresh_all(
+        &self,
+        updated_at: TimestampMillis,
+    ) -> Result<Vec<DesktopSubscriptionSummary>, DesktopSubscriptionError> {
+        let ids = self
+            .store()
+            .subscriptions()?
+            .into_iter()
+            .filter(|subscription| subscription.enabled)
+            .map(|subscription| subscription.id)
+            .collect::<Vec<_>>();
+        for id in ids {
+            let _ = self.refresh(id, updated_at);
+        }
+        self.list()
     }
 
     /// Refreshes one subscription on the Tauri async runtime.
@@ -109,6 +163,25 @@ impl<S: SecretStore> DesktopSubscriptionController<S> {
         id: Uuid,
         updated_at: TimestampMillis,
     ) -> Result<DesktopSubscriptionSummary, DesktopSubscriptionError> {
+        let result = self.refresh_inner(id, updated_at);
+        match result {
+            Ok(mut summary) => {
+                self.errors().remove(&id);
+                summary.last_error = None;
+                Ok(summary)
+            }
+            Err(error) => {
+                self.errors().insert(id, error.to_string());
+                Err(error)
+            }
+        }
+    }
+
+    fn refresh_inner(
+        &self,
+        id: Uuid,
+        updated_at: TimestampMillis,
+    ) -> Result<DesktopSubscriptionSummary, DesktopSubscriptionError> {
         let mut store = self.store();
         let fetcher = SubscriptionFetcher::new(SubscriptionFetchOptions::default())?;
         let mut service = SubscriptionRefreshService::new(&mut store, &self.secret_store, fetcher);
@@ -116,17 +189,36 @@ impl<S: SecretStore> DesktopSubscriptionController<S> {
         let subscription = store
             .subscription(id)?
             .ok_or(SubscriptionTransactionError::SubscriptionNotFound { id })?;
-        summary(&store, &subscription)
+        summary(
+            &store,
+            &subscription,
+            self.errors().get(&subscription.id).cloned(),
+        )
     }
 
     fn store(&self) -> MutexGuard<'_, SqliteSubscriptionStore> {
         self.store.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    fn errors(&self) -> MutexGuard<'_, HashMap<Uuid, String>> {
+        self.errors.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+fn subscription_is_due(subscription: &Subscription, now: TimestampMillis) -> bool {
+    if !subscription.enabled || !subscription.auto_update {
+        return false;
+    }
+    subscription.last_updated_at.is_none_or(|last_updated_at| {
+        let interval_millis = i64::from(subscription.update_interval_minutes.get()) * 60_000;
+        now.get().saturating_sub(last_updated_at.get()) >= interval_millis
+    })
 }
 
 fn summary(
     store: &SqliteSubscriptionStore,
     subscription: &Subscription,
+    last_error: Option<String>,
 ) -> Result<DesktopSubscriptionSummary, DesktopSubscriptionError> {
     Ok(DesktopSubscriptionSummary {
         id: subscription.id,
@@ -136,6 +228,7 @@ fn summary(
         last_updated_at: subscription.last_updated_at.map(TimestampMillis::get),
         enabled: subscription.enabled,
         node_count: store.subscription_nodes(subscription.id)?.len(),
+        last_error,
     })
 }
 
@@ -201,9 +294,11 @@ const fn management_error_code(error: &SubscriptionManagementError) -> &'static 
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use magies_domain::TimestampMillis;
     use magies_profiles::{SqliteSubscriptionStore, SubscriptionTransactionError};
-    use magies_storage::MemorySecretStore;
+    use magies_storage::{MemorySecretStore, SecretStore, SecretStoreError, SecretValue};
     use uuid::Uuid;
 
     use super::{DesktopSubscriptionController, DesktopSubscriptionError};
@@ -264,5 +359,155 @@ mod tests {
             )
         ));
         assert_eq!(error.code(), "subscription_not_found");
+    }
+
+    #[test]
+    fn finds_only_due_enabled_automatic_subscriptions() {
+        let store = SqliteSubscriptionStore::open_in_memory().unwrap();
+        let controller = DesktopSubscriptionController::new(store, MemorySecretStore::default());
+        let due = controller
+            .create("Due", "https://example.com/due", 60, true)
+            .unwrap();
+        let manual = controller
+            .create("Manual", "https://example.com/manual", 60, false)
+            .unwrap();
+        let future = controller
+            .create("Future", "https://example.com/future", 60, true)
+            .unwrap();
+        controller
+            .store()
+            .touch_subscription(
+                future.id,
+                &magies_profiles::SubscriptionValidators::default(),
+                TimestampMillis::new(10_000),
+            )
+            .unwrap();
+
+        assert_eq!(
+            controller
+                .due_auto_update_ids(TimestampMillis::new(3_609_999))
+                .unwrap(),
+            vec![due.id]
+        );
+        assert_eq!(
+            controller
+                .due_auto_update_ids(TimestampMillis::new(3_610_000))
+                .unwrap(),
+            vec![due.id, future.id]
+        );
+        assert!(
+            !controller
+                .due_auto_update_ids(TimestampMillis::new(0))
+                .unwrap()
+                .contains(&future.id)
+        );
+        assert!(
+            !controller
+                .due_auto_update_ids(TimestampMillis::new(i64::MAX))
+                .unwrap()
+                .contains(&manual.id)
+        );
+    }
+
+    #[test]
+    fn records_a_redacted_refresh_failure_for_the_ui() {
+        let secrets = SharedSecretStore::default();
+        let controller = DesktopSubscriptionController::new(
+            SqliteSubscriptionStore::open_in_memory().unwrap(),
+            secrets.clone(),
+        );
+        let created = controller
+            .create("Broken", "https://example.com/?token=url-secret", 60, true)
+            .unwrap();
+        let url_ref =
+            magies_domain::CredentialRef::new(format!("subscription/{}/url", created.id)).unwrap();
+        secrets
+            .put(&url_ref, &SecretValue::new(b"not a URL".to_vec()).unwrap())
+            .unwrap();
+
+        controller
+            .refresh(created.id, TimestampMillis::new(100))
+            .unwrap_err();
+
+        let summary = controller.list().unwrap().pop().unwrap();
+        assert!(summary.last_error.is_some());
+        assert!(!summary.last_error.unwrap().contains("url-secret"));
+    }
+
+    #[test]
+    fn batch_refresh_continues_after_an_individual_failure() {
+        let secrets = SharedSecretStore::default();
+        let controller = DesktopSubscriptionController::new(
+            SqliteSubscriptionStore::open_in_memory().unwrap(),
+            secrets.clone(),
+        );
+        let broken = controller
+            .create("Broken", "https://example.com/broken", 60, true)
+            .unwrap();
+        let also_broken = controller
+            .create("Also broken", "https://example.com/also-broken", 60, true)
+            .unwrap();
+        let disabled = controller
+            .create("Disabled", "https://example.com/disabled", 60, true)
+            .unwrap();
+        controller
+            .update(disabled.id, "Disabled", 60, true, false, None)
+            .unwrap();
+        for id in [broken.id, also_broken.id] {
+            let url_ref =
+                magies_domain::CredentialRef::new(format!("subscription/{id}/url")).unwrap();
+            secrets
+                .put(&url_ref, &SecretValue::new(b"not a URL".to_vec()).unwrap())
+                .unwrap();
+        }
+
+        let summaries = controller.refresh_all(TimestampMillis::new(100)).unwrap();
+
+        assert_eq!(summaries.len(), 3);
+        for id in [broken.id, also_broken.id] {
+            assert!(
+                summaries
+                    .iter()
+                    .find(|summary| summary.id == id)
+                    .unwrap()
+                    .last_error
+                    .is_some()
+            );
+        }
+        assert!(
+            summaries
+                .iter()
+                .find(|summary| summary.id == disabled.id)
+                .unwrap()
+                .last_error
+                .is_none()
+        );
+    }
+
+    #[derive(Clone, Default)]
+    struct SharedSecretStore(Arc<MemorySecretStore>);
+
+    impl SecretStore for SharedSecretStore {
+        fn put(
+            &self,
+            credential_ref: &magies_domain::CredentialRef,
+            secret: &SecretValue,
+        ) -> Result<(), SecretStoreError> {
+            self.0.put(credential_ref, secret)
+        }
+
+        fn get(
+            &self,
+            credential_ref: &magies_domain::CredentialRef,
+        ) -> Result<SecretValue, SecretStoreError> {
+            self.0.get(credential_ref)
+        }
+
+        fn delete(
+            &self,
+            credential_ref: &magies_domain::CredentialRef,
+        ) -> Result<(), SecretStoreError> {
+            self.0.delete(credential_ref)
+        }
     }
 }

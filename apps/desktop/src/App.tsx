@@ -22,6 +22,7 @@ import {
   createSubscription,
   deleteSubscription,
   loadSubscriptions,
+  refreshAllSubscriptions,
   refreshSubscription,
   updateSubscription,
   type SubscriptionSummary,
@@ -118,6 +119,9 @@ export default function App() {
       loadSessionStatus().then(setStatus, (failure: unknown) => {
         // A background refresh must not replace an error the user is reading.
         console.warn("session status refresh failed", failure);
+      });
+      loadSubscriptions().then(setSubscriptions, (failure: unknown) => {
+        console.warn("subscription refresh failed", failure);
       });
     }, REFRESH_INTERVAL_MS);
     return () => clearInterval(timer);
@@ -299,6 +303,19 @@ export default function App() {
       setSubscriptions((current) =>
         current.map((item) => (item.id === id ? refreshed : item)),
       );
+      await syncNodes();
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, [syncNodes]);
+
+  const onRefreshAllSubscriptions = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setSubscriptions(await refreshAllSubscriptions());
       await syncNodes();
     } catch (failure: unknown) {
       setError(describeFailure(failure));
@@ -502,6 +519,16 @@ export default function App() {
 
         <h2>订阅</h2>
 
+        <div className="actions">
+          <button
+            type="button"
+            disabled={busy || connected || subscriptions.length === 0}
+            onClick={() => void onRefreshAllSubscriptions()}
+          >
+            全部更新
+          </button>
+        </div>
+
         {subscriptions.length === 0 ? (
           <p className="hint">尚未添加订阅</p>
         ) : (
@@ -519,7 +546,10 @@ export default function App() {
                 <tr key={item.id}>
                   <td>{item.name}</td>
                   <td>{item.nodeCount}</td>
-                  <td>{item.lastUpdatedAt === null ? "从未" : "已更新"}</td>
+                  <td>
+                    {item.lastError ??
+                      (item.lastUpdatedAt === null ? "从未" : "已更新")}
+                  </td>
                   <td className="node-actions">
                     <button
                       type="button"

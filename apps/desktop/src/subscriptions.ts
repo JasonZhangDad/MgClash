@@ -4,6 +4,7 @@ export interface SubscriptionSummary {
   autoUpdate: boolean;
   enabled: boolean;
   id: string;
+  lastError: string | null;
   lastUpdatedAt: number | null;
   name: string;
   nodeCount: number;
@@ -46,6 +47,10 @@ export function refreshSubscription(
   id: string,
 ): Promise<SubscriptionSummary> {
   return invoke<SubscriptionSummary>("subscription_refresh", { id });
+}
+
+export function refreshAllSubscriptions(): Promise<SubscriptionSummary[]> {
+  return invoke<SubscriptionSummary[]>("subscription_refresh_all");
 }
 
 export function deleteSubscription(id: string): Promise<void> {
