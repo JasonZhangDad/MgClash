@@ -8,13 +8,15 @@
 //! adapter that never applied anything.
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use magies_platform::system_proxy::SystemProxyState;
 use magies_platform::system_proxy_recovery::{
-    JsonRecoveryStore, JsonRecoveryStoreError, SystemProxyControl, SystemProxyRecoveryError,
-    SystemProxyRecoveryManager,
+    JsonRecoveryStore, JsonRecoveryStoreError, StartupRecovery, SystemProxyControl,
+    SystemProxyRecoveryError, SystemProxyRecoveryManager,
 };
 use magies_session::SystemProxySessionControl;
+use serde::Serialize;
 use thiserror::Error;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -43,14 +45,17 @@ pub type PlatformRecoveryManager =
 
 /// A [`SystemProxySessionControl`] that reports an unavailable adapter instead
 /// of preventing the app from starting.
+#[derive(Clone)]
 pub struct PlatformProxyControl {
-    manager: Result<PlatformRecoveryManager, PlatformProxySetupError>,
+    manager: Arc<Mutex<Result<PlatformRecoveryManager, PlatformProxySetupError>>>,
 }
 
 impl PlatformProxyControl {
     #[must_use]
-    pub const fn new(manager: Result<PlatformRecoveryManager, PlatformProxySetupError>) -> Self {
-        Self { manager }
+    pub fn new(manager: Result<PlatformRecoveryManager, PlatformProxySetupError>) -> Self {
+        Self {
+            manager: Arc::new(Mutex::new(manager)),
+        }
     }
 
     /// Builds the host's adapter and snapshots recovery state at
@@ -62,10 +67,79 @@ impl PlatformProxyControl {
         }))
     }
 
-    fn manager(&self) -> Result<&PlatformRecoveryManager, PlatformProxyError> {
-        self.manager
+    fn manager(&self) -> MutexGuard<'_, Result<PlatformRecoveryManager, PlatformProxySetupError>> {
+        self.manager.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn with_manager<T>(
+        &self,
+        operation: impl FnOnce(
+            &PlatformRecoveryManager,
+        ) -> Result<
+            T,
+            SystemProxyRecoveryError<PlatformAdapterError, JsonRecoveryStoreError>,
+        >,
+    ) -> Result<T, PlatformProxyError> {
+        let manager = self.manager();
+        let manager = manager
             .as_ref()
-            .map_err(|source| PlatformProxyError::Setup(source.clone()))
+            .map_err(|source| PlatformProxyError::Setup(source.clone()))?;
+        operation(manager).map_err(|source| PlatformProxyError::Recovery(Box::new(source)))
+    }
+
+    /// Inspects the persisted proxy snapshot before a new desktop session can
+    /// overwrite it. An unavailable platform adapter remains deferred until the
+    /// user tries to connect, preserving the existing startup behaviour.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed platform or recovery-store error.
+    pub fn startup_status(&self) -> Result<SystemProxyStartupStatus, PlatformProxyError> {
+        let manager = self.manager();
+        let Ok(manager) = manager.as_ref() else {
+            return Ok(SystemProxyStartupStatus::Clean);
+        };
+        manager
+            .inspect_startup(false)
+            .map(startup_status_from)
+            .map_err(|source| PlatformProxyError::Recovery(Box::new(source)))
+    }
+
+    /// Restores the snapshot left by the previous process.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed platform or recovery-store error.
+    pub fn recover_startup(&self) -> Result<SystemProxyStartupStatus, PlatformProxyError> {
+        self.with_manager(SystemProxyRecoveryManager::recover)?;
+        Ok(SystemProxyStartupStatus::Clean)
+    }
+
+    /// Keeps the current proxy settings and removes the stale snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed recovery-store error.
+    pub fn dismiss_startup(&self) -> Result<SystemProxyStartupStatus, PlatformProxyError> {
+        self.with_manager(SystemProxyRecoveryManager::dismiss)?;
+        Ok(SystemProxyStartupStatus::Clean)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SystemProxyStartupStatus {
+    Clean,
+    RestoreRequired,
+}
+
+#[must_use]
+pub const fn startup_status_from(recovery: StartupRecovery) -> SystemProxyStartupStatus {
+    match recovery {
+        StartupRecovery::RestoreRequired => SystemProxyStartupStatus::RestoreRequired,
+        StartupRecovery::Clean | StartupRecovery::ManagedCoreRunning => {
+            SystemProxyStartupStatus::Clean
+        }
     }
 }
 
@@ -73,13 +147,11 @@ impl SystemProxySessionControl for PlatformProxyControl {
     type Error = PlatformProxyError;
 
     fn enable(&mut self, state: &SystemProxyState) -> Result<(), Self::Error> {
-        self.manager()?
-            .enable(state)
-            .map_err(|source| PlatformProxyError::Recovery(Box::new(source)))
+        self.with_manager(|manager| manager.enable(state))
     }
 
     fn stop(&mut self) -> Result<(), Self::Error> {
-        match self.manager.as_ref() {
+        match self.manager().as_ref() {
             Ok(manager) => manager
                 .stop()
                 .map_err(|source| PlatformProxyError::Recovery(Box::new(source))),

@@ -1,7 +1,9 @@
 use magies_desktop_lib::platform_proxy::{
-    PlatformProxyControl, PlatformProxyError, PlatformProxySetupError,
+    PlatformProxyControl, PlatformProxyError, PlatformProxySetupError, SystemProxyStartupStatus,
+    startup_status_from,
 };
 use magies_platform::system_proxy::{PacSetting, ProxyEndpoint, ProxySetting, SystemProxyState};
+use magies_platform::system_proxy_recovery::StartupRecovery;
 use magies_session::SystemProxySessionControl;
 
 #[test]
@@ -35,6 +37,30 @@ fn an_unavailable_adapter_carries_a_stable_code_for_the_ui() {
     assert_eq!(
         control.enable(&managed_state()).unwrap_err().code(),
         "system_proxy_unavailable"
+    );
+}
+
+#[test]
+fn startup_recovery_states_have_stable_ui_values() {
+    assert_eq!(
+        startup_status_from(StartupRecovery::Clean),
+        SystemProxyStartupStatus::Clean
+    );
+    assert_eq!(
+        startup_status_from(StartupRecovery::RestoreRequired),
+        SystemProxyStartupStatus::RestoreRequired
+    );
+    assert_eq!(
+        startup_status_from(StartupRecovery::ManagedCoreRunning),
+        SystemProxyStartupStatus::Clean
+    );
+}
+
+#[test]
+fn an_unavailable_adapter_does_not_block_app_startup() {
+    assert_eq!(
+        unavailable().startup_status().unwrap(),
+        SystemProxyStartupStatus::Clean
     );
 }
 

@@ -6,11 +6,14 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 
 import {
   connectSession,
+  dismissSystemProxyRecovery,
   disconnectSession,
   exportDiagnostics,
   importNode,
   isCommandError,
   loadSessionStatus,
+  loadSystemProxyStartupStatus,
+  recoverSystemProxy,
   type SessionStatus,
 } from "./session";
 
@@ -58,6 +61,21 @@ describe("session commands", () => {
       "/data/mgclash-diagnostics-1.json",
     );
     expect(invokeMock).toHaveBeenCalledWith("export_diagnostics");
+  });
+
+  it("reads and resolves startup System Proxy recovery", async () => {
+    invokeMock.mockResolvedValue("restoreRequired");
+
+    await expect(loadSystemProxyStartupStatus()).resolves.toBe(
+      "restoreRequired",
+    );
+    expect(invokeMock).toHaveBeenCalledWith("system_proxy_startup_status");
+
+    invokeMock.mockResolvedValue("clean");
+    await expect(recoverSystemProxy()).resolves.toBe("clean");
+    await expect(dismissSystemProxyRecovery()).resolves.toBe("clean");
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "system_proxy_recover");
+    expect(invokeMock).toHaveBeenNthCalledWith(3, "system_proxy_dismiss");
   });
 
   it("surfaces command failures", async () => {

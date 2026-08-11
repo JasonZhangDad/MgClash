@@ -20,7 +20,7 @@ use tauri::{Manager, State};
 
 use crate::core_control::{LazySingBoxControl, describe};
 use crate::diagnostics::DiagnosticBundle;
-use crate::platform_proxy::PlatformProxyControl;
+use crate::platform_proxy::{PlatformProxyControl, PlatformProxyError, SystemProxyStartupStatus};
 use crate::session::{SessionCommandError, SessionDefaults, SessionService, SessionStatus};
 
 /// How long a started Core has to accept connections on its local SOCKS port.
@@ -87,6 +87,7 @@ type HostSessionService =
 
 struct AppState {
     service: Arc<Mutex<HostSessionService>>,
+    system_proxy: PlatformProxyControl,
     /// Where an exported diagnostic bundle is written.
     export_directory: PathBuf,
 }
@@ -148,6 +149,25 @@ where
     }
 }
 
+fn system_proxy_error(error: &PlatformProxyError) -> CommandError {
+    CommandError {
+        code: error.code(),
+        message: describe(error),
+    }
+}
+
+fn ensure_system_proxy_ready(status: SystemProxyStartupStatus) -> Result<(), CommandError> {
+    match status {
+        SystemProxyStartupStatus::Clean => Ok(()),
+        SystemProxyStartupStatus::RestoreRequired => Err(CommandError {
+            code: "system_proxy_recovery_required",
+            message:
+                "resolve the System Proxy settings left by the previous session before connecting"
+                    .to_owned(),
+        }),
+    }
+}
+
 #[tauri::command]
 #[expect(
     clippy::needless_pass_by_value,
@@ -178,6 +198,11 @@ fn session_import_node(
     reason = "Tauri commands receive State by value"
 )]
 fn session_connect(state: State<'_, AppState>) -> Result<SessionStatus, CommandError> {
+    let startup_status = state
+        .system_proxy
+        .startup_status()
+        .map_err(|error| system_proxy_error(&error))?;
+    ensure_system_proxy_ready(startup_status)?;
     state
         .service()
         .connect()
@@ -194,6 +219,48 @@ fn session_disconnect(state: State<'_, AppState>) -> Result<SessionStatus, Comma
         .service()
         .disconnect()
         .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State by value"
+)]
+fn system_proxy_startup_status(
+    state: State<'_, AppState>,
+) -> Result<SystemProxyStartupStatus, CommandError> {
+    state
+        .system_proxy
+        .startup_status()
+        .map_err(|error| system_proxy_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State by value"
+)]
+fn system_proxy_recover(
+    state: State<'_, AppState>,
+) -> Result<SystemProxyStartupStatus, CommandError> {
+    state
+        .system_proxy
+        .recover_startup()
+        .map_err(|error| system_proxy_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State by value"
+)]
+fn system_proxy_dismiss(
+    state: State<'_, AppState>,
+) -> Result<SystemProxyStartupStatus, CommandError> {
+    state
+        .system_proxy
+        .dismiss_startup()
+        .map_err(|error| system_proxy_error(&error))
 }
 
 #[tauri::command]
@@ -229,10 +296,12 @@ pub fn run() {
             let defaults = SessionDefaults::v01();
             let health_address =
                 SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), defaults.socks.port().get());
+            let system_proxy =
+                PlatformProxyControl::for_host(data_directory.join("system-proxy-recovery.json"));
             let session = DesktopSession::new(
                 PlatformSecretStore,
                 LazySingBoxControl::from_env(health_address, HEALTH_TIMEOUT),
-                PlatformProxyControl::for_host(data_directory.join("system-proxy-recovery.json")),
+                system_proxy.clone(),
                 runtime_directory,
             );
             let service = Arc::new(Mutex::new(SessionService::new(session, defaults)));
@@ -242,6 +311,7 @@ pub fn run() {
             );
             app.manage(AppState {
                 service,
+                system_proxy,
                 export_directory: data_directory,
             });
             Ok(())
@@ -252,6 +322,9 @@ pub fn run() {
             session_import_node,
             session_connect,
             session_disconnect,
+            system_proxy_startup_status,
+            system_proxy_recover,
+            system_proxy_dismiss,
             export_diagnostics
         ])
         .run(tauri::generate_context!())
@@ -260,10 +333,20 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::platform_summary;
+    use super::{ensure_system_proxy_ready, platform_summary};
+    use crate::platform_proxy::SystemProxyStartupStatus;
 
     #[test]
     fn command_supports_the_build_host() {
         platform_summary().expect("CI must run on a supported V0.1 target");
+    }
+
+    #[test]
+    fn connection_waits_for_startup_system_proxy_recovery() {
+        ensure_system_proxy_ready(SystemProxyStartupStatus::Clean).unwrap();
+
+        let error =
+            ensure_system_proxy_ready(SystemProxyStartupStatus::RestoreRequired).unwrap_err();
+        assert_eq!(error.code, "system_proxy_recovery_required");
     }
 }
