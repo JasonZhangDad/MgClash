@@ -45,8 +45,8 @@ done
 # Windows checksum tools may terminate the sidecar line with CRLF. The
 # Linux publish job must accept that file without weakening name validation.
 windows_sidecar="${release_directory}/${artifacts[0]}.sha256"
-sidecar_line="$(tr -d '\r\n' < "${windows_sidecar}")"
-printf '%s\r\n' "${sidecar_line}" > "${windows_sidecar}"
+read -r windows_digest _ < "${windows_sidecar}"
+printf '%s *%s\r\n' "${windows_digest}" "${artifacts[0]}" > "${windows_sidecar}"
 
 "${verify_script}" "${release_directory}" "0.1.0"
 

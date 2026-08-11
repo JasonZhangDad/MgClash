@@ -48,6 +48,7 @@ for artifact in "${artifacts[@]}"; do
 
   read -r recorded_digest recorded_name < "${sidecar}"
   recorded_name="${recorded_name%$'\r'}"
+  recorded_name="${recorded_name#\*}"
   if [[ "${recorded_name}" != "${artifact}" ]]; then
     echo "release checksum names the wrong artifact: ${artifact}.sha256" >&2
     exit 1
