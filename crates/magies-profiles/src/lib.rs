@@ -13,6 +13,7 @@ mod sing_box_outbound;
 mod sing_box_runtime_config;
 mod subscription;
 mod subscription_content;
+mod subscription_service;
 mod subscription_transaction;
 mod trojan;
 mod tun_config;
@@ -53,6 +54,10 @@ pub use subscription::{
 };
 pub use subscription_content::{
     ParsedSubscriptionNode, SubscriptionContentError, SubscriptionContentParser,
+};
+pub use subscription_service::{
+    SubscriptionRefreshError, SubscriptionRefreshOutcome, SubscriptionRefreshService,
+    SubscriptionSecretOperation,
 };
 pub use subscription_transaction::{
     DeletedSubscription, SqliteSubscriptionStore, SubscriptionCommit, SubscriptionState,
