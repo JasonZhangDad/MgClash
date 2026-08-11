@@ -46,6 +46,9 @@ const PATH_TICK: Duration = Duration::from_secs(5);
 /// A wall-clock gap this much larger than `PATH_TICK` means the machine slept.
 const SLEEP_THRESHOLD: Duration = Duration::from_secs(30);
 
+/// How often enabled subscriptions are checked for an elapsed update interval.
+const SUBSCRIPTION_UPDATE_TICK: Duration = Duration::from_secs(60);
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlatformSummary {
@@ -138,6 +141,58 @@ fn spawn_recovery_loop(service: Arc<Mutex<HostSessionService>>, probe: TcpHealth
             if due {
                 if let Err(error) = lock(&service).recover(now, &probe) {
                     eprintln!("network recovery failed: {}", describe(&error));
+                }
+            }
+        }
+    });
+}
+
+/// Refreshes due subscriptions while the session is stopped. Runs for the
+/// lifetime of the app so automatic updates do not depend on the window being
+/// visible.
+fn spawn_subscription_update_loop(
+    subscriptions: Arc<DesktopSubscriptionController<PlatformSecretStore>>,
+    service: Arc<Mutex<HostSessionService>>,
+) {
+    thread::spawn(move || {
+        loop {
+            thread::sleep(SUBSCRIPTION_UPDATE_TICK);
+            if lock(&service).status().connected {
+                continue;
+            }
+
+            let now = current_timestamp();
+            let due_ids = match subscriptions.due_auto_update_ids(now) {
+                Ok(ids) => ids,
+                Err(error) => {
+                    eprintln!(
+                        "automatic subscription scheduling failed: {}",
+                        describe(&error)
+                    );
+                    continue;
+                }
+            };
+
+            let mut refreshed = false;
+            for id in due_ids {
+                if lock(&service).status().connected {
+                    break;
+                }
+                match subscriptions.refresh(id, now) {
+                    Ok(_) => refreshed = true,
+                    Err(error) => eprintln!(
+                        "automatic subscription refresh failed: {}",
+                        describe(&error)
+                    ),
+                }
+            }
+
+            if refreshed {
+                if let Err(error) = lock(&service).sync_selected_node() {
+                    eprintln!(
+                        "automatic subscription node sync failed: {}",
+                        describe(&error)
+                    );
                 }
             }
         }
@@ -477,6 +532,28 @@ async fn subscription_refresh(
     Ok(summary)
 }
 
+#[tauri::command]
+async fn subscription_refresh_all(
+    state: State<'_, AppState>,
+) -> Result<Vec<DesktopSubscriptionSummary>, CommandError> {
+    ensure_subscription_mutation_ready(state.service().status().connected)?;
+    let subscriptions = Arc::clone(&state.subscriptions);
+    let summaries = tauri::async_runtime::spawn_blocking(move || {
+        subscriptions.refresh_all(current_timestamp())
+    })
+    .await
+    .map_err(|error| CommandError {
+        code: "subscription_task_failed",
+        message: error.to_string(),
+    })?
+    .map_err(|error| subscription_error(&error))?;
+    state
+        .service()
+        .sync_selected_node()
+        .map_err(|error| command_error(&error))?;
+    Ok(summaries)
+}
+
 fn parse_subscription_id(id: &str) -> Result<Uuid, CommandError> {
     Uuid::parse_str(id).map_err(|error| CommandError {
         code: "invalid_subscription_id",
@@ -523,6 +600,7 @@ pub fn run() {
                 service.clone(),
                 TcpHealthProbe::new(health_address, PROBE_TIMEOUT),
             );
+            spawn_subscription_update_loop(subscriptions.clone(), service.clone());
             app.manage(AppState {
                 service,
                 subscriptions,
@@ -548,7 +626,8 @@ pub fn run() {
             subscription_create,
             subscription_update,
             subscription_delete,
-            subscription_refresh
+            subscription_refresh,
+            subscription_refresh_all
         ])
         .run(tauri::generate_context!())
         .expect("failed to run MgClash desktop shell");

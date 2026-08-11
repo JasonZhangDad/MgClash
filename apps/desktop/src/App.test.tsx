@@ -20,6 +20,7 @@ const loadSubscriptionsMock = vi.hoisted(() => vi.fn());
 const createSubscriptionMock = vi.hoisted(() => vi.fn());
 const updateSubscriptionMock = vi.hoisted(() => vi.fn());
 const refreshSubscriptionMock = vi.hoisted(() => vi.fn());
+const refreshAllSubscriptionsMock = vi.hoisted(() => vi.fn());
 const deleteSubscriptionMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./platform", () => ({
@@ -49,6 +50,7 @@ vi.mock("./subscriptions", () => ({
   deleteSubscription: deleteSubscriptionMock,
   loadSubscriptions: loadSubscriptionsMock,
   refreshSubscription: refreshSubscriptionMock,
+  refreshAllSubscriptions: refreshAllSubscriptionsMock,
   updateSubscription: updateSubscriptionMock,
 }));
 
@@ -87,6 +89,7 @@ const SUBSCRIPTION = {
   enabled: true,
   id: "00000000-0000-0000-0000-000000000010",
   lastUpdatedAt: null,
+  lastError: null,
   name: "Airport",
   nodeCount: 3,
   updateIntervalMinutes: 60,
@@ -113,6 +116,7 @@ describe("App", () => {
     createSubscriptionMock.mockReset();
     updateSubscriptionMock.mockReset();
     refreshSubscriptionMock.mockReset();
+    refreshAllSubscriptionsMock.mockReset();
     deleteSubscriptionMock.mockReset();
 
     loadPlatformSummaryMock.mockResolvedValue({
@@ -536,6 +540,19 @@ describe("App", () => {
       );
       expect(action?.disabled).toBe(true);
     }
+  });
+
+  it("refreshes all subscriptions and shows individual failures", async () => {
+    loadSubscriptionsMock.mockResolvedValue([SUBSCRIPTION]);
+    refreshAllSubscriptionsMock.mockResolvedValue([
+      { ...SUBSCRIPTION, lastError: "subscription request timed out" },
+    ]);
+    await render();
+
+    await act(async () => button("全部更新").click());
+
+    expect(refreshAllSubscriptionsMock).toHaveBeenCalledOnce();
+    expect(container.textContent).toContain("subscription request timed out");
   });
 
   it("refuses to import a blank sharing URI", async () => {

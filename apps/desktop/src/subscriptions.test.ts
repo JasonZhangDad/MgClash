@@ -8,6 +8,7 @@ import {
   createSubscription,
   deleteSubscription,
   loadSubscriptions,
+  refreshAllSubscriptions,
   refreshSubscription,
   updateSubscription,
 } from "./subscriptions";
@@ -44,6 +45,7 @@ describe("subscription commands", () => {
       url: null,
     });
     await refreshSubscription(id);
+    await refreshAllSubscriptions();
     await deleteSubscription(id);
 
     expect(invokeMock).toHaveBeenNthCalledWith(1, "subscription_update", {
@@ -57,7 +59,8 @@ describe("subscription commands", () => {
     expect(invokeMock).toHaveBeenNthCalledWith(2, "subscription_refresh", {
       id,
     });
-    expect(invokeMock).toHaveBeenNthCalledWith(3, "subscription_delete", {
+    expect(invokeMock).toHaveBeenNthCalledWith(3, "subscription_refresh_all");
+    expect(invokeMock).toHaveBeenNthCalledWith(4, "subscription_delete", {
       id,
     });
   });
