@@ -222,6 +222,15 @@ export default function App() {
   const [nodeGroupFilter, setNodeGroupFilter] = useState("all");
   const [groupingNodeId, setGroupingNodeId] = useState<string | null>(null);
   const [nodeMenu, setNodeMenu] = useState<NodeMenuPosition | null>(null);
+  const [checkedNodes, setCheckedNodes] = useState<Set<string>>(new Set());
+  const toggleCheckedNode = (id: string) =>
+    setCheckedNodes((current) => {
+      const next = new Set(current);
+      if (!next.delete(id)) {
+        next.add(id);
+      }
+      return next;
+    });
   const openNodeMenu = (
     event: { preventDefault: () => void; clientX: number; clientY: number },
     nodeId: string,
@@ -738,6 +747,62 @@ export default function App() {
     }
   }, []);
 
+  /// Removes several nodes, reporting how many could not be removed rather
+  /// than stopping at the first failure.
+  const onDeleteNodes = useCallback(async (ids: string[]) => {
+    setBusy(true);
+    setError(null);
+    setExportedTo(null);
+    let failed = 0;
+    try {
+      for (const id of ids) {
+        try {
+          setStatus(await deleteNode(id));
+        } catch {
+          failed += 1;
+        }
+      }
+      setNodes(await loadNodes());
+      setCheckedNodes(new Set());
+      if (failed > 0) {
+        setError(`${failed} 个节点未能移除`);
+      }
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  /// Copies several nodes as one link per line, which is what a bulk import
+  /// reads back.
+  const onExportNodeLinks = useCallback(async (ids: string[]) => {
+    setBusy(true);
+    setError(null);
+    setExportedTo(null);
+    try {
+      const links: string[] = [];
+      let failed = 0;
+      for (const id of ids) {
+        try {
+          links.push(await exportNodeLink(id));
+        } catch {
+          failed += 1;
+        }
+      }
+      await navigator.clipboard.writeText(links.join("\n"));
+      setExportedTo(
+        failed === 0
+          ? `已复制 ${links.length} 条分享链接`
+          : `已复制 ${links.length} 条，${failed} 条无法导出`,
+      );
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
   const onExportNodeLink = useCallback(async (id: string) => {
     setBusy(true);
     setError(null);
@@ -888,6 +953,33 @@ export default function App() {
       setTestingAllNodes(false);
     }
   }, [nodes]);
+
+  /// Latency-tests a subset, reusing the cancellable batch the toolbar drives.
+  const onTestNodes = useCallback(async (ids: string[]) => {
+    cancelNodeTests.current = false;
+    setError(null);
+    setTestingAllNodes(true);
+    setNodeTests(Object.fromEntries(ids.map((id) => [id, { status: "testing" }])));
+    try {
+      await testAllNodes(
+        ids,
+        (result) =>
+          setNodeTests((current) => ({ ...current, [result.id]: result })),
+        () => cancelNodeTests.current,
+      );
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setNodeTests((current) =>
+        Object.fromEntries(
+          Object.entries(current).filter(
+            ([, result]) => result.status !== "testing",
+          ),
+        ),
+      );
+      setTestingAllNodes(false);
+    }
+  }, []);
 
   const onCancelNodeTests = useCallback(() => {
     cancelNodeTests.current = true;
@@ -1281,6 +1373,23 @@ export default function App() {
           <table className="node-list" aria-label="节点列表">
             <thead>
               <tr>
+                <th className="node-check">
+                  <input
+                    type="checkbox"
+                    aria-label="全选节点"
+                    checked={
+                      visibleNodes.length > 0 &&
+                      visibleNodes.every((item) => checkedNodes.has(item.id))
+                    }
+                    onChange={(event) =>
+                      setCheckedNodes(
+                        event.target.checked
+                          ? new Set(visibleNodes.map((item) => item.id))
+                          : new Set(),
+                      )
+                    }
+                  />
+                </th>
                 <th>名称</th>
                 <th>协议</th>
                 <th>传输</th>
@@ -1327,6 +1436,14 @@ export default function App() {
                       }
                     }}
                   >
+                    <td className="node-check">
+                      <input
+                        type="checkbox"
+                        aria-label={`选择 ${candidate.name}`}
+                        checked={checkedNodes.has(candidate.id)}
+                        onChange={() => toggleCheckedNode(candidate.id)}
+                      />
+                    </td>
                     <td>{candidate.name}</td>
                     <td>{candidate.protocol}</td>
                     <td>{candidate.transport}</td>
@@ -1379,6 +1496,12 @@ export default function App() {
               setNodeMenu(null);
               run_();
             };
+            // Right-clicking inside the selection acts on all of it;
+            // right-clicking outside is a fresh act, not an extension of it.
+            const batch = checkedNodes.has(target.id)
+              ? [...checkedNodes]
+              : [target.id];
+            const suffix = batch.length > 1 ? ` (${batch.length})` : "";
             return (
               <ul
                 className="context-menu"
@@ -1401,9 +1524,13 @@ export default function App() {
                     type="button"
                     role="menuitem"
                     disabled={busy}
-                    onClick={act(() => void onTestNode(target.id))}
+                    onClick={act(() =>
+                      batch.length > 1
+                        ? void onTestNodes(batch)
+                        : void onTestNode(target.id),
+                    )}
                   >
-                    测试延迟
+                    {`测试延迟${suffix}`}
                   </button>
                 </li>
                 <li>
@@ -1421,9 +1548,13 @@ export default function App() {
                     type="button"
                     role="menuitem"
                     disabled={busy}
-                    onClick={act(() => void onExportNodeLink(target.id))}
+                    onClick={act(() =>
+                      batch.length > 1
+                        ? void onExportNodeLinks(batch)
+                        : void onExportNodeLink(target.id),
+                    )}
                   >
-                    导出分享链接
+                    {`导出分享链接${suffix}`}
                   </button>
                 </li>
                 <li>
@@ -1474,9 +1605,13 @@ export default function App() {
                     role="menuitem"
                     className="danger"
                     disabled={busy || connected || !target.deletable}
-                    onClick={act(() => void onDeleteNode(target.id))}
+                    onClick={act(() =>
+                      batch.length > 1
+                        ? void onDeleteNodes(batch)
+                        : void onDeleteNode(target.id),
+                    )}
                   >
-                    {target.deletable ? "移除所选" : "订阅节点不可移除"}
+                    {target.deletable ? `移除所选${suffix}` : "订阅节点不可移除"}
                   </button>
                 </li>
                 <li>

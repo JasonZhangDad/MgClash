@@ -265,6 +265,28 @@ describe("App", () => {
     return target?.disabled ?? false;
   }
 
+  /// Ticks a node's selection checkbox.
+  function checkNode(name: string): void {
+    const box = container.querySelector<HTMLInputElement>(
+      `[aria-label='选择 ${name}']`,
+    );
+    if (!box) {
+      throw new Error(`no selection checkbox for ${name}`);
+    }
+    box.click();
+  }
+
+  /// The names of every checked node, in table order.
+  function checkedNodeNames(): string[] {
+    return [
+      ...container.querySelectorAll<HTMLInputElement>(
+        "[aria-label^='选择 ']",
+      ),
+    ]
+      .filter((box) => box.checked)
+      .map((box) => box.getAttribute("aria-label")!.replace("选择 ", ""));
+  }
+
   /// Opens a node's context menu and clicks one of its items, the way the
   /// v2rayN-style table exposes every per-node action.
   async function nodeMenuAction(node: string, item: string): Promise<void> {
@@ -1650,6 +1672,164 @@ describe("App", () => {
 
     // A node with no history reads as zero, not as a missing column.
     expect(row?.textContent).toContain("0 B");
+  });
+
+  it("acts on every checked node when one of them is right-clicked", async () => {
+    const osaka = {
+      ...SELECTED.node!,
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Osaka",
+    };
+    loadSessionStatusMock.mockResolvedValue({ ...SELECTED, node: null });
+    loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
+    deleteNodeMock.mockResolvedValue({ ...SELECTED, node: null });
+    await render();
+    checkNode("Tokyo Edge");
+    checkNode("Osaka");
+
+    await nodeMenuAction("Osaka", "移除所选 (2)");
+
+    // v2rayN marks this action 多选; acting on one row would silently ignore
+    // the rest of what the user picked.
+    expect(deleteNodeMock).toHaveBeenCalledTimes(2);
+    expect(deleteNodeMock).toHaveBeenCalledWith(SELECTED.node?.id);
+    expect(deleteNodeMock).toHaveBeenCalledWith(osaka.id);
+  });
+
+  it("acts on the right-clicked node alone when it is not checked", async () => {
+    const osaka = {
+      ...SELECTED.node!,
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Osaka",
+    };
+    loadSessionStatusMock.mockResolvedValue({ ...SELECTED, node: null });
+    loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
+    deleteNodeMock.mockResolvedValue({ ...SELECTED, node: null });
+    await render();
+    checkNode("Tokyo Edge");
+
+    await nodeMenuAction("Osaka", "移除所选");
+
+    // Right-clicking outside the selection is a fresh act, not an extension of it.
+    expect(deleteNodeMock).toHaveBeenCalledTimes(1);
+    expect(deleteNodeMock).toHaveBeenCalledWith(osaka.id);
+  });
+
+  it("selects and clears every visible node at once", async () => {
+    const osaka = {
+      ...SELECTED.node!,
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Osaka",
+    };
+    loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
+    await render();
+    const all = container.querySelector<HTMLInputElement>(
+      "[aria-label='全选节点']",
+    );
+    if (!all) {
+      throw new Error("no select-all control");
+    }
+
+    await act(async () => all.click());
+    expect(checkedNodeNames()).toEqual(["Tokyo Edge", "Osaka"]);
+
+    await act(async () => all.click());
+    expect(checkedNodeNames()).toEqual([]);
+  });
+
+  it("reports how many nodes a batch removal could not delete", async () => {
+    const osaka = {
+      ...SELECTED.node!,
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Osaka",
+    };
+    loadSessionStatusMock.mockResolvedValue({ ...SELECTED, node: null });
+    loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
+    deleteNodeMock
+      .mockResolvedValueOnce({ ...SELECTED, node: null })
+      .mockRejectedValueOnce({ code: "node_store_failed", message: "boom" });
+    await render();
+    checkNode("Tokyo Edge");
+    checkNode("Osaka");
+
+    await nodeMenuAction("Osaka", "移除所选 (2)");
+
+    // A batch that stops at the first failure leaves the user guessing which
+    // half happened.
+    expect(deleteNodeMock).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("1 个节点未能移除");
+  });
+
+  it("copies several links as one line each", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const osaka = {
+      ...SELECTED.node!,
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Osaka",
+    };
+    loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
+    exportNodeLinkMock
+      .mockResolvedValueOnce("ss://one#Tokyo Edge")
+      .mockResolvedValueOnce("ss://two#Osaka");
+    await render();
+    checkNode("Tokyo Edge");
+    checkNode("Osaka");
+
+    await nodeMenuAction("Osaka", "导出分享链接 (2)");
+
+    // One link per line is what a bulk import reads back.
+    expect(writeText).toHaveBeenCalledWith("ss://one#Tokyo Edge\nss://two#Osaka");
+    expect(container.textContent).toContain("已复制 2 条分享链接");
+  });
+
+  it("says how many links could not be exported", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const osaka = {
+      ...SELECTED.node!,
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Osaka",
+    };
+    loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
+    exportNodeLinkMock
+      .mockResolvedValueOnce("ss://one#Tokyo Edge")
+      .mockRejectedValueOnce({ code: "share_link_unavailable", message: "no" });
+    await render();
+    checkNode("Tokyo Edge");
+    checkNode("Osaka");
+
+    await nodeMenuAction("Osaka", "导出分享链接 (2)");
+
+    // A node with no representable link must not silently vanish from the copy.
+    expect(container.textContent).toContain("已复制 1 条，1 条无法导出");
+  });
+
+  it("latency-tests only the checked nodes", async () => {
+    const osaka = {
+      ...SELECTED.node!,
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Osaka",
+    };
+    loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
+    testAllNodesMock.mockResolvedValue(undefined);
+    await render();
+    checkNode("Tokyo Edge");
+    checkNode("Osaka");
+
+    await nodeMenuAction("Osaka", "测试延迟 (2)");
+
+    expect(testAllNodesMock).toHaveBeenCalledWith(
+      [SELECTED.node?.id, osaka.id],
+      expect.any(Function),
+      expect.any(Function),
+    );
   });
 
   it("keeps subscription-owned nodes read-only", async () => {

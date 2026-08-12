@@ -165,6 +165,17 @@ body {
   text-align: center;
 }
 
+/* The selection column stays as narrow as its checkbox. */
+.node-check {
+  width: 1%;
+  text-align: center;
+}
+
+.node-check input {
+  margin: 0;
+  cursor: pointer;
+}
+
 /* ---------- node context menu ---------- */
 
 .context-menu {
