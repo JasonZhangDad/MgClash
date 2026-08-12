@@ -9,7 +9,10 @@ use std::num::NonZeroU16;
 use std::path::Path;
 use std::time::Instant;
 
-use magies_domain::{CredentialRef, NodeModelError, ProxyNode, ProxyProtocol, TimestampMillis};
+use magies_domain::{
+    CredentialRef, NodeModelError, NodeName, ProxyNode, ProxyProtocol, ServerAddress,
+    TimestampMillis,
+};
 use magies_profiles::{
     CredentialCodec, CredentialCodecError, DnsConfigError, DnsProfile, LocalHttpProfile,
     LocalSocksProfile, ManualNodeStoreError, ShareLinkParseError, ShareLinkParser,
@@ -357,6 +360,60 @@ where
         Ok(self.status())
     }
 
+    /// Changes the editable endpoint fields of a persisted manual node.
+    ///
+    /// Protocol, transport, TLS, and the credential reference remain untouched.
+    /// Subscription nodes stay read-only because their next refresh owns those
+    /// fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed active-session, validation, read-only, not-found, or
+    /// persistence error.
+    pub fn edit_node(
+        &mut self,
+        id: Uuid,
+        name: impl Into<String>,
+        server: impl Into<String>,
+        port: u32,
+    ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
+        if self.session.is_running() {
+            return Err(SessionCommandError::SessionActive);
+        }
+        let mut node = self
+            .manual_nodes
+            .nodes()
+            .map_err(SessionCommandError::NodeStore)?
+            .into_iter()
+            .find(|node| node.id == id);
+        if node.is_none()
+            && self
+                .subscription_nodes
+                .active_nodes()
+                .map_err(SessionCommandError::SubscriptionNodeStore)?
+                .iter()
+                .any(|node| node.id == id)
+        {
+            return Err(SessionCommandError::SubscriptionNodeReadOnly { id });
+        }
+        let node = node.as_mut().ok_or(SessionCommandError::NodeStore(
+            ManualNodeStoreError::NodeNotFound { id },
+        ))?;
+        node.name = NodeName::new(name).map_err(SessionCommandError::InvalidNode)?;
+        node.server = ServerAddress::new(server).map_err(SessionCommandError::InvalidNode)?;
+        node.port = u16::try_from(port).ok().and_then(NonZeroU16::new).ok_or(
+            SessionCommandError::InvalidNode(NodeModelError::InvalidPort { port }),
+        )?;
+        let node = self
+            .manual_nodes
+            .update(node)
+            .map_err(SessionCommandError::NodeStore)?;
+        if self.node.as_ref().is_some_and(|selected| selected.id == id) {
+            self.node = Some(node);
+        }
+        Ok(self.status())
+    }
+
     /// Saves the routing mode used by the next connection.
     ///
     /// # Errors
@@ -617,6 +674,8 @@ where
     NoSelectedNode,
     #[error("failed to build the credential reference for the imported node")]
     CredentialRef(#[source] NodeModelError),
+    #[error("invalid node settings")]
+    InvalidNode(#[source] NodeModelError),
     #[error("failed to parse the sharing URI")]
     ShareLink(#[source] ShareLinkParseError),
     #[error("failed to encode the node credential")]
@@ -665,6 +724,7 @@ where
         match self {
             Self::NoSelectedNode => "no_selected_node",
             Self::CredentialRef(_) => "invalid_credential_reference",
+            Self::InvalidNode(_) => "invalid_node",
             Self::ShareLink(_) => "invalid_share_link",
             Self::Credential(_) => "credential_encode_failed",
             Self::Secret(_) | Self::DeleteSecret(_) => "secret_store_failed",

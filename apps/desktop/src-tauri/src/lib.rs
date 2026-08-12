@@ -739,6 +739,25 @@ fn session_select_node(
     clippy::needless_pass_by_value,
     reason = "Tauri commands receive State and deserialized arguments by value"
 )]
+fn session_edit_node(
+    id: String,
+    name: String,
+    server: String,
+    port: u32,
+    state: State<'_, AppState>,
+) -> Result<SessionStatus, CommandError> {
+    let id = parse_node_id(&id)?;
+    state
+        .service()
+        .edit_node(id, name, server, port)
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
 fn session_delete_node(
     id: String,
     state: State<'_, AppState>,
@@ -977,6 +996,16 @@ fn parse_subscription_id(id: &str) -> Result<Uuid, CommandError> {
     })
 }
 
+fn handle_run_event(app: &AppHandle, event: tauri::RunEvent) {
+    if let tauri::RunEvent::ExitRequested { api, .. } = event {
+        let state = app.state::<AppState>();
+        if !state.allow_exit.load(Ordering::Acquire) {
+            api.prevent_exit();
+            request_app_exit(app);
+        }
+    }
+}
+
 /// Starts the desktop application event loop.
 ///
 /// # Panics
@@ -1058,6 +1087,7 @@ pub fn run() {
             session_url_test,
             session_traffic,
             session_select_node,
+            session_edit_node,
             session_delete_node,
             session_connect,
             session_disconnect,
@@ -1074,15 +1104,7 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("failed to build MgClash desktop shell")
-        .run(|app, event| {
-            if let tauri::RunEvent::ExitRequested { api, .. } = event {
-                let state = app.state::<AppState>();
-                if !state.allow_exit.load(Ordering::Acquire) {
-                    api.prevent_exit();
-                    request_app_exit(app);
-                }
-            }
-        });
+        .run(handle_run_event);
 }
 
 #[cfg(test)]

@@ -18,6 +18,12 @@ export interface NodeSummary {
   server: string;
 }
 
+export interface NodeEdit {
+  name: string;
+  port: number;
+  server: string;
+}
+
 export type NodeTestStatus = "failed" | "success" | "timeout";
 
 export interface NodeTestResult {
@@ -181,6 +187,10 @@ export async function testAllNodes(
 
 export function selectNode(id: string): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_select_node", { id });
+}
+
+export function editNode(id: string, edit: NodeEdit): Promise<SessionStatus> {
+  return invoke<SessionStatus>("session_edit_node", { id, ...edit });
 }
 
 export function deleteNode(id: string): Promise<SessionStatus> {

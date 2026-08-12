@@ -109,6 +109,57 @@ fn records_failed_subscription_node_latency_on_the_selected_node() {
 }
 
 #[test]
+fn edits_a_manual_node_while_preserving_its_protocol_and_credential() {
+    let (mut service, _runtime, _fail_start) = service();
+    let original = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
+
+    let status = service
+        .edit_node(original.id, " Tokyo 2 ", " new.example.com ", 443)
+        .unwrap();
+
+    let edited = status.node.unwrap();
+    assert_eq!(edited.id, original.id);
+    assert_eq!(edited.name, "Tokyo 2");
+    assert_eq!(edited.server, "new.example.com");
+    assert_eq!(edited.port, 443);
+    assert_eq!(edited.protocol, ProxyProtocol::Shadowsocks);
+    assert_eq!(service.node(original.id).unwrap(), edited);
+}
+
+#[test]
+fn rejects_invalid_read_only_and_connected_node_edits() {
+    let (mut service, _runtime, _fail_start) = service();
+    let node = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
+
+    assert_eq!(
+        service
+            .edit_node(node.id, " ", "edge.example.com", 443)
+            .unwrap_err()
+            .code(),
+        "invalid_node"
+    );
+    assert_eq!(service.status().node.as_ref().unwrap().name, "Tokyo Edge");
+
+    service.connect().unwrap();
+    assert_eq!(
+        service
+            .edit_node(node.id, "Tokyo 2", "edge.example.com", 443)
+            .unwrap_err()
+            .code(),
+        "session_active"
+    );
+
+    let (mut managed_service, managed_id, _runtime) = service_with_subscription_node();
+    assert_eq!(
+        managed_service
+            .edit_node(managed_id, "Managed", "edge.example.com", 443)
+            .unwrap_err()
+            .code(),
+        "subscription_node_read_only"
+    );
+}
+
+#[test]
 fn rejects_latency_updates_for_a_missing_node() {
     let (mut service, _runtime, _fail_start) = service();
 
