@@ -13,8 +13,10 @@ import { loadPlatformSummary, type PlatformSummary } from "./platform";
 import {
   connectSession,
   createNode,
+  cloneNode,
   deleteNode,
   exportNodeLink,
+  removeDuplicateNodes,
   dismissSystemProxyRecovery,
   disconnectSession,
   editNode,
@@ -698,6 +700,36 @@ export default function App() {
     }
   }, []);
 
+  const onCloneNode = useCallback(async (id: string) => {
+    setBusy(true);
+    setError(null);
+    setExportedTo(null);
+    try {
+      setNodes(await cloneNode(id));
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const onRemoveDuplicateNodes = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    setExportedTo(null);
+    try {
+      const removed = await removeDuplicateNodes();
+      setNodes(await loadNodes());
+      setExportedTo(
+        removed === 0 ? "没有重复节点" : `已移除 ${removed} 个重复节点`,
+      );
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
   const onExportNodeLink = useCallback(async (id: string) => {
     setBusy(true);
     setError(null);
@@ -1356,6 +1388,16 @@ export default function App() {
                   <button
                     type="button"
                     role="menuitem"
+                    disabled={busy || connected || !target.deletable}
+                    onClick={act(() => void onCloneNode(target.id))}
+                  >
+                    克隆所选
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    role="menuitem"
                     disabled={busy}
                     onClick={act(() => void onExportNodeLink(target.id))}
                   >
@@ -1413,6 +1455,17 @@ export default function App() {
                     onClick={act(() => void onDeleteNode(target.id))}
                   >
                     {target.deletable ? "移除所选" : "订阅节点不可移除"}
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="danger"
+                    disabled={busy || connected}
+                    onClick={act(() => void onRemoveDuplicateNodes())}
+                  >
+                    移除重复
                   </button>
                 </li>
               </ul>

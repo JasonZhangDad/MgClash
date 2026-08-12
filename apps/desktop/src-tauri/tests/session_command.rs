@@ -1085,8 +1085,7 @@ fn service_with_events(
 /// pinned to 10808/10809 would fail on any machine already running a proxy
 /// client. The ports are still real, just chosen by the OS.
 fn defaults_on_free_ports() -> SessionDefaults {
-    let socks = free_port();
-    let http = free_port();
+    let (socks, http) = free_ports();
     SessionDefaults {
         socks: LocalSocksProfile::new(u32::from(socks)).unwrap(),
         http: LocalHttpProfile::new(u32::from(http)).unwrap(),
@@ -1094,13 +1093,30 @@ fn defaults_on_free_ports() -> SessionDefaults {
     }
 }
 
-/// A port the OS reports as free, released before it is returned.
-fn free_port() -> u16 {
-    TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .expect("the OS must hand out a loopback port")
-        .local_addr()
-        .expect("a bound listener has an address")
-        .port()
+/// Two distinct loopback ports the OS reports as free.
+///
+/// Both listeners are held until both ports are known. Allocating them one at a
+/// time returns the same port twice on Linux, whose ephemeral allocator hands
+/// back a port as soon as it is released — which the preflight then rejects as a
+/// duplicate.
+fn free_ports() -> (u16, u16) {
+    let bind = || {
+        TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("the OS must hand out a loopback port")
+    };
+    let first = bind();
+    let second = bind();
+    let ports = (
+        first
+            .local_addr()
+            .expect("a bound listener has an address")
+            .port(),
+        second
+            .local_addr()
+            .expect("a bound listener has an address")
+            .port(),
+    );
+    assert_ne!(ports.0, ports.1, "the OS handed out one port twice");
+    ports
 }
 
 fn service_with_subscription_node() -> (TestService, Uuid, RuntimeDirectory) {
@@ -1495,4 +1511,72 @@ fn exporting_an_unknown_node_is_a_typed_not_found() {
             ManualNodeStoreError::NodeNotFound { .. }
         ))
     ));
+}
+
+#[test]
+fn cloning_a_node_copies_its_credential_and_leaves_the_selection_alone() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    let original = service.nodes().unwrap()[0].id;
+    service.select_node(original).unwrap();
+
+    let nodes = service.clone_node(original).unwrap();
+
+    assert_eq!(nodes.len(), 2);
+    // Cloning is for "duplicate, then edit"; it must not move the user off the
+    // node they are on.
+    assert_eq!(service.status().node.unwrap().id, original);
+    let clone = nodes.iter().find(|node| node.id != original).unwrap();
+    assert_eq!(clone.server, nodes[0].server);
+    assert_eq!(clone.port, nodes[0].port);
+    // The copy has to be usable on its own, which means its own stored secret.
+    let link = service.export_node_link(clone.id).unwrap();
+    assert_eq!(link, service.export_node_link(original).unwrap());
+}
+
+#[test]
+fn cloning_a_subscription_node_is_refused() {
+    let (mut service, node_id, _runtime) = service_with_subscription_node();
+
+    // The subscription owns its nodes; a copy would survive a refresh that
+    // removes the original, which is not what "clone" implies here.
+    assert!(matches!(
+        service.clone_node(node_id),
+        Err(SessionCommandError::NodeStore(
+            ManualNodeStoreError::NodeNotFound { .. }
+        ))
+    ));
+}
+
+#[test]
+fn removing_duplicates_keeps_the_first_of_each_repeated_node() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    let original = service.nodes().unwrap()[0].id;
+    service.clone_node(original).unwrap();
+    service.clone_node(original).unwrap();
+    service
+        .import_node("trojan://hunter2@edge.example.com:443#Trojan")
+        .unwrap();
+
+    let removed = service.remove_duplicate_nodes().unwrap();
+
+    assert_eq!(removed, 2);
+    let remaining = service.nodes().unwrap();
+    assert_eq!(remaining.len(), 2);
+    // The first occurrence survives, so the node the user already selected or
+    // ordered does not move.
+    assert!(remaining.iter().any(|node| node.id == original));
+}
+
+#[test]
+fn removing_duplicates_leaves_a_list_without_repeats_untouched() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    service
+        .import_node("trojan://hunter2@edge.example.com:443#Trojan")
+        .unwrap();
+
+    assert_eq!(service.remove_duplicate_nodes().unwrap(), 0);
+    assert_eq!(service.nodes().unwrap().len(), 2);
 }

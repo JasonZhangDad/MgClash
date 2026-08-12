@@ -11,6 +11,8 @@ const loadNodesMock = vi.hoisted(() => vi.fn());
 const loadNodeGroupsMock = vi.hoisted(() => vi.fn());
 const importNodeMock = vi.hoisted(() => vi.fn());
 const exportNodeLinkMock = vi.hoisted(() => vi.fn());
+const cloneNodeMock = vi.hoisted(() => vi.fn());
+const removeDuplicateNodesMock = vi.hoisted(() => vi.fn());
 const createNodeMock = vi.hoisted(() => vi.fn());
 const importNodesMock = vi.hoisted(() => vi.fn());
 const loadLogsMock = vi.hoisted(() => vi.fn());
@@ -63,6 +65,8 @@ vi.mock("./session", async () => {
     isCommandError: actual.isCommandError,
     deleteNode: deleteNodeMock,
   exportNodeLink: exportNodeLinkMock,
+  cloneNode: cloneNodeMock,
+  removeDuplicateNodes: removeDuplicateNodesMock,
     loadNodeGroups: loadNodeGroupsMock,
     loadNodes: loadNodesMock,
     loadSessionStatus: loadSessionStatusMock,
@@ -1538,6 +1542,47 @@ describe("App", () => {
     // The link is the credential, so it must not appear on screen.
     expect(container.textContent).not.toContain("hunter2");
     expect(container.textContent).toContain("已复制到剪贴板");
+  });
+
+  it("clones a node without moving the selection", async () => {
+    const clone = {
+      ...SELECTED.node!,
+      id: "00000000-0000-0000-0000-0000000000cc",
+    };
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    cloneNodeMock.mockResolvedValue([SELECTED.node, clone]);
+    await render();
+
+    await nodeMenuAction("Tokyo Edge", "克隆所选");
+
+    expect(cloneNodeMock).toHaveBeenCalledWith(SELECTED.node?.id);
+    expect(
+      container.querySelectorAll("[aria-label='节点列表'] tbody tr"),
+    ).toHaveLength(2);
+  });
+
+  it("reports how many duplicates were removed", async () => {
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    removeDuplicateNodesMock.mockResolvedValue(3);
+    await render();
+
+    await nodeMenuAction("Tokyo Edge", "移除重复");
+
+    expect(container.textContent).toContain("已移除 3 个重复节点");
+  });
+
+  it("says so when there is nothing to de-duplicate", async () => {
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    removeDuplicateNodesMock.mockResolvedValue(0);
+    await render();
+
+    await nodeMenuAction("Tokyo Edge", "移除重复");
+
+    // Silence after a command that removed nothing reads as a failure.
+    expect(container.textContent).toContain("没有重复节点");
   });
 
   it("keeps subscription-owned nodes read-only", async () => {
