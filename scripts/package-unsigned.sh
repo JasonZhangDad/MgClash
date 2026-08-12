@@ -20,6 +20,8 @@ core_license="${MAGIES_BUNDLED_SING_BOX_LICENSE:-}"
 xray="${MAGIES_BUNDLED_XRAY_BIN:-}"
 xray_sha256="${MAGIES_XRAY_SHA256:-}"
 xray_license="${MAGIES_BUNDLED_XRAY_LICENSE:-}"
+xray_geoip="${MAGIES_BUNDLED_XRAY_GEOIP:-}"
+xray_geosite="${MAGIES_BUNDLED_XRAY_GEOSITE:-}"
 wintun="${MAGIES_BUNDLED_WINTUN_DLL:-}"
 wintun_license="${MAGIES_BUNDLED_WINTUN_LICENSE:-}"
 
@@ -73,9 +75,13 @@ bash "${repository}/scripts/stage-bundled-core.sh" \
 # releases that are otherwise fine. The skip is announced rather than silent,
 # because an artifact missing a Core fails later and less clearly.
 if [[ -n "${xray}" ]]; then
+  # The geo databases travel with the binary: Xray refuses to start when a
+  # geoip: or geosite: routing rule cannot find them, which is exactly what
+  # Rule mode generates.
   bash "${repository}/scripts/stage-bundled-core.sh" \
     "${xray}" "${xray_sha256}" "${xray_license}" \
-    "${scratch}/core" "${xray_file_name}"
+    "${scratch}/core" "${xray_file_name}" \
+    "${xray_geoip}" "${xray_geosite}"
 else
   echo "no MAGIES_BUNDLED_XRAY_BIN: this artifact ships without Xray" >&2
 fi
