@@ -33,6 +33,7 @@ fn status() -> SessionStatus {
         mode: "global",
         route: RouteSettings::default(),
         system_proxy: true,
+        system_proxy_mode: "managed",
         socks_port: 10_808,
         http_port: 10_809,
     }

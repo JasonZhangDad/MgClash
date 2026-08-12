@@ -12,6 +12,7 @@ use thiserror::Error;
 
 use magies_domain::CoreType;
 use magies_profiles::CorePreference;
+use magies_session::SystemProxyMode;
 
 use crate::logs::LogLevel;
 
@@ -25,6 +26,16 @@ const CREATE_APP_SETTINGS_TABLE: &str = "
         launch_at_login INTEGER NOT NULL,
         log_level TEXT NOT NULL
     );
+";
+
+/// Adds the System Proxy mode to a table created before it existed.
+///
+/// `SQLite` has no `ADD COLUMN IF NOT EXISTS`, so the duplicate-column error is
+/// the expected outcome on every launch after the first and is discarded. The
+/// default keeps existing installs on the behaviour they already had.
+const ADD_SYSTEM_PROXY_MODE: &str = "
+    ALTER TABLE app_settings ADD COLUMN system_proxy_mode TEXT NOT NULL
+        DEFAULT 'managed';
 ";
 
 /// What the shell does outside of proxying, as the settings panel edits it.
@@ -48,6 +59,8 @@ pub struct AppSettings {
     pub tun_enabled: bool,
     /// The minimum level the log panel shows on launch.
     pub log_level: LogLevel,
+    /// What connecting does to the host's System Proxy.
+    pub system_proxy_mode: SystemProxyModeSetting,
 }
 
 impl Default for AppSettings {
@@ -59,6 +72,7 @@ impl Default for AppSettings {
             close_to_tray: true,
             launch_at_login: false,
             core_preference: CorePreferenceSetting::Auto,
+            system_proxy_mode: SystemProxyModeSetting::Managed,
             // Off by default: TUN needs elevation and takes over the whole
             // routing table, which is not something to switch on unasked.
             tun_enabled: false,
@@ -100,6 +114,12 @@ impl SqliteAppSettingsStore {
 
     fn from_connection(connection: Connection) -> Result<Self, AppSettingsStoreError> {
         connection.execute_batch(CREATE_APP_SETTINGS_TABLE)?;
+        // Only a duplicate column is tolerated; anything else is a real failure.
+        if let Err(error) = connection.execute_batch(ADD_SYSTEM_PROXY_MODE)
+            && !error.to_string().contains("duplicate column")
+        {
+            return Err(error.into());
+        }
         Ok(Self { connection })
     }
 
@@ -112,7 +132,7 @@ impl SqliteAppSettingsStore {
         let row = self
             .connection
             .query_row(
-                "SELECT connect_on_launch, close_to_tray, launch_at_login, core_preference, tun_enabled, log_level
+                "SELECT connect_on_launch, close_to_tray, launch_at_login, core_preference, tun_enabled, log_level, system_proxy_mode
                  FROM app_settings WHERE id = 1",
                 [],
                 |row| {
@@ -123,6 +143,7 @@ impl SqliteAppSettingsStore {
                         row.get::<_, String>(3)?,
                         row.get::<_, i64>(4)?,
                         row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
                     ))
                 },
             )
@@ -134,6 +155,7 @@ impl SqliteAppSettingsStore {
             core_preference,
             tun_enabled,
             log_level,
+            system_proxy_mode,
         )) = row
         else {
             return Ok(AppSettings::default());
@@ -151,6 +173,11 @@ impl SqliteAppSettingsStore {
             tun_enabled: tun_enabled != 0,
             log_level: parse_log_level(&log_level)
                 .ok_or(AppSettingsStoreError::InvalidStoredValue { value: log_level })?,
+            system_proxy_mode: parse_system_proxy_mode(&system_proxy_mode).ok_or(
+                AppSettingsStoreError::InvalidStoredValue {
+                    value: system_proxy_mode,
+                },
+            )?,
         })
     }
 
@@ -161,13 +188,14 @@ impl SqliteAppSettingsStore {
     /// Returns a typed database error when `SQLite` cannot update the row.
     pub fn save(&self, settings: AppSettings) -> Result<(), AppSettingsStoreError> {
         self.connection.execute(
-            "INSERT INTO app_settings (id, connect_on_launch, close_to_tray, launch_at_login, core_preference, tun_enabled, log_level)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO app_settings (id, connect_on_launch, close_to_tray, launch_at_login, core_preference, tun_enabled, log_level, system_proxy_mode)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(id) DO UPDATE SET
                  connect_on_launch = excluded.connect_on_launch,
                  close_to_tray = excluded.close_to_tray,
                  launch_at_login = excluded.launch_at_login,
                  core_preference = excluded.core_preference,
+                 system_proxy_mode = excluded.system_proxy_mode,
                  tun_enabled = excluded.tun_enabled,
                  log_level = excluded.log_level",
             params![
@@ -177,9 +205,59 @@ impl SqliteAppSettingsStore {
                 settings.core_preference.name(),
                 i64::from(settings.tun_enabled),
                 log_level_name(settings.log_level),
+                settings.system_proxy_mode.name(),
             ],
         )?;
         Ok(())
+    }
+}
+
+/// What connecting does to the host's System Proxy.
+///
+/// These are three of v2rayN's four choices; PAC needs a local server this build
+/// has no counterpart for yet.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SystemProxyModeSetting {
+    /// Point the host at this session's local proxies.
+    #[default]
+    Managed,
+    /// Clear the host's proxy while connected, restoring it on disconnect.
+    Cleared,
+    /// Leave the host's proxy exactly as the user configured it.
+    Unchanged,
+}
+
+impl SystemProxyModeSetting {
+    /// Converts to the session layer's own type.
+    #[must_use]
+    pub const fn mode(self) -> SystemProxyMode {
+        match self {
+            Self::Managed => SystemProxyMode::Managed,
+            Self::Cleared => SystemProxyMode::Cleared,
+            Self::Unchanged => SystemProxyMode::Unchanged,
+        }
+    }
+
+    /// The stable value stored in `SQLite` and exchanged with the webview.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Managed => "managed",
+            Self::Cleared => "cleared",
+            Self::Unchanged => "unchanged",
+        }
+    }
+}
+
+/// Reads the stored System Proxy mode, or `None` for an unknown value.
+#[must_use]
+pub fn parse_system_proxy_mode(value: &str) -> Option<SystemProxyModeSetting> {
+    match value {
+        "managed" => Some(SystemProxyModeSetting::Managed),
+        "cleared" => Some(SystemProxyModeSetting::Cleared),
+        "unchanged" => Some(SystemProxyModeSetting::Unchanged),
+        _ => None,
     }
 }
 

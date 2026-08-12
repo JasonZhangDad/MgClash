@@ -122,6 +122,7 @@ const IDLE: SessionStatus = {
   node: null,
   socksPort: 10808,
   systemProxy: true,
+  systemProxyMode: "managed" as const,
 };
 
 const SELECTED: SessionStatus = {
@@ -1583,6 +1584,24 @@ describe("App", () => {
 
     // Silence after a command that removed nothing reads as a failure.
     expect(container.textContent).toContain("没有重复节点");
+  });
+
+  it("switches the System Proxy mode from the status bar", async () => {
+    await render();
+    const control = container.querySelector<HTMLSelectElement>(
+      "[aria-label='状态栏系统代理']",
+    );
+    if (!control) {
+      throw new Error("no System Proxy control in the status bar");
+    }
+
+    await act(async () => selectValue("unchanged", control));
+
+    // Leaving the host's proxy alone and clearing it are different requests,
+    // which is why there are three values rather than a checkbox.
+    expect(saveAppSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ systemProxyMode: "unchanged" }),
+    );
   });
 
   it("keeps subscription-owned nodes read-only", async () => {

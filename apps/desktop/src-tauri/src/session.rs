@@ -29,7 +29,7 @@ use magies_profiles::{
 use magies_routing::{RouteProfile, RoutingMode};
 use magies_session::{
     CoreSessionControl, DesktopSession, DesktopSessionError, DesktopSessionProfile, NetworkEvent,
-    NetworkRecoveryPolicy, RecoveryError, RecoveryOutcome, SessionHealthProbe,
+    NetworkRecoveryPolicy, RecoveryError, RecoveryOutcome, SessionHealthProbe, SystemProxyMode,
     SystemProxySessionControl,
 };
 use magies_storage::{SecretStore, SecretStoreError};
@@ -77,7 +77,7 @@ pub struct SessionDefaults {
     pub clash_api_port: NonZeroU16,
     pub dns: DnsProfile,
     pub route: RouteProfile,
-    pub system_proxy: bool,
+    pub system_proxy: SystemProxyMode,
 }
 
 impl SessionDefaults {
@@ -98,7 +98,7 @@ impl SessionDefaults {
                 .profile()
                 .expect("the default DNS settings are valid"),
             route: route_profile_for(RoutingMode::Global),
-            system_proxy: true,
+            system_proxy: SystemProxyMode::Managed,
         }
     }
 
@@ -162,6 +162,15 @@ impl From<&ProxyNode> for NodeSummary {
             latency_ms: node.latency_ms,
             last_tested_at: node.last_tested_at.map(TimestampMillis::get),
         }
+    }
+}
+
+/// The stable name the webview and the settings store share.
+const fn system_proxy_mode_name(mode: SystemProxyMode) -> &'static str {
+    match mode {
+        SystemProxyMode::Managed => "managed",
+        SystemProxyMode::Cleared => "cleared",
+        SystemProxyMode::Unchanged => "unchanged",
     }
 }
 
@@ -231,6 +240,8 @@ pub struct SessionStatus {
     pub mode: &'static str,
     pub route: RouteSettings,
     pub system_proxy: bool,
+    /// Which of the three System Proxy modes the next session will use.
+    pub system_proxy_mode: &'static str,
     pub socks_port: u16,
     pub http_port: u16,
 }
@@ -1146,7 +1157,7 @@ where
         // System Proxy rather than being layered on top of it.
         let profile = match self.tun_profile()? {
             Some(tun) => profile.with_system_proxy(false).with_tun(tun, true),
-            None => profile.with_system_proxy(self.defaults.system_proxy),
+            None => profile.with_system_proxy_mode(self.defaults.system_proxy),
         };
 
         let output = self
@@ -1216,6 +1227,11 @@ where
         self.core_preference = preference;
     }
 
+    /// Replaces what the next session does to the host's System Proxy.
+    pub const fn set_system_proxy_mode(&mut self, mode: SystemProxyMode) {
+        self.defaults.system_proxy = mode;
+    }
+
     /// Turns TUN routing on or off for the next session.
     pub fn set_tun_enabled(&mut self, enabled: bool) {
         self.tun_enabled = enabled;
@@ -1254,7 +1270,8 @@ where
             dns: self.current_dns_settings.clone(),
             mode: self.defaults.mode(),
             route: self.current_route_settings.clone(),
-            system_proxy: self.defaults.system_proxy,
+            system_proxy: self.defaults.system_proxy != SystemProxyMode::Unchanged,
+            system_proxy_mode: system_proxy_mode_name(self.defaults.system_proxy),
             socks_port: self.defaults.socks.port().get(),
             http_port: self.defaults.http.port().get(),
         }

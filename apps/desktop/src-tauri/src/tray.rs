@@ -435,6 +435,7 @@ mod tests {
             mode: "global",
             route: RouteSettings::default(),
             system_proxy: connected,
+            system_proxy_mode: "managed",
             socks_port: 1080,
             http_port: 1081,
         }

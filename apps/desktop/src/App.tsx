@@ -64,6 +64,7 @@ import {
   type SessionStatus,
   type RoutingMode,
   type SystemProxyStartupStatus,
+  type SystemProxyMode,
   type TrafficSnapshot,
 } from "./session";
 import {
@@ -2864,7 +2865,23 @@ export default function App() {
           />
           TUN
         </label>
-        <span>系统代理 {status?.systemProxy ? "开" : "关"}</span>
+        <label className="status-control">
+          系统代理
+          <select
+            aria-label="状态栏系统代理"
+            disabled={busy || connected || settings === null}
+            value={settings?.systemProxyMode ?? "managed"}
+            onChange={(event) =>
+              void onChangeSettings({
+                systemProxyMode: event.target.value as SystemProxyMode,
+              })
+            }
+          >
+            <option value="managed">自动配置</option>
+            <option value="cleared">清除</option>
+            <option value="unchanged">不改变</option>
+          </select>
+        </label>
         <span className="statusbar-rates">
           ↓ {formatRate(traffic.downloadBytesPerSecond)} ↑{" "}
           {formatRate(traffic.uploadBytesPerSecond)}
