@@ -1085,8 +1085,7 @@ fn service_with_events(
 /// pinned to 10808/10809 would fail on any machine already running a proxy
 /// client. The ports are still real, just chosen by the OS.
 fn defaults_on_free_ports() -> SessionDefaults {
-    let socks = free_port();
-    let http = free_port();
+    let (socks, http) = free_ports();
     SessionDefaults {
         socks: LocalSocksProfile::new(u32::from(socks)).unwrap(),
         http: LocalHttpProfile::new(u32::from(http)).unwrap(),
@@ -1094,13 +1093,30 @@ fn defaults_on_free_ports() -> SessionDefaults {
     }
 }
 
-/// A port the OS reports as free, released before it is returned.
-fn free_port() -> u16 {
-    TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .expect("the OS must hand out a loopback port")
-        .local_addr()
-        .expect("a bound listener has an address")
-        .port()
+/// Two distinct loopback ports the OS reports as free.
+///
+/// Both listeners are held until both ports are known. Allocating them one at a
+/// time returns the same port twice on Linux, whose ephemeral allocator hands
+/// back a port as soon as it is released — which the preflight then rejects as a
+/// duplicate.
+fn free_ports() -> (u16, u16) {
+    let bind = || {
+        TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("the OS must hand out a loopback port")
+    };
+    let first = bind();
+    let second = bind();
+    let ports = (
+        first
+            .local_addr()
+            .expect("a bound listener has an address")
+            .port(),
+        second
+            .local_addr()
+            .expect("a bound listener has an address")
+            .port(),
+    );
+    assert_ne!(ports.0, ports.1, "the OS handed out one port twice");
+    ports
 }
 
 fn service_with_subscription_node() -> (TestService, Uuid, RuntimeDirectory) {
