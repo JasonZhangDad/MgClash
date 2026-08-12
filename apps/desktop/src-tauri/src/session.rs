@@ -173,8 +173,30 @@ const fn transport_name(transport: Option<&TransportConfig>) -> &'static str {
     }
 }
 
+/// Whether the node verifies its server by a pinned digest.
+///
+/// Reality authenticates by public key instead, so it never carries a pin.
+const fn pins_a_certificate(tls: Option<&TlsConfig>) -> bool {
+    matches!(
+        tls,
+        Some(TlsConfig::Tls {
+            pinned_sha256: Some(_),
+            ..
+        })
+    )
+}
+
+/// The TLS layer as the node table labels it.
+///
+/// A pinned node is called out because it behaves differently: only Xray can
+/// verify the digest, so the table showing a bare `tls` would hide the reason a
+/// connection attempt refuses the Core the user picked.
 const fn tls_name(tls: &TlsConfig) -> &'static str {
     match tls {
+        TlsConfig::Tls {
+            pinned_sha256: Some(_),
+            ..
+        } => "tls+pin",
         TlsConfig::Tls { .. } => "tls",
         TlsConfig::Reality { .. } => "reality",
     }
@@ -1015,10 +1037,14 @@ where
                 CorePreference::Auto => CoreType::SingBox,
             });
         };
-        CoreCapabilityMatrix::select(
-            self.core_preference,
-            CoreRequirements::new(node.protocol_type, self.tun_enabled, host_architecture()),
-        )
+        let requirements =
+            CoreRequirements::new(node.protocol_type, self.tun_enabled, host_architecture());
+        let requirements = if pins_a_certificate(node.tls.as_ref()) {
+            requirements.with_certificate_pin()
+        } else {
+            requirements
+        };
+        CoreCapabilityMatrix::select(self.core_preference, requirements)
     }
 
     /// Replaces the Core the session should run.

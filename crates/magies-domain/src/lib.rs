@@ -256,6 +256,52 @@ pub enum GrpcMode {
     Guna,
 }
 
+/// A server certificate's SHA-256 digest, as `pinSHA256` carries it.
+///
+/// Held as lower-case hex without separators: share links print the digest with
+/// colons and in either case, and two spellings of one digest must compare
+/// equal so node de-duplication is not fooled by formatting.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct CertificatePin(String);
+
+impl CertificatePin {
+    /// Parses a digest of exactly 32 bytes written as hex, colons optional.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NodeModelError::InvalidCertificatePin`] for anything that is
+    /// not 32 hex-encoded bytes, including the Base64 spelling other tools use.
+    pub fn new(value: &str) -> Result<Self, NodeModelError> {
+        let digits: String = value.chars().filter(|value| *value != ':').collect();
+        let is_hex = digits.len() == 64 && digits.chars().all(|value| value.is_ascii_hexdigit());
+        if is_hex {
+            Ok(Self(digits.to_ascii_lowercase()))
+        } else {
+            Err(NodeModelError::InvalidCertificatePin)
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for CertificatePin {
+    type Error = NodeModelError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(&value)
+    }
+}
+
+impl From<CertificatePin> for String {
+    fn from(value: CertificatePin) -> Self {
+        value.0
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(tag = "type")]
 pub enum TlsConfig {
@@ -267,6 +313,12 @@ pub enum TlsConfig {
         allow_insecure: bool,
         alpn: Vec<String>,
         fingerprint: Option<String>,
+        /// The server certificate's SHA-256, when the node pins one.
+        ///
+        /// Defaulted because nodes persisted before pinning existed carry no
+        /// such field, and failing to read them would lose the user's list.
+        #[serde(rename = "pinnedSha256", default)]
+        pinned_sha256: Option<CertificatePin>,
     },
     #[serde(rename = "reality")]
     Reality {
@@ -372,6 +424,8 @@ pub enum NodeModelError {
     MissingCredentialReference,
     #[error("node credential reference must not be empty")]
     EmptyCredentialReference,
+    #[error("certificate pin must be a SHA-256 digest written as 32 hex bytes")]
+    InvalidCertificatePin,
 }
 
 fn normalized_non_empty(value: &str, error: NodeModelError) -> Result<String, NodeModelError> {

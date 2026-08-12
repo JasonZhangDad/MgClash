@@ -198,6 +198,7 @@ fn the_unreachable_rejections_still_read_correctly() {
         CoreSelectionError::NoUsableCore {
             protocol: ProxyProtocol::Hysteria2,
             tun: true,
+            certificate_pin: false,
         }
         .to_string(),
         "no available Core supports Hysteria2 with TUN on"
@@ -206,9 +207,21 @@ fn the_unreachable_rejections_still_read_correctly() {
         CoreSelectionError::NoUsableCore {
             protocol: ProxyProtocol::Vless,
             tun: false,
+            certificate_pin: false,
         }
         .to_string(),
         "no available Core supports VLESS with TUN off"
+    );
+    // sing-box has the protocol and Xray has the pin; naming only the protocol
+    // would send the user looking for a Core that already exists.
+    assert_eq!(
+        CoreSelectionError::NoUsableCore {
+            protocol: ProxyProtocol::Hysteria2,
+            tun: false,
+            certificate_pin: true,
+        }
+        .to_string(),
+        "no available Core supports Hysteria2 with TUN off and a pinned certificate"
     );
 }
 
@@ -222,4 +235,50 @@ fn every_capability_entry_reports_the_shared_abilities() {
             assert_eq!(capability.architectures.len(), 2);
         }
     }
+}
+
+#[test]
+fn only_xray_can_verify_a_pinned_certificate() {
+    assert!(
+        !CoreCapabilityMatrix::capability(CoreType::SingBox, ProxyProtocol::Vless)
+            .unwrap()
+            .supports_certificate_pin
+    );
+    assert!(
+        CoreCapabilityMatrix::capability(CoreType::Xray, ProxyProtocol::Vless)
+            .unwrap()
+            .supports_certificate_pin
+    );
+}
+
+#[test]
+fn a_pinned_node_is_routed_to_the_core_that_can_verify_it() {
+    let pinned = CoreRequirements::new(ProxyProtocol::Vless, false, CpuArchitecture::X86_64)
+        .with_certificate_pin();
+
+    // Auto prefers sing-box for everything it can serve; a pin it cannot verify
+    // is exactly the case where Xray is the right answer.
+    assert_eq!(
+        CoreCapabilityMatrix::select(CorePreference::Auto, pinned).unwrap(),
+        CoreType::Xray
+    );
+    assert_eq!(
+        CoreCapabilityMatrix::rejection(CoreType::SingBox, pinned),
+        Some(CoreRejection::CertificatePinUnsupported {
+            core: CoreType::SingBox
+        })
+    );
+}
+
+#[test]
+fn a_pinned_hysteria2_node_has_no_usable_core() {
+    let pinned = CoreRequirements::new(ProxyProtocol::Hysteria2, false, CpuArchitecture::X86_64)
+        .with_certificate_pin();
+
+    // sing-box has the protocol but not the pin; Xray has the pin but not the
+    // protocol. The refusal belongs here so the UI never has to know why.
+    assert!(matches!(
+        CoreCapabilityMatrix::select(CorePreference::Auto, pinned),
+        Err(CoreSelectionError::NoUsableCore { .. })
+    ));
 }

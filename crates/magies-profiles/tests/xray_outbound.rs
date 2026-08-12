@@ -5,7 +5,8 @@
 use std::num::NonZeroU16;
 
 use magies_domain::{
-    CoreType, CredentialRef, GrpcMode, ProxyNode, ProxyProtocol, TlsConfig, TransportConfig,
+    CertificatePin, CoreType, CredentialRef, GrpcMode, ProxyNode, ProxyProtocol, TlsConfig,
+    TransportConfig,
 };
 use magies_platform::CpuArchitecture;
 use magies_profiles::{
@@ -61,6 +62,7 @@ fn plain_tls() -> TlsConfig {
         allow_insecure: false,
         alpn: vec!["h2".to_owned()],
         fingerprint: Some("chrome".to_owned()),
+        pinned_sha256: None,
     }
 }
 
@@ -237,6 +239,7 @@ fn an_insecure_node_is_refused_because_xray_removed_the_option() {
             allow_insecure: true,
             alpn: Vec::new(),
             fingerprint: None,
+            pinned_sha256: None,
         }),
     );
 
@@ -434,4 +437,41 @@ fn a_node_that_generates_for_sing_box_also_generates_for_xray() {
         SingBoxOutboundConfigGenerator::generate(&node, credential.as_node_credential()).is_ok()
     );
     assert!(XrayOutboundConfigGenerator::generate(&node, credential.as_node_credential()).is_ok());
+}
+
+#[test]
+fn a_pinned_certificate_becomes_a_hex_string() {
+    let (node, credential) = build_node(
+        vless(),
+        Some(TlsConfig::Tls {
+            server_name: Some("sni.example.com".to_owned()),
+            allow_insecure: false,
+            alpn: Vec::new(),
+            fingerprint: None,
+            pinned_sha256: Some(
+                CertificatePin::new(
+                    "6F:F2:12:BB:AB:49:0B:68:6B:06:20:9C:60:74:86:5F:93:40:F4:C0:F9:C4:AA:7D:34:D5:68:C2:A2:CE:BE:73",
+                )
+                .unwrap(),
+            ),
+        }),
+    );
+
+    let outbound = generate(&node, &credential);
+
+    // Measured against Xray 26.3.27: the field is a hex *string*. An array is
+    // rejected as the wrong type and Base64 is rejected as the wrong encoding.
+    assert_eq!(
+        outbound["streamSettings"]["tlsSettings"]["pinnedPeerCertSha256"],
+        "6ff212bbab490b686b06209c6074865f9340f4c0f9c4aa7d34d568c2a2cebe73"
+    );
+}
+
+#[test]
+fn an_unpinned_node_carries_no_pin_field() {
+    let (node, credential) = build_node(vless(), Some(plain_tls()));
+
+    let outbound = generate(&node, &credential);
+
+    assert!(outbound["streamSettings"]["tlsSettings"]["pinnedPeerCertSha256"].is_null());
 }

@@ -23,6 +23,8 @@ pub struct CoreCapability {
     pub supports_udp: bool,
     pub supports_reality: bool,
     pub supports_mux: bool,
+    /// Whether the Core can verify a server certificate by SHA-256 digest.
+    pub supports_certificate_pin: bool,
     /// The architectures an official build exists for.
     pub architectures: &'static [CpuArchitecture],
 }
@@ -33,29 +35,34 @@ const ALL_ARCHITECTURES: &[CpuArchitecture] = &[CpuArchitecture::X86_64, CpuArch
 /// sing-box carries the general case: every V0.1 protocol, plus the TUN inbound
 /// the desktop TUN mode needs.
 const SING_BOX_CAPABILITIES: &[CoreCapability] = &[
-    capability(ProxyProtocol::Vless, true),
-    capability(ProxyProtocol::Vmess, true),
-    capability(ProxyProtocol::Trojan, true),
-    capability(ProxyProtocol::Shadowsocks, true),
-    capability(ProxyProtocol::Hysteria2, true),
+    capability(ProxyProtocol::Vless, true, false),
+    capability(ProxyProtocol::Vmess, true, false),
+    capability(ProxyProtocol::Trojan, true, false),
+    capability(ProxyProtocol::Shadowsocks, true, false),
+    capability(ProxyProtocol::Hysteria2, true, false),
 ];
 
 /// Xray covers the stream protocols but has no Hysteria2 outbound and no TUN
 /// inbound of its own — TUN there needs an external tun2socks.
 const XRAY_CAPABILITIES: &[CoreCapability] = &[
-    capability(ProxyProtocol::Vless, false),
-    capability(ProxyProtocol::Vmess, false),
-    capability(ProxyProtocol::Trojan, false),
-    capability(ProxyProtocol::Shadowsocks, false),
+    capability(ProxyProtocol::Vless, false, true),
+    capability(ProxyProtocol::Vmess, false, true),
+    capability(ProxyProtocol::Trojan, false, true),
+    capability(ProxyProtocol::Shadowsocks, false, true),
 ];
 
-const fn capability(protocol: ProxyProtocol, supports_tun: bool) -> CoreCapability {
+const fn capability(
+    protocol: ProxyProtocol,
+    supports_tun: bool,
+    supports_certificate_pin: bool,
+) -> CoreCapability {
     CoreCapability {
         protocol,
         supports_tun,
         supports_udp: true,
         supports_reality: true,
         supports_mux: true,
+        supports_certificate_pin,
         architectures: ALL_ARCHITECTURES,
     }
 }
@@ -65,6 +72,8 @@ const fn capability(protocol: ProxyProtocol, supports_tun: bool) -> CoreCapabili
 pub struct CoreRequirements {
     pub protocol: ProxyProtocol,
     pub tun: bool,
+    /// Whether the node pins its server certificate by SHA-256.
+    pub certificate_pin: bool,
     pub architecture: CpuArchitecture,
 }
 
@@ -74,7 +83,17 @@ impl CoreRequirements {
         Self {
             protocol,
             tun,
+            certificate_pin: false,
             architecture,
+        }
+    }
+
+    /// The same requirements for a node that pins its server certificate.
+    #[must_use]
+    pub const fn with_certificate_pin(self) -> Self {
+        Self {
+            certificate_pin: true,
+            ..self
         }
     }
 }
@@ -132,6 +151,9 @@ impl CoreCapabilityMatrix {
         if requirements.tun && !capability.supports_tun {
             return Some(CoreRejection::TunUnsupported { core });
         }
+        if requirements.certificate_pin && !capability.supports_certificate_pin {
+            return Some(CoreRejection::CertificatePinUnsupported { core });
+        }
         if !capability
             .architectures
             .contains(&requirements.architecture)
@@ -170,6 +192,7 @@ impl CoreCapabilityMatrix {
                 .ok_or(CoreSelectionError::NoUsableCore {
                     protocol: requirements.protocol,
                     tun: requirements.tun,
+                    certificate_pin: requirements.certificate_pin,
                 }),
         }
     }
@@ -183,6 +206,9 @@ pub enum CoreRejection {
         protocol: ProxyProtocol,
     },
     TunUnsupported {
+        core: CoreType,
+    },
+    CertificatePinUnsupported {
         core: CoreType,
     },
     ArchitectureUnsupported {
@@ -203,6 +229,11 @@ impl Display for CoreRejection {
             Self::TunUnsupported { core } => {
                 write!(formatter, "{} cannot provide TUN mode", core_name(*core))
             }
+            Self::CertificatePinUnsupported { core } => write!(
+                formatter,
+                "{} cannot verify a pinned certificate digest",
+                core_name(*core)
+            ),
             Self::ArchitectureUnsupported { core, architecture } => write!(
                 formatter,
                 "{} has no build for {}",
@@ -217,8 +248,17 @@ impl Display for CoreRejection {
 pub enum CoreSelectionError {
     #[error("the selected Core cannot run this node: {rejection}")]
     ChosenCoreUnusable { rejection: CoreRejection },
-    #[error("no available Core supports {} with TUN {}", protocol_name(*protocol), if *tun { "on" } else { "off" })]
-    NoUsableCore { protocol: ProxyProtocol, tun: bool },
+    #[error(
+        "no available Core supports {} with TUN {}{}",
+        protocol_name(*protocol),
+        if *tun { "on" } else { "off" },
+        if *certificate_pin { " and a pinned certificate" } else { "" }
+    )]
+    NoUsableCore {
+        protocol: ProxyProtocol,
+        tun: bool,
+        certificate_pin: bool,
+    },
 }
 
 /// The stable name shown in the UI and stored in settings.

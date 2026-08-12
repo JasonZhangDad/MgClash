@@ -464,6 +464,7 @@ fn parse_tls_with_default(
             allow_insecure: false,
             alpn: parse_alpn(parameters)?,
             fingerprint: parameters.take_non_empty("fp")?,
+            pinned_sha256: None,
         })),
         "reality" => {
             let public_key = parameters.take_required_non_empty("pbk")?;

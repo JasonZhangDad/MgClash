@@ -320,7 +320,15 @@ fn generated_tls(tls: &TlsConfig) -> Result<Value, OutboundConfigError> {
             allow_insecure,
             alpn,
             fingerprint,
+            pinned_sha256,
         } => {
+            // sing-box 1.13.18 has no `tls.pinned_sha256`; it verifies against a
+            // whole certificate (`certificate` / `certificate_path`) instead.
+            // Dropping the pin here would silently fall back to the CA chain the
+            // user pinned around, so the refusal is explicit.
+            if pinned_sha256.is_some() {
+                return Err(OutboundConfigError::CertificatePinUnsupported);
+            }
             let mut tls = json!({ "enabled": true });
             if let Some(server_name) = server_name {
                 tls["server_name"] = Value::String(server_name.clone());
@@ -395,6 +403,8 @@ pub enum OutboundConfigError {
     MissingTls { protocol: ProxyProtocol },
     #[error("{protocol:?} TLS configuration is unsupported by sing-box")]
     UnsupportedTls { protocol: ProxyProtocol },
+    #[error("sing-box cannot verify a pinned certificate digest")]
+    CertificatePinUnsupported,
     #[error("VLESS encryption is unsupported by sing-box")]
     UnsupportedVlessEncryption,
     #[error("Trojan flow is unsupported by sing-box")]

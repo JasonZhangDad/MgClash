@@ -1,6 +1,6 @@
 use magies_domain::{
-    CredentialRef, GrpcMode, NodeModelError, ProxyNode, ProxyProtocol, TimestampMillis, TlsConfig,
-    TransportConfig,
+    CertificatePin, CredentialRef, GrpcMode, NodeModelError, ProxyNode, ProxyProtocol,
+    TimestampMillis, TlsConfig, TransportConfig,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -130,6 +130,7 @@ fn supports_tcp_grpc_and_standard_tls_without_stringly_typed_kinds() {
             allow_insecure: false,
             alpn: vec!["h2".to_owned(), "http/1.1".to_owned()],
             fingerprint: Some("chrome".to_owned()),
+            pinned_sha256: None,
         })
         .unwrap(),
         json!({
@@ -137,7 +138,8 @@ fn supports_tcp_grpc_and_standard_tls_without_stringly_typed_kinds() {
             "serverName": "example.com",
             "allowInsecure": false,
             "alpn": ["h2", "http/1.1"],
-            "fingerprint": "chrome"
+            "fingerprint": "chrome",
+            "pinnedSha256": null
         })
     );
 }
@@ -257,4 +259,70 @@ fn debug_output_redacts_the_credential_reference() {
         assert!(debug_output.contains("[REDACTED]"));
         assert!(!debug_output.contains(reference.as_str()));
     }
+}
+
+#[test]
+fn a_certificate_pin_normalizes_the_share_link_spelling() {
+    // Share links write the digest the way OpenSSL prints it.
+    let pin = CertificatePin::new(
+        "6F:F2:12:BB:AB:49:0B:68:6B:06:20:9C:60:74:86:5F:93:40:F4:C0:F9:C4:AA:7D:34:D5:68:C2:A2:CE:BE:73",
+    )
+    .unwrap();
+
+    assert_eq!(
+        pin.as_str(),
+        "6ff212bbab490b686b06209c6074865f9340f4c0f9c4aa7d34d568c2a2cebe73"
+    );
+}
+
+#[test]
+fn a_certificate_pin_accepts_bare_hex() {
+    let pin =
+        CertificatePin::new("6ff212bbab490b686b06209c6074865f9340f4c0f9c4aa7d34d568c2a2cebe73")
+            .unwrap();
+
+    assert_eq!(pin.as_str().len(), 64);
+}
+
+#[test]
+fn a_certificate_pin_rejects_anything_that_is_not_32_hex_bytes() {
+    for value in [
+        "",
+        "abc123",
+        // Base64 of the same digest: a real encoding, but not this one.
+        "b/ISu6tJC2hrBiCcYHSGX5NA9MD5xKp9NNVowqLOvnM=",
+        // 31 bytes.
+        "6ff212bbab490b686b06209c6074865f9340f4c0f9c4aa7d34d568c2a2cebe",
+        // Right length, one non-hex digit.
+        "6ff212bbab490b686b06209c6074865f9340f4c0f9c4aa7d34d568c2a2cebeZZ",
+    ] {
+        assert!(
+            matches!(
+                CertificatePin::new(value),
+                Err(NodeModelError::InvalidCertificatePin)
+            ),
+            "{value:?} must not parse as a certificate pin"
+        );
+    }
+}
+
+#[test]
+fn a_node_stored_before_pinning_existed_still_deserializes() {
+    let stored = serde_json::json!({
+        "type": "tls",
+        "serverName": "example.com",
+        "allowInsecure": false,
+        "alpn": [],
+        "fingerprint": null,
+    });
+
+    let tls: TlsConfig = serde_json::from_value(stored).unwrap();
+
+    assert!(matches!(
+        tls,
+        TlsConfig::Tls {
+            pinned_sha256: None,
+            ..
+        }
+    ));
 }

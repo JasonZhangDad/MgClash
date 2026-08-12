@@ -145,3 +145,56 @@ fn generate(
         .json()
         .clone()
 }
+
+/// sing-box has no SHA-256 certificate pin, which is why the generator refuses
+/// a pinned node instead of dropping the pin.
+///
+/// This asserts the absence, so a later sing-box that gains the field fails the
+/// test and the refusal can be replaced by real support.
+#[test]
+#[ignore = "requires MAGIES_SING_BOX_CONFIG_BIN pointing to official sing-box 1.13.18"]
+fn official_sing_box_still_has_no_pinned_sha256() {
+    let binary = PathBuf::from(
+        std::env::var_os("MAGIES_SING_BOX_CONFIG_BIN")
+            .expect("MAGIES_SING_BOX_CONFIG_BIN must point to official sing-box"),
+    );
+    let config = json!({
+        "log": { "level": "warn" },
+        "outbounds": [{
+            "type": "vless",
+            "tag": "proxy",
+            "server": "edge.example.com",
+            "server_port": 443,
+            "uuid": USER_ID,
+            "tls": {
+                "enabled": true,
+                "server_name": "edge.example.com",
+                "pinned_sha256": "6ff212bbab490b686b06209c6074865f9340f4c0f9c4aa7d34d568c2a2cebe73"
+            }
+        }]
+    });
+    let path = std::env::temp_dir().join(format!(
+        "magies-pin-smoke-{}-{}.json",
+        std::process::id(),
+        std::env::consts::OS
+    ));
+    fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+
+    let output = Command::new(binary)
+        .arg("check")
+        .arg("-c")
+        .arg(&path)
+        .output()
+        .unwrap();
+    fs::remove_file(path).unwrap();
+
+    let reason = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "sing-box accepted a pinned digest, so it can serve pinned nodes now"
+    );
+    assert!(
+        reason.contains("pinned_sha256"),
+        "sing-box refused for an unrelated reason: {reason}"
+    );
+}

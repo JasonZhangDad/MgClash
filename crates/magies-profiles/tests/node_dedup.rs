@@ -39,6 +39,7 @@ fn fingerprint_uses_only_the_prd_identity_fields() {
         allow_insecure: false,
         alpn: vec!["h2".to_owned()],
         fingerprint: Some("chrome".to_owned()),
+        pinned_sha256: None,
     });
     let baseline_fingerprint = candidate(baseline.clone(), identity).fingerprint();
 
@@ -121,6 +122,7 @@ fn fingerprint_encodes_every_supported_protocol_transport_and_tls_variant() {
             allow_insecure: true,
             alpn: Vec::new(),
             fingerprint: None,
+            pinned_sha256: None,
         }),
         Some(TlsConfig::Reality {
             server_name: "reality.example.com".to_owned(),

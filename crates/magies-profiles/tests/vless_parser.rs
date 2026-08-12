@@ -71,6 +71,7 @@ fn parses_percent_encoded_websocket_tls_fields() {
             allow_insecure: false,
             alpn: vec!["h2".to_owned(), "http/1.1".to_owned()],
             fingerprint: Some("chrome".to_owned()),
+            pinned_sha256: None,
         })
     );
 }

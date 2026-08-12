@@ -1,5 +1,5 @@
 use magies_domain::{
-    CredentialRef, GrpcMode, ProxyNode, ProxyProtocol, TlsConfig, TransportConfig,
+    CertificatePin, CredentialRef, GrpcMode, ProxyNode, ProxyProtocol, TlsConfig, TransportConfig,
 };
 use magies_profiles::{
     Hysteria2Parser, NodeCredential, OutboundConfigError, ShadowsocksParser,
@@ -345,6 +345,7 @@ fn validates_protocol_transport_and_tls_invariants() {
         allow_insecure: false,
         alpn: Vec::new(),
         fingerprint: None,
+        pinned_sha256: None,
     });
     assert_eq!(
         SingBoxOutboundConfigGenerator::generate(
@@ -399,4 +400,31 @@ fn node(protocol: ProxyProtocol) -> ProxyNode {
         Some(CredentialRef::new("keychain://nodes/test").unwrap()),
     )
     .unwrap()
+}
+
+#[test]
+fn a_pinned_certificate_is_refused_rather_than_dropped() {
+    let vless = VlessParser
+        .parse(&format!("vless://{USER_ID}@edge.example.com:443"))
+        .unwrap();
+    let mut pinned = node(ProxyProtocol::Vless);
+    pinned.transport = Some(TransportConfig::Tcp);
+    pinned.tls = Some(TlsConfig::Tls {
+        server_name: Some("edge.example.com".to_owned()),
+        allow_insecure: false,
+        alpn: Vec::new(),
+        fingerprint: None,
+        pinned_sha256: Some(
+            CertificatePin::new("6ff212bbab490b686b06209c6074865f9340f4c0f9c4aa7d34d568c2a2cebe73")
+                .unwrap(),
+        ),
+    });
+
+    // sing-box 1.13.18 has no SHA-256 pin: it offers a full certificate
+    // instead. Dropping the pin would leave the connection verified only by the
+    // CA chain the user pinned *around*, a weaker check than they asked for.
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(&pinned, NodeCredential::from(vless.credential())),
+        Err(OutboundConfigError::CertificatePinUnsupported)
+    );
 }

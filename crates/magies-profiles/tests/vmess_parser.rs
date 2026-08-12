@@ -108,6 +108,7 @@ fn parses_aead_websocket_tls_and_redacts_credentials() {
             allow_insecure: false,
             alpn: vec!["h2".to_owned(), "http/1.1".to_owned()],
             fingerprint: Some("chrome".to_owned()),
+            pinned_sha256: None,
         })
     );
 
@@ -171,6 +172,7 @@ fn parses_v2rayn_legacy_json_with_string_fields() {
             allow_insecure: true,
             alpn: vec!["h2".to_owned(), "http/1.1".to_owned()],
             fingerprint: Some("chrome".to_owned()),
+            pinned_sha256: None,
         })
     );
 }
@@ -234,6 +236,7 @@ fn applies_legacy_defaults_when_optional_fields_are_missing() {
             allow_insecure: false,
             alpn: Vec::new(),
             fingerprint: None,
+            pinned_sha256: None,
         })
     );
 }
