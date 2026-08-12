@@ -2386,6 +2386,26 @@ export default function App() {
           <div className="settings-form" aria-label="应用设置">
             <label className="checkbox-label">
               <input
+                aria-label="启用 TUN"
+                type="checkbox"
+                checked={settings.tunEnabled}
+                disabled={
+                  busy ||
+                  connected ||
+                  platform?.tunAvailability === "unavailableInUnsignedBuild"
+                }
+                onChange={(event) =>
+                  void onChangeSettings({ tunEnabled: event.target.checked })
+                }
+              />
+              使用 TUN 接管全局流量
+            </label>
+            <p className="hint">
+              {platform ? TUN_NOTICE[platform.tunAvailability] : ""}
+              TUN 与系统代理互斥，启用后本次会话不会修改系统代理。
+            </p>
+            <label className="checkbox-label">
+              <input
                 aria-label="开机启动"
                 type="checkbox"
                 checked={settings.launchAtLogin}

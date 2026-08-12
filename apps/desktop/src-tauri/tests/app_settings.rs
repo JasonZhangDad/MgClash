@@ -25,6 +25,8 @@ fn a_fresh_install_uses_the_documented_defaults() {
     assert!(settings.close_to_tray);
     // Registering a login item without being asked is equally intrusive.
     assert!(!settings.launch_at_login);
+    // TUN needs elevation and takes over routing, so it is never on by default.
+    assert!(!settings.tun_enabled);
     assert_eq!(settings.log_level, LogLevel::Info);
 }
 
@@ -36,6 +38,7 @@ fn saved_settings_survive_a_restart() {
         close_to_tray: false,
         launch_at_login: true,
         core_preference: CorePreferenceSetting::Xray,
+        tun_enabled: true,
         log_level: LogLevel::Debug,
     };
 

@@ -14,7 +14,7 @@ use magies_domain::{
     CoreType, CredentialRef, NodeModelError, NodeName, ProxyNode, ProxyProtocol, ServerAddress,
     TimestampMillis,
 };
-use magies_platform::CpuArchitecture;
+use magies_platform::{CpuArchitecture, OperatingSystem};
 use magies_profiles::{
     BulkImportError, BulkNodeImportParser, CoreCapabilityMatrix, CorePreference, CoreRequirements,
     CoreSelectionError, CredentialCodec, CredentialCodecError, DnsConfigError, DnsProfile,
@@ -22,7 +22,7 @@ use magies_profiles::{
     ManualNodeStoreError, NodeFingerprint, NodeGroup, NodeGroupStoreError, NodeOrderStoreError,
     ShareLinkParseError, ShareLinkParser, SqliteManualNodeStore, SqliteNodeGroupStore,
     SqliteNodeOrderStore, SqliteSubscriptionStore, StoredNodeCredential,
-    SubscriptionTransactionError, core_name, node_fingerprint,
+    SubscriptionTransactionError, TunProfile, TunProfileError, core_name, node_fingerprint,
 };
 use magies_routing::{RouteProfile, RoutingMode};
 use magies_session::{
@@ -43,6 +43,20 @@ use crate::route_settings::{
 use crate::routing_mode::{
     RoutingModeStoreError, SqliteRoutingModeStore, route_profile_for, routing_mode_name,
 };
+
+/// The MTU sing-box documents as its TUN default.
+const DEFAULT_TUN_MTU: u16 = 9_000;
+
+/// The operating system this build runs on, or `None` outside the support
+/// matrix.
+fn host_operating_system() -> Option<OperatingSystem> {
+    match std::env::consts::OS {
+        "windows" => Some(OperatingSystem::Windows),
+        "linux" => Some(OperatingSystem::Linux),
+        "macos" => Some(OperatingSystem::MacOs),
+        _ => None,
+    }
+}
 
 /// The architecture this build runs on, for the Core capability matrix.
 fn host_architecture() -> CpuArchitecture {
@@ -231,6 +245,7 @@ where
     current_dns_settings: DnsSettings,
     recovery: NetworkRecoveryPolicy,
     core_preference: CorePreference,
+    tun_enabled: bool,
     /// The running Core's output, held until the shell claims it with
     /// [`SessionService::take_core_output`]. Dropping it would discard every
     /// line the Core prints, which is what happened before the log panel.
@@ -285,6 +300,7 @@ where
             current_dns_settings,
             recovery: NetworkRecoveryPolicy::default(),
             core_preference: CorePreference::default(),
+            tun_enabled: false,
             core_output: None,
         })
     }
@@ -922,8 +938,13 @@ where
         )
         .with_core(core)
         .with_local_proxies(self.defaults.socks, self.defaults.http)
-        .with_clash_api_port(self.defaults.clash_api_port)
-        .with_system_proxy(self.defaults.system_proxy);
+        .with_clash_api_port(self.defaults.clash_api_port);
+        // The two are mutually exclusive in DesktopSession, so TUN replaces
+        // System Proxy rather than being layered on top of it.
+        let profile = match self.tun_profile()? {
+            Some(tun) => profile.with_system_proxy(false).with_tun(tun, true),
+            None => profile.with_system_proxy(self.defaults.system_proxy),
+        };
 
         let output = self
             .session
@@ -973,15 +994,35 @@ where
         };
         CoreCapabilityMatrix::select(
             self.core_preference,
-            // TUN is not reachable from the desktop shell yet, so no session can
-            // require it; this becomes a real flag when the TUN entry point lands.
-            CoreRequirements::new(node.protocol_type, false, host_architecture()),
+            CoreRequirements::new(node.protocol_type, self.tun_enabled, host_architecture()),
         )
     }
 
     /// Replaces the Core the session should run.
     pub fn set_core_preference(&mut self, preference: CorePreference) {
         self.core_preference = preference;
+    }
+
+    /// Turns TUN routing on or off for the next session.
+    pub fn set_tun_enabled(&mut self, enabled: bool) {
+        self.tun_enabled = enabled;
+    }
+
+    /// The TUN profile for this host, or `None` when TUN is off or unavailable.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when this platform cannot provide TUN at all, so
+    /// the refusal names the reason instead of quietly falling back to System
+    /// Proxy.
+    fn tun_profile(&self) -> Result<Option<TunProfile>, SessionCommandError<C::Error, P::Error>> {
+        if !self.tun_enabled {
+            return Ok(None);
+        }
+        let os = host_operating_system().ok_or(SessionCommandError::TunUnavailable)?;
+        TunProfile::new(os, false, DEFAULT_TUN_MTU, true, true)
+            .map(Some)
+            .map_err(SessionCommandError::TunProfile)
     }
 
     #[must_use]
@@ -1080,6 +1121,10 @@ where
     InvalidNode(#[source] NodeModelError),
     #[error("failed to parse the sharing URI")]
     ShareLink(#[source] ShareLinkParseError),
+    #[error("this platform cannot provide TUN")]
+    TunUnavailable,
+    #[error("invalid TUN settings")]
+    TunProfile(#[source] TunProfileError),
     #[error("no usable Core for this node")]
     CoreSelection(#[source] CoreSelectionError),
     #[error("invalid manual node settings")]
@@ -1140,6 +1185,7 @@ where
             Self::ShareLink(_) => "invalid_share_link",
             Self::ManualNodeDraft(_) => "invalid_manual_node",
             Self::CoreSelection(_) => "core_unavailable",
+            Self::TunUnavailable | Self::TunProfile(_) => "tun_unavailable",
             Self::BulkImport(_) => "invalid_node_list",
             Self::Credential(_) => "credential_encode_failed",
             Self::Secret(_) | Self::DeleteSecret(_) => "secret_store_failed",

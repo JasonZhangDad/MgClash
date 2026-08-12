@@ -43,6 +43,7 @@ export interface AppSettings {
   connectOnLaunch: boolean;
   corePreference: CorePreference;
   launchAtLogin: boolean;
+  tunEnabled: boolean;
   logLevel: LogLevel;
 }
 

@@ -21,6 +21,7 @@ const CREATE_APP_SETTINGS_TABLE: &str = "
         connect_on_launch INTEGER NOT NULL,
         close_to_tray INTEGER NOT NULL,
         core_preference TEXT NOT NULL,
+        tun_enabled INTEGER NOT NULL,
         launch_at_login INTEGER NOT NULL,
         log_level TEXT NOT NULL
     );
@@ -29,6 +30,10 @@ const CREATE_APP_SETTINGS_TABLE: &str = "
 /// What the shell does outside of proxying, as the settings panel edits it.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent user preference; a bitset would make the settings harder to read, not easier"
+)]
 pub struct AppSettings {
     /// Connect the last selected node as soon as the app starts.
     pub connect_on_launch: bool,
@@ -38,6 +43,9 @@ pub struct AppSettings {
     pub launch_at_login: bool,
     /// Which Core to run, or `auto` to let the capability matrix decide.
     pub core_preference: CorePreferenceSetting,
+    /// Route through a TUN device instead of System Proxy. The two are mutually
+    /// exclusive, so enabling this turns System Proxy off for the session.
+    pub tun_enabled: bool,
     /// The minimum level the log panel shows on launch.
     pub log_level: LogLevel,
 }
@@ -51,6 +59,9 @@ impl Default for AppSettings {
             close_to_tray: true,
             launch_at_login: false,
             core_preference: CorePreferenceSetting::Auto,
+            // Off by default: TUN needs elevation and takes over the whole
+            // routing table, which is not something to switch on unasked.
+            tun_enabled: false,
             log_level: LogLevel::Info,
         }
     }
@@ -101,7 +112,7 @@ impl SqliteAppSettingsStore {
         let row = self
             .connection
             .query_row(
-                "SELECT connect_on_launch, close_to_tray, launch_at_login, core_preference, log_level
+                "SELECT connect_on_launch, close_to_tray, launch_at_login, core_preference, tun_enabled, log_level
                  FROM app_settings WHERE id = 1",
                 [],
                 |row| {
@@ -110,13 +121,20 @@ impl SqliteAppSettingsStore {
                         row.get::<_, i64>(1)?,
                         row.get::<_, i64>(2)?,
                         row.get::<_, String>(3)?,
-                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, String>(5)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((connect_on_launch, close_to_tray, launch_at_login, core_preference, log_level)) =
-            row
+        let Some((
+            connect_on_launch,
+            close_to_tray,
+            launch_at_login,
+            core_preference,
+            tun_enabled,
+            log_level,
+        )) = row
         else {
             return Ok(AppSettings::default());
         };
@@ -130,6 +148,7 @@ impl SqliteAppSettingsStore {
                     value: core_preference,
                 },
             )?,
+            tun_enabled: tun_enabled != 0,
             log_level: parse_log_level(&log_level)
                 .ok_or(AppSettingsStoreError::InvalidStoredValue { value: log_level })?,
         })
@@ -142,19 +161,21 @@ impl SqliteAppSettingsStore {
     /// Returns a typed database error when `SQLite` cannot update the row.
     pub fn save(&self, settings: AppSettings) -> Result<(), AppSettingsStoreError> {
         self.connection.execute(
-            "INSERT INTO app_settings (id, connect_on_launch, close_to_tray, launch_at_login, core_preference, log_level)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO app_settings (id, connect_on_launch, close_to_tray, launch_at_login, core_preference, tun_enabled, log_level)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(id) DO UPDATE SET
                  connect_on_launch = excluded.connect_on_launch,
                  close_to_tray = excluded.close_to_tray,
                  launch_at_login = excluded.launch_at_login,
                  core_preference = excluded.core_preference,
+                 tun_enabled = excluded.tun_enabled,
                  log_level = excluded.log_level",
             params![
                 i64::from(settings.connect_on_launch),
                 i64::from(settings.close_to_tray),
                 i64::from(settings.launch_at_login),
                 settings.core_preference.name(),
+                i64::from(settings.tun_enabled),
                 log_level_name(settings.log_level),
             ],
         )?;
