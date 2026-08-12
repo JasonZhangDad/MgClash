@@ -48,8 +48,8 @@ use crate::platform_proxy::{PlatformProxyControl, PlatformProxyError, SystemProx
 use crate::route_settings::{RouteSettings, SqliteRouteSettingsStore};
 use crate::routing_mode::{SqliteRoutingModeStore, parse_routing_mode};
 use crate::session::{
-    NodeMoveDirection, NodeStores, SessionCommandError, SessionDefaults, SessionService,
-    SessionStatus,
+    NodeMoveDirection, NodeStores, NodeSummary, SessionCommandError, SessionDefaults,
+    SessionService, SessionStatus,
 };
 use crate::subscriptions::{
     DesktopSubscriptionController, DesktopSubscriptionError, DesktopSubscriptionSummary,
@@ -887,6 +887,34 @@ fn session_delete_node(
     clippy::needless_pass_by_value,
     reason = "Tauri commands receive State by value"
 )]
+fn session_clone_node(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<NodeSummary>, CommandError> {
+    let id = parse_node_id(&id)?;
+    state
+        .service()
+        .clone_node(id)
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State by value"
+)]
+fn session_remove_duplicate_nodes(state: State<'_, AppState>) -> Result<usize, CommandError> {
+    state
+        .service()
+        .remove_duplicate_nodes()
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State by value"
+)]
 fn session_export_node_link(
     id: String,
     state: State<'_, AppState>,
@@ -1402,6 +1430,8 @@ pub fn run() {
             session_set_node_group,
             session_delete_node,
             session_export_node_link,
+            session_clone_node,
+            session_remove_duplicate_nodes,
             session_connect,
             session_disconnect,
             session_logs,
