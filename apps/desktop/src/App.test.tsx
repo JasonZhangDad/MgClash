@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const loadPlatformSummaryMock = vi.hoisted(() => vi.fn());
 const loadSessionStatusMock = vi.hoisted(() => vi.fn());
 const loadTrafficMock = vi.hoisted(() => vi.fn());
+const loadNodeTrafficMock = vi.hoisted(() => vi.fn());
 const loadNodesMock = vi.hoisted(() => vi.fn());
 const loadNodeGroupsMock = vi.hoisted(() => vi.fn());
 const importNodeMock = vi.hoisted(() => vi.fn());
@@ -71,6 +72,7 @@ vi.mock("./session", async () => {
     loadNodes: loadNodesMock,
     loadSessionStatus: loadSessionStatusMock,
     loadTraffic: loadTrafficMock,
+  loadNodeTraffic: loadNodeTrafficMock,
     moveNode: moveNodeMock,
     loadSystemProxyStartupStatus: loadSystemProxyStartupStatusMock,
     recoverSystemProxy: recoverSystemProxyMock,
@@ -172,6 +174,8 @@ describe("App", () => {
     loadPlatformSummaryMock.mockReset();
     loadSessionStatusMock.mockReset();
     loadTrafficMock.mockReset();
+    loadNodeTrafficMock.mockReset();
+    loadNodeTrafficMock.mockResolvedValue({});
     loadNodesMock.mockReset();
     loadNodeGroupsMock.mockReset();
     importNodeMock.mockReset();
@@ -1602,6 +1606,39 @@ describe("App", () => {
     expect(saveAppSettingsMock).toHaveBeenCalledWith(
       expect.objectContaining({ systemProxyMode: "unchanged" }),
     );
+  });
+
+  it("shows each node's own traffic in the table", async () => {
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    loadNodeTrafficMock.mockResolvedValue({
+      [SELECTED.node!.id]: {
+        todayUploadBytes: 1_024,
+        todayDownloadBytes: 2_048,
+        totalUploadBytes: 1_048_576,
+        totalDownloadBytes: 2_097_152,
+      },
+    });
+    await render();
+
+    const row = container.querySelector("[aria-label='节点列表'] tbody tr");
+
+    expect(row?.textContent).toContain("1.0 KB");
+    expect(row?.textContent).toContain("2.0 KB");
+    expect(row?.textContent).toContain("1.0 MB");
+    expect(row?.textContent).toContain("2.0 MB");
+  });
+
+  it("shows zeroes for a node that has carried nothing", async () => {
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    loadNodeTrafficMock.mockResolvedValue({});
+    await render();
+
+    const row = container.querySelector("[aria-label='节点列表'] tbody tr");
+
+    // A node with no history reads as zero, not as a missing column.
+    expect(row?.textContent).toContain("0 B");
   });
 
   it("keeps subscription-owned nodes read-only", async () => {

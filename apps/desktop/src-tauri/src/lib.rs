@@ -15,6 +15,7 @@ pub mod traffic;
 mod tray;
 pub mod url_test;
 
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -54,7 +55,9 @@ use crate::session::{
 use crate::subscriptions::{
     DesktopSubscriptionController, DesktopSubscriptionError, DesktopSubscriptionSummary,
 };
-use crate::traffic::{SqliteTrafficCounter, TrafficCounterError, TrafficSnapshot, sample_traffic};
+use crate::traffic::{
+    NodeTraffic, SqliteTrafficCounter, TrafficCounterError, TrafficSnapshot, sample_traffic,
+};
 use crate::tray::{TrayAction, TrayUi, menu_model};
 use crate::url_test::{UrlTestError, probe_url};
 
@@ -276,10 +279,18 @@ fn spawn_traffic_loop(
 
             match sample_traffic(api_address, TRAFFIC_SAMPLE_TIMEOUT).await {
                 Ok(rate) => {
-                    let still_current =
-                        lock(&service).traffic_api_address().ok() == Some(api_address);
+                    // Read together with the address check: attributing this
+                    // second's bytes to a node the session has already moved off
+                    // would credit them to the wrong row.
+                    let (still_current, node) = {
+                        let service = lock(&service);
+                        (
+                            service.traffic_api_address().ok() == Some(api_address),
+                            service.status().node.map(|node| node.id),
+                        )
+                    };
                     let result = if still_current {
-                        lock(&traffic).record(Local::now().date_naive(), rate, Instant::now())
+                        lock(&traffic).record(Local::now().date_naive(), rate, Instant::now(), node)
                     } else {
                         lock(&traffic).tick(Local::now().date_naive(), Instant::now())
                     };
@@ -887,6 +898,19 @@ fn session_delete_node(
     clippy::needless_pass_by_value,
     reason = "Tauri commands receive State by value"
 )]
+fn session_node_traffic(state: State<'_, AppState>) -> HashMap<String, NodeTraffic> {
+    lock(&state.traffic)
+        .node_totals()
+        .into_iter()
+        .map(|(id, totals)| (id.to_string(), totals))
+        .collect()
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State by value"
+)]
 fn session_clone_node(
     id: String,
     state: State<'_, AppState>,
@@ -1433,6 +1457,7 @@ pub fn run() {
             session_delete_node,
             session_export_node_link,
             session_clone_node,
+            session_node_traffic,
             session_remove_duplicate_nodes,
             session_connect,
             session_disconnect,

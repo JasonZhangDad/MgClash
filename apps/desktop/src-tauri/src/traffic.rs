@@ -1,5 +1,6 @@
 //! Live traffic samples from sing-box's loopback-only Clash API.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -9,6 +10,7 @@ use magies_profiles::ensure_rustls_crypto_provider;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use uuid::Uuid;
 
 const SAMPLE_BODY_LIMIT: usize = 1_024;
 const PERSIST_INTERVAL: Duration = Duration::from_secs(60);
@@ -20,6 +22,42 @@ const MAX_TRAFFIC_BYTES: u64 = i64::MAX as u64;
 pub struct TrafficRate {
     pub upload_bytes_per_second: u64,
     pub download_bytes_per_second: u64,
+}
+
+/// One node's own traffic, split by direction as the node table shows it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeTraffic {
+    pub today_upload_bytes: u64,
+    pub today_download_bytes: u64,
+    pub total_upload_bytes: u64,
+    pub total_download_bytes: u64,
+}
+
+impl NodeTraffic {
+    /// Clears the daily counters when the calendar has moved on.
+    fn rolled_to(mut self, day: NaiveDate, stored_day: NaiveDate) -> Self {
+        if stored_day != day {
+            self.today_upload_bytes = 0;
+            self.today_download_bytes = 0;
+        }
+        self
+    }
+
+    fn with_added(mut self, rate: TrafficRate) -> Result<Self, TrafficCounterError> {
+        self.today_upload_bytes = add(self.today_upload_bytes, rate.upload_bytes_per_second)?;
+        self.today_download_bytes = add(self.today_download_bytes, rate.download_bytes_per_second)?;
+        self.total_upload_bytes = add(self.total_upload_bytes, rate.upload_bytes_per_second)?;
+        self.total_download_bytes = add(self.total_download_bytes, rate.download_bytes_per_second)?;
+        Ok(self)
+    }
+}
+
+fn add(total: u64, bytes: u64) -> Result<u64, TrafficCounterError> {
+    total
+        .checked_add(bytes)
+        .filter(|total| *total <= MAX_TRAFFIC_BYTES)
+        .ok_or(TrafficCounterError::CounterOverflow)
 }
 
 /// Current live rate and the three V0.1 persisted traffic counters.
@@ -80,6 +118,10 @@ pub struct SqliteTrafficCounter {
     rate: TrafficRate,
     dirty: bool,
     last_persisted_at: Instant,
+    node_totals: HashMap<Uuid, NodeTraffic>,
+    /// The day each node's daily counters belong to, so a node untouched since
+    /// yesterday rolls over when it next carries traffic rather than on load.
+    node_days: HashMap<Uuid, NaiveDate>,
 }
 
 impl SqliteTrafficCounter {
@@ -116,7 +158,19 @@ impl SqliteTrafficCounter {
         today: NaiveDate,
         rate: TrafficRate,
         now: Instant,
+        node: Option<Uuid>,
     ) -> Result<(), TrafficCounterError> {
+        // Only one node carries traffic at a time, so the second's bytes belong
+        // to whichever node the session is running. With none selected there is
+        // nothing to attribute them to, and inventing an owner would be worse
+        // than leaving the per-node counters alone.
+        if let Some(node) = node {
+            let previous = self.node_totals.get(&node).copied().unwrap_or_default();
+            let rolled =
+                previous.rolled_to(today, self.node_days.get(&node).copied().unwrap_or(today));
+            self.node_totals.insert(node, rolled.with_added(rate)?);
+            self.node_days.insert(node, today);
+        }
         let bytes = rate
             .upload_bytes_per_second
             .checked_add(rate.download_bytes_per_second)
@@ -140,6 +194,12 @@ impl SqliteTrafficCounter {
         self.totals = totals;
         self.dirty |= rolled;
         self.persist_if_due(now)
+    }
+
+    /// Every node's own counters, for the columns the node table shows.
+    #[must_use]
+    pub fn node_totals(&self) -> HashMap<Uuid, NodeTraffic> {
+        self.node_totals.clone()
     }
 
     #[must_use]
@@ -178,6 +238,28 @@ impl SqliteTrafficCounter {
                 self.totals.total_bytes,
             ],
         )?;
+        for (id, totals) in &self.node_totals {
+            let day = self.node_days.get(id).copied().unwrap_or(self.totals.day);
+            self.connection.execute(
+                "INSERT INTO node_traffic (
+                     node_id, day, today_upload, today_download, total_upload, total_download
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(node_id) DO UPDATE SET
+                     day = excluded.day,
+                     today_upload = excluded.today_upload,
+                     today_download = excluded.today_download,
+                     total_upload = excluded.total_upload,
+                     total_download = excluded.total_download",
+                params![
+                    id.to_string(),
+                    day.format("%Y-%m-%d").to_string(),
+                    totals.today_upload_bytes,
+                    totals.today_download_bytes,
+                    totals.total_upload_bytes,
+                    totals.total_download_bytes,
+                ],
+            )?;
+        }
         self.dirty = false;
         Ok(())
     }
@@ -194,6 +276,14 @@ impl SqliteTrafficCounter {
                  today_bytes INTEGER NOT NULL CHECK (today_bytes >= 0),
                  month_bytes INTEGER NOT NULL CHECK (month_bytes >= 0),
                  total_bytes INTEGER NOT NULL CHECK (total_bytes >= 0)
+             );
+             CREATE TABLE IF NOT EXISTS node_traffic (
+                 node_id TEXT PRIMARY KEY,
+                 day TEXT NOT NULL,
+                 today_upload INTEGER NOT NULL CHECK (today_upload >= 0),
+                 today_download INTEGER NOT NULL CHECK (today_download >= 0),
+                 total_upload INTEGER NOT NULL CHECK (total_upload >= 0),
+                 total_download INTEGER NOT NULL CHECK (total_download >= 0)
              );",
         )?;
         let stored = connection
@@ -223,12 +313,15 @@ impl SqliteTrafficCounter {
             },
         };
         let (totals, dirty) = totals.rolled_to(today);
+        let (node_totals, node_days) = load_node_traffic(&connection)?;
         Ok(Self {
             connection,
             totals,
             rate: TrafficRate::default(),
             dirty,
             last_persisted_at: now,
+            node_totals,
+            node_days,
         })
     }
 
@@ -240,6 +333,53 @@ impl SqliteTrafficCounter {
         self.last_persisted_at = now;
         Ok(())
     }
+}
+
+/// Every node's stored counters, with the day each one's daily figures belong to.
+type StoredNodeTraffic = (HashMap<Uuid, NodeTraffic>, HashMap<Uuid, NaiveDate>);
+
+/// Reads every node's stored counters and the day they belong to.
+fn load_node_traffic(connection: &Connection) -> Result<StoredNodeTraffic, TrafficCounterError> {
+    let mut statement = connection.prepare(
+        "SELECT node_id, day, today_upload, today_download, total_upload, total_download
+         FROM node_traffic",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, i64>(5)?,
+        ))
+    })?;
+
+    let mut totals = HashMap::new();
+    let mut days = HashMap::new();
+    for row in rows {
+        let (id, day, today_upload, today_download, total_upload, total_download) = row?;
+        // A row whose node id or day cannot be read is skipped rather than
+        // failing the whole load: one unreadable counter must not cost the user
+        // every other node's history.
+        let (Ok(id), Ok(day)) = (
+            Uuid::parse_str(&id),
+            NaiveDate::parse_from_str(&day, "%Y-%m-%d"),
+        ) else {
+            continue;
+        };
+        totals.insert(
+            id,
+            NodeTraffic {
+                today_upload_bytes: decode_counter("today_upload", today_upload)?,
+                today_download_bytes: decode_counter("today_download", today_download)?,
+                total_upload_bytes: decode_counter("total_upload", total_upload)?,
+                total_download_bytes: decode_counter("total_download", total_download)?,
+            },
+        );
+        days.insert(id, day);
+    }
+    Ok((totals, days))
 }
 
 fn checked_counter_add(current: u64, added: u64) -> Result<u64, TrafficCounterError> {

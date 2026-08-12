@@ -32,6 +32,7 @@ import {
   loadNodes,
   loadSessionStatus,
   loadSystemProxyStartupStatus,
+  loadNodeTraffic,
   loadTraffic,
   moveNode,
   recoverSystemProxy,
@@ -64,6 +65,7 @@ import {
   type SessionStatus,
   type RoutingMode,
   type SystemProxyStartupStatus,
+  type NodeTraffic,
   type SystemProxyMode,
   type TrafficSnapshot,
 } from "./session";
@@ -257,6 +259,7 @@ export default function App() {
     useState<SystemProxyStartupStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [traffic, setTraffic] = useState<TrafficSnapshot>(EMPTY_TRAFFIC);
+  const [nodeTraffic, setNodeTraffic] = useState<Record<string, NodeTraffic>>({});
   const [urlTestAddress, setUrlTestAddress] = useState(savedUrlTestAddress);
   const [nodeTests, setNodeTests] = useState<
     Record<string, NodeTestResult | { status: "testing" }>
@@ -356,6 +359,10 @@ export default function App() {
       }
       loading = true;
       try {
+        const perNode = await loadNodeTraffic().catch(() => null);
+        if (perNode !== null) {
+          setNodeTraffic(perNode);
+        }
         const sample = await loadTraffic();
         if (active) {
           setTraffic(sample);
@@ -1281,6 +1288,11 @@ export default function App() {
                 <th>分组</th>
                 <th>服务器</th>
                 <th>延迟</th>
+                <th>速度</th>
+                <th>今日上传</th>
+                <th>今日下载</th>
+                <th>总上传</th>
+                <th>总下载</th>
                 <th>操作</th>
               </tr>
             </thead>
@@ -1326,6 +1338,15 @@ export default function App() {
                     }</td>
                     <td>{`${candidate.server}:${candidate.port}`}</td>
                     <td>{latency}</td>
+                    <td>
+                      {connected && selected
+                        ? `${formatRate(traffic.downloadBytesPerSecond)}`
+                        : "—"}
+                    </td>
+                    <td>{formatBytes(nodeTraffic[candidate.id]?.todayUploadBytes ?? 0)}</td>
+                    <td>{formatBytes(nodeTraffic[candidate.id]?.todayDownloadBytes ?? 0)}</td>
+                    <td>{formatBytes(nodeTraffic[candidate.id]?.totalUploadBytes ?? 0)}</td>
+                    <td>{formatBytes(nodeTraffic[candidate.id]?.totalDownloadBytes ?? 0)}</td>
                     <td className="node-actions">
                       <button
                         type="button"
