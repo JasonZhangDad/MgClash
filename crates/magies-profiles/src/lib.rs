@@ -1,6 +1,7 @@
 //! Node import and profile services for `MgClash`.
 
 mod bulk_import;
+mod core_capability;
 mod credential_codec;
 mod diagnostics;
 mod dns_config;
@@ -28,6 +29,10 @@ mod vmess;
 pub use bulk_import::{
     BulkImportError, BulkImportFailure, BulkImportLineError, BulkImportOutcome,
     BulkNodeImportParser, ParsedBulkNode,
+};
+pub use core_capability::{
+    CoreCapability, CoreCapabilityMatrix, CorePreference, CoreRejection, CoreRequirements,
+    CoreSelectionError, architecture_name, core_name, parse_core_name, protocol_name,
 };
 pub use credential_codec::{CredentialCodec, CredentialCodecError, StoredNodeCredential};
 pub use diagnostics::{DiagnosticRedactor, REDACTED};

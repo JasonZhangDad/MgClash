@@ -10,15 +10,17 @@ use std::path::Path;
 use std::time::Instant;
 
 use magies_domain::{
-    CredentialRef, NodeModelError, NodeName, ProxyNode, ProxyProtocol, ServerAddress,
+    CoreType, CredentialRef, NodeModelError, NodeName, ProxyNode, ProxyProtocol, ServerAddress,
     TimestampMillis,
 };
+use magies_platform::CpuArchitecture;
 use magies_profiles::{
-    BulkImportError, BulkNodeImportParser, CredentialCodec, CredentialCodecError, DnsConfigError,
-    DnsProfile, LocalHttpProfile, LocalSocksProfile, ManualNodeDraft, ManualNodeDraftError,
+    BulkImportError, BulkNodeImportParser, CoreCapabilityMatrix, CorePreference, CoreRequirements,
+    CoreSelectionError, CredentialCodec, CredentialCodecError, DnsConfigError, DnsProfile,
+    LocalHttpProfile, LocalSocksProfile, ManualNodeDraft, ManualNodeDraftError,
     ManualNodeStoreError, NodeGroup, NodeGroupStoreError, NodeOrderStoreError, ShareLinkParseError,
     ShareLinkParser, SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore,
-    SqliteSubscriptionStore, StoredNodeCredential, SubscriptionTransactionError,
+    SqliteSubscriptionStore, StoredNodeCredential, SubscriptionTransactionError, core_name,
 };
 use magies_routing::{RouteProfile, RoutingMode};
 use magies_session::{
@@ -40,8 +42,14 @@ use crate::routing_mode::{
     RoutingModeStoreError, SqliteRoutingModeStore, route_profile_for, routing_mode_name,
 };
 
-/// The Core the V0.1 desktop shell drives.
-const CORE_NAME: &str = "sing-box";
+/// The architecture this build runs on, for the Core capability matrix.
+fn host_architecture() -> CpuArchitecture {
+    if std::env::consts::ARCH == "aarch64" {
+        CpuArchitecture::Aarch64
+    } else {
+        CpuArchitecture::X86_64
+    }
+}
 
 /// Fixed session settings the V0.1 shell does not let the user edit yet.
 #[derive(Clone, Debug)]
@@ -220,6 +228,7 @@ where
     dns_settings: SqliteDnsSettingsStore,
     current_dns_settings: DnsSettings,
     recovery: NetworkRecoveryPolicy,
+    core_preference: CorePreference,
     /// The running Core's output, held until the shell claims it with
     /// [`SessionService::take_core_output`]. Dropping it would discard every
     /// line the Core prints, which is what happened before the log panel.
@@ -273,6 +282,7 @@ where
             dns_settings,
             current_dns_settings,
             recovery: NetworkRecoveryPolicy::default(),
+            core_preference: CorePreference::default(),
             core_output: None,
         })
     }
@@ -908,12 +918,48 @@ where
         self.session.config_path()
     }
 
+    /// The Core that would run the selected node, and why not when none can.
+    ///
+    /// With no node selected there is nothing to match against, so the answer
+    /// is the preference itself rather than a guess.
+    ///
+    /// # Errors
+    ///
+    /// Returns the matrix's reason when the preferred Core cannot serve the
+    /// node, or when no Core can.
+    pub fn selected_core(&self) -> Result<CoreType, CoreSelectionError> {
+        let Some(node) = self.node.as_ref() else {
+            return Ok(match self.core_preference {
+                CorePreference::Fixed(core) => core,
+                CorePreference::Auto => CoreType::SingBox,
+            });
+        };
+        CoreCapabilityMatrix::select(
+            self.core_preference,
+            // TUN is not reachable from the desktop shell yet, so no session can
+            // require it; this becomes a real flag when the TUN entry point lands.
+            CoreRequirements::new(node.protocol_type, false, host_architecture()),
+        )
+    }
+
+    /// Replaces the Core the session should run.
+    pub fn set_core_preference(&mut self, preference: CorePreference) {
+        self.core_preference = preference;
+    }
+
     #[must_use]
     pub fn status(&self) -> SessionStatus {
+        // A node the chosen Core cannot serve still has to render, so the
+        // status falls back to the preference and the connect attempt is what
+        // surfaces the typed error.
+        let core = self.selected_core().unwrap_or(match self.core_preference {
+            CorePreference::Fixed(core) => core,
+            CorePreference::Auto => CoreType::SingBox,
+        });
         SessionStatus {
             connected: self.session.is_running(),
             node: self.node.as_ref().map(NodeSummary::from),
-            core: CORE_NAME,
+            core: core_name(core),
             dns: self.current_dns_settings.clone(),
             mode: self.defaults.mode(),
             route: self.current_route_settings.clone(),

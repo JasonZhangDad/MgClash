@@ -36,9 +36,12 @@ export type LogLevel = "error" | "warn" | "info" | "debug" | "trace";
 
 export type LogSource = "app" | "core";
 
+export type CorePreference = "auto" | "sing-box" | "xray";
+
 export interface AppSettings {
   closeToTray: boolean;
   connectOnLaunch: boolean;
+  corePreference: CorePreference;
   launchAtLogin: boolean;
   logLevel: LogLevel;
 }

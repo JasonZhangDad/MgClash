@@ -10,6 +10,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use magies_domain::CoreType;
+use magies_profiles::CorePreference;
+
 use crate::logs::LogLevel;
 
 const CREATE_APP_SETTINGS_TABLE: &str = "
@@ -17,6 +20,7 @@ const CREATE_APP_SETTINGS_TABLE: &str = "
         id INTEGER PRIMARY KEY CHECK (id = 1),
         connect_on_launch INTEGER NOT NULL,
         close_to_tray INTEGER NOT NULL,
+        core_preference TEXT NOT NULL,
         launch_at_login INTEGER NOT NULL,
         log_level TEXT NOT NULL
     );
@@ -32,6 +36,8 @@ pub struct AppSettings {
     pub close_to_tray: bool,
     /// Start the app when the user logs in.
     pub launch_at_login: bool,
+    /// Which Core to run, or `auto` to let the capability matrix decide.
+    pub core_preference: CorePreferenceSetting,
     /// The minimum level the log panel shows on launch.
     pub log_level: LogLevel,
 }
@@ -44,6 +50,7 @@ impl Default for AppSettings {
             connect_on_launch: false,
             close_to_tray: true,
             launch_at_login: false,
+            core_preference: CorePreferenceSetting::Auto,
             log_level: LogLevel::Info,
         }
     }
@@ -94,7 +101,7 @@ impl SqliteAppSettingsStore {
         let row = self
             .connection
             .query_row(
-                "SELECT connect_on_launch, close_to_tray, launch_at_login, log_level
+                "SELECT connect_on_launch, close_to_tray, launch_at_login, core_preference, log_level
                  FROM app_settings WHERE id = 1",
                 [],
                 |row| {
@@ -103,11 +110,14 @@ impl SqliteAppSettingsStore {
                         row.get::<_, i64>(1)?,
                         row.get::<_, i64>(2)?,
                         row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((connect_on_launch, close_to_tray, launch_at_login, log_level)) = row else {
+        let Some((connect_on_launch, close_to_tray, launch_at_login, core_preference, log_level)) =
+            row
+        else {
             return Ok(AppSettings::default());
         };
 
@@ -115,6 +125,11 @@ impl SqliteAppSettingsStore {
             connect_on_launch: connect_on_launch != 0,
             close_to_tray: close_to_tray != 0,
             launch_at_login: launch_at_login != 0,
+            core_preference: parse_core_preference(&core_preference).ok_or(
+                AppSettingsStoreError::InvalidStoredValue {
+                    value: core_preference,
+                },
+            )?,
             log_level: parse_log_level(&log_level)
                 .ok_or(AppSettingsStoreError::InvalidStoredValue { value: log_level })?,
         })
@@ -127,21 +142,67 @@ impl SqliteAppSettingsStore {
     /// Returns a typed database error when `SQLite` cannot update the row.
     pub fn save(&self, settings: AppSettings) -> Result<(), AppSettingsStoreError> {
         self.connection.execute(
-            "INSERT INTO app_settings (id, connect_on_launch, close_to_tray, launch_at_login, log_level)
-             VALUES (1, ?1, ?2, ?3, ?4)
+            "INSERT INTO app_settings (id, connect_on_launch, close_to_tray, launch_at_login, core_preference, log_level)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(id) DO UPDATE SET
                  connect_on_launch = excluded.connect_on_launch,
                  close_to_tray = excluded.close_to_tray,
                  launch_at_login = excluded.launch_at_login,
+                 core_preference = excluded.core_preference,
                  log_level = excluded.log_level",
             params![
                 i64::from(settings.connect_on_launch),
                 i64::from(settings.close_to_tray),
                 i64::from(settings.launch_at_login),
+                settings.core_preference.name(),
                 log_level_name(settings.log_level),
             ],
         )?;
         Ok(())
+    }
+}
+
+/// The Core the user picked, as the settings panel offers it.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CorePreferenceSetting {
+    /// Let the capability matrix decide from the node and enabled features.
+    #[default]
+    Auto,
+    SingBox,
+    Xray,
+}
+
+impl CorePreferenceSetting {
+    /// Converts to the matrix's own type.
+    #[must_use]
+    pub const fn preference(self) -> CorePreference {
+        match self {
+            Self::Auto => CorePreference::Auto,
+            Self::SingBox => CorePreference::Fixed(CoreType::SingBox),
+            Self::Xray => CorePreference::Fixed(CoreType::Xray),
+        }
+    }
+
+    /// The stable value stored in `SQLite` and exchanged with the webview.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::SingBox => "sing-box",
+            Self::Xray => "xray",
+        }
+    }
+}
+
+/// Parses the stable stored value.
+#[must_use]
+pub fn parse_core_preference(value: &str) -> Option<CorePreferenceSetting> {
+    match value {
+        "auto" => Some(CorePreferenceSetting::Auto),
+        "sing-box" => Some(CorePreferenceSetting::SingBox),
+        "xray" => Some(CorePreferenceSetting::Xray),
+        _ => None,
     }
 }
 
