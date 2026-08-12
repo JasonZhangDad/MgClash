@@ -15,7 +15,7 @@ use super::{
     validate_percent_encoding,
 };
 
-const SUPPORTED_METHODS: &[&str] = &[
+pub(crate) const SUPPORTED_METHODS: &[&str] = &[
     "2022-blake3-aes-128-gcm",
     "2022-blake3-aes-256-gcm",
     "2022-blake3-chacha20-poly1305",
@@ -81,8 +81,8 @@ impl ShadowsocksParser {
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ShadowsocksCredential {
-    method: String,
-    password: String,
+    pub(crate) method: String,
+    pub(crate) password: String,
 }
 
 impl ShadowsocksCredential {

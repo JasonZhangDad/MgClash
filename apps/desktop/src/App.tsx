@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import {
+  buildManualNodeDraft,
+  emptyManualNodeForm,
+  SHADOWSOCKS_METHODS,
+  usesStreamTransport,
+  type GrpcMode,
+  type ManualNodeForm,
+  type TransportKind,
+} from "./manualNode";
 import { loadPlatformSummary, type PlatformSummary } from "./platform";
 import {
   connectSession,
+  createNode,
   deleteNode,
   dismissSystemProxyRecovery,
   disconnectSession,
@@ -28,6 +38,9 @@ import {
   type NodeSummary,
   type NodeGroupSummary,
   type NodeTestResult,
+  type ObfuscationMethod,
+  type ProxyProtocol,
+  type VmessSecurity,
   type DnsMode,
   type DnsSettings,
   type DnsStrategy,
@@ -172,6 +185,8 @@ export default function App() {
   const [nodePort, setNodePort] = useState("");
   const [subscriptions, setSubscriptions] = useState<SubscriptionSummary[]>([]);
   const [uri, setUri] = useState("");
+  const [createForm, setCreateForm] =
+    useState<ManualNodeForm>(emptyManualNodeForm);
   const [subscriptionName, setSubscriptionName] = useState("");
   const [subscriptionUrl, setSubscriptionUrl] = useState("");
   const [subscriptionInterval, setSubscriptionInterval] = useState("60");
@@ -458,6 +473,33 @@ export default function App() {
       setBusy(false);
     }
   }, [uri]);
+
+  const updateCreateForm = useCallback(
+    (changes: Partial<ManualNodeForm>) => {
+      setCreateForm((current) => ({ ...current, ...changes }));
+    },
+    [],
+  );
+
+  const onCreateNode = useCallback(async () => {
+    const result = buildManualNodeDraft(createForm);
+    if ("error" in result) {
+      setError(result.error);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setExportedTo(null);
+    try {
+      setStatus(await createNode(result.draft));
+      setNodes(await loadNodes());
+      setCreateForm(emptyManualNodeForm);
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, [createForm]);
 
   const onDeleteNode = useCallback(async (id: string) => {
     setBusy(true);
@@ -1727,6 +1769,424 @@ export default function App() {
           >
             导入
           </button>
+        </div>
+
+        <h2>手动创建节点</h2>
+
+        <div className="settings-form" aria-label="手动创建节点">
+          <label>
+            协议
+            <select
+              aria-label="节点协议"
+              value={createForm.protocol}
+              disabled={busy || connected}
+              onChange={(event) =>
+                updateCreateForm({
+                  protocol: event.target.value as ProxyProtocol,
+                })
+              }
+            >
+              <option value="vless">VLESS</option>
+              <option value="vmess">VMess</option>
+              <option value="trojan">Trojan</option>
+              <option value="shadowsocks">Shadowsocks</option>
+              <option value="hysteria2">Hysteria2</option>
+            </select>
+          </label>
+
+          <label>
+            名称
+            <input
+              aria-label="新建节点名称"
+              value={createForm.name}
+              disabled={busy || connected}
+              onChange={(event) => updateCreateForm({ name: event.target.value })}
+            />
+          </label>
+
+          <label>
+            服务器
+            <input
+              aria-label="新建节点服务器"
+              value={createForm.server}
+              disabled={busy || connected}
+              onChange={(event) =>
+                updateCreateForm({ server: event.target.value })
+              }
+            />
+          </label>
+
+          <label>
+            端口
+            <input
+              aria-label="新建节点端口"
+              inputMode="numeric"
+              value={createForm.port}
+              disabled={busy || connected}
+              onChange={(event) => updateCreateForm({ port: event.target.value })}
+            />
+          </label>
+
+          {(createForm.protocol === "vless" ||
+            createForm.protocol === "vmess") && (
+            <label>
+              UUID
+              <input
+                aria-label="节点 UUID"
+                value={createForm.userId}
+                disabled={busy || connected}
+                onChange={(event) =>
+                  updateCreateForm({ userId: event.target.value })
+                }
+              />
+            </label>
+          )}
+
+          {createForm.protocol === "vless" && (
+            <label>
+              flow
+              <input
+                aria-label="VLESS flow"
+                placeholder="留空表示不使用"
+                value={createForm.flow}
+                disabled={busy || connected}
+                onChange={(event) =>
+                  updateCreateForm({ flow: event.target.value })
+                }
+              />
+            </label>
+          )}
+
+          {createForm.protocol === "vmess" && (
+            <>
+              <label>
+                加密方式
+                <select
+                  aria-label="VMess 加密方式"
+                  value={createForm.security}
+                  disabled={busy || connected}
+                  onChange={(event) =>
+                    updateCreateForm({
+                      security: event.target.value as VmessSecurity,
+                    })
+                  }
+                >
+                  <option value="Auto">auto</option>
+                  <option value="Aes128Gcm">aes-128-gcm</option>
+                  <option value="Chacha20Poly1305">chacha20-poly1305</option>
+                  <option value="None">none</option>
+                  <option value="Zero">zero</option>
+                </select>
+              </label>
+              <label>
+                alterId
+                <input
+                  aria-label="VMess alterId"
+                  inputMode="numeric"
+                  value={createForm.alterId}
+                  disabled={busy || connected}
+                  onChange={(event) =>
+                    updateCreateForm({ alterId: event.target.value })
+                  }
+                />
+              </label>
+            </>
+          )}
+
+          {createForm.protocol === "shadowsocks" && (
+            <label>
+              加密方式
+              <select
+                aria-label="Shadowsocks 加密方式"
+                value={createForm.method}
+                disabled={busy || connected}
+                onChange={(event) =>
+                  updateCreateForm({ method: event.target.value })
+                }
+              >
+                {SHADOWSOCKS_METHODS.map((method) => (
+                  <option key={method} value={method}>
+                    {method}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          {(createForm.protocol === "trojan" ||
+            createForm.protocol === "shadowsocks") && (
+            <label>
+              密码
+              <input
+                aria-label="节点密码"
+                type="password"
+                value={createForm.password}
+                disabled={busy || connected}
+                onChange={(event) =>
+                  updateCreateForm({ password: event.target.value })
+                }
+              />
+            </label>
+          )}
+
+          {createForm.protocol === "hysteria2" && (
+            <>
+              <label>
+                认证密码
+                <input
+                  aria-label="Hysteria2 认证密码"
+                  type="password"
+                  placeholder="留空表示不使用"
+                  value={createForm.authentication}
+                  disabled={busy || connected}
+                  onChange={(event) =>
+                    updateCreateForm({ authentication: event.target.value })
+                  }
+                />
+              </label>
+              <label>
+                <input
+                  aria-label="启用混淆"
+                  type="checkbox"
+                  checked={createForm.obfsEnabled}
+                  disabled={busy || connected}
+                  onChange={(event) =>
+                    updateCreateForm({ obfsEnabled: event.target.checked })
+                  }
+                />
+                启用混淆
+              </label>
+              {createForm.obfsEnabled && (
+                <>
+                  <label>
+                    混淆方式
+                    <select
+                      aria-label="混淆方式"
+                      value={createForm.obfsMethod}
+                      disabled={busy || connected}
+                      onChange={(event) =>
+                        updateCreateForm({
+                          obfsMethod: event.target.value as ObfuscationMethod,
+                        })
+                      }
+                    >
+                      <option value="Salamander">salamander</option>
+                      <option value="Gecko">gecko</option>
+                    </select>
+                  </label>
+                  <label>
+                    混淆密码
+                    <input
+                      aria-label="混淆密码"
+                      type="password"
+                      value={createForm.obfsPassword}
+                      disabled={busy || connected}
+                      onChange={(event) =>
+                        updateCreateForm({ obfsPassword: event.target.value })
+                      }
+                    />
+                  </label>
+                </>
+              )}
+            </>
+          )}
+
+          {usesStreamTransport(createForm.protocol) && (
+            <label>
+              传输方式
+              <select
+                aria-label="传输方式"
+                value={createForm.transport}
+                disabled={
+                  busy || connected || createForm.protocol === "shadowsocks"
+                }
+                onChange={(event) =>
+                  updateCreateForm({
+                    transport: event.target.value as TransportKind,
+                  })
+                }
+              >
+                <option value="tcp">TCP</option>
+                <option value="websocket">WebSocket</option>
+                <option value="grpc">gRPC</option>
+              </select>
+            </label>
+          )}
+
+          {usesStreamTransport(createForm.protocol) &&
+            createForm.transport === "websocket" && (
+              <>
+                <label>
+                  路径
+                  <input
+                    aria-label="WebSocket 路径"
+                    value={createForm.wsPath}
+                    disabled={busy || connected}
+                    onChange={(event) =>
+                      updateCreateForm({ wsPath: event.target.value })
+                    }
+                  />
+                </label>
+                <label>
+                  Host
+                  <input
+                    aria-label="WebSocket Host"
+                    placeholder="留空表示不使用"
+                    value={createForm.wsHost}
+                    disabled={busy || connected}
+                    onChange={(event) =>
+                      updateCreateForm({ wsHost: event.target.value })
+                    }
+                  />
+                </label>
+              </>
+            )}
+
+          {usesStreamTransport(createForm.protocol) &&
+            createForm.transport === "grpc" && (
+              <>
+                <label>
+                  serviceName
+                  <input
+                    aria-label="gRPC serviceName"
+                    value={createForm.grpcServiceName}
+                    disabled={busy || connected}
+                    onChange={(event) =>
+                      updateCreateForm({ grpcServiceName: event.target.value })
+                    }
+                  />
+                </label>
+                <label>
+                  模式
+                  <select
+                    aria-label="gRPC 模式"
+                    value={createForm.grpcMode}
+                    disabled={busy || connected}
+                    onChange={(event) =>
+                      updateCreateForm({
+                        grpcMode: event.target.value as GrpcMode,
+                      })
+                    }
+                  >
+                    <option value="gun">gun</option>
+                    <option value="multi">multi</option>
+                    <option value="guna">guna</option>
+                  </select>
+                </label>
+                <label>
+                  authority
+                  <input
+                    aria-label="gRPC authority"
+                    placeholder="留空表示不使用"
+                    value={createForm.grpcAuthority}
+                    disabled={busy || connected}
+                    onChange={(event) =>
+                      updateCreateForm({ grpcAuthority: event.target.value })
+                    }
+                  />
+                </label>
+              </>
+            )}
+
+          {usesStreamTransport(createForm.protocol) &&
+            createForm.protocol !== "shadowsocks" && (
+              <label>
+                <input
+                  aria-label="启用 TLS"
+                  type="checkbox"
+                  checked={createForm.tlsEnabled}
+                  disabled={busy || connected}
+                  onChange={(event) =>
+                    updateCreateForm({ tlsEnabled: event.target.checked })
+                  }
+                />
+                启用 TLS
+              </label>
+            )}
+
+          {(createForm.tlsEnabled || createForm.protocol === "hysteria2") &&
+            createForm.protocol !== "shadowsocks" && (
+              <>
+                <label>
+                  SNI
+                  <input
+                    aria-label="TLS SNI"
+                    placeholder="留空表示使用服务器地址"
+                    value={createForm.serverName}
+                    disabled={busy || connected}
+                    onChange={(event) =>
+                      updateCreateForm({ serverName: event.target.value })
+                    }
+                  />
+                </label>
+                <label>
+                  ALPN
+                  <input
+                    aria-label="TLS ALPN"
+                    placeholder="逗号分隔，如 h2,http/1.1"
+                    value={createForm.alpn}
+                    disabled={busy || connected}
+                    onChange={(event) =>
+                      updateCreateForm({ alpn: event.target.value })
+                    }
+                  />
+                </label>
+                <label>
+                  指纹
+                  <input
+                    aria-label="TLS 指纹"
+                    placeholder="留空表示不使用"
+                    value={createForm.fingerprint}
+                    disabled={busy || connected}
+                    onChange={(event) =>
+                      updateCreateForm({ fingerprint: event.target.value })
+                    }
+                  />
+                </label>
+                <label>
+                  <input
+                    aria-label="允许不安全证书"
+                    type="checkbox"
+                    checked={createForm.allowInsecure}
+                    disabled={busy || connected}
+                    onChange={(event) =>
+                      updateCreateForm({ allowInsecure: event.target.checked })
+                    }
+                  />
+                  允许不安全证书
+                </label>
+              </>
+            )}
+
+          <label>
+            <input
+              aria-label="启用 UDP"
+              type="checkbox"
+              checked={createForm.udpEnabled}
+              disabled={busy || connected}
+              onChange={(event) =>
+                updateCreateForm({ udpEnabled: event.target.checked })
+              }
+            />
+            启用 UDP
+          </label>
+
+          <div className="actions">
+            <button
+              type="button"
+              disabled={busy || connected}
+              onClick={() => void onCreateNode()}
+            >
+              创建节点
+            </button>
+            <button
+              type="button"
+              disabled={busy || connected}
+              onClick={() => setCreateForm(emptyManualNodeForm)}
+            >
+              重置
+            </button>
+          </div>
         </div>
 
         <h2>诊断</h2>

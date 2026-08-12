@@ -95,8 +95,8 @@ impl Hysteria2Parser {
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Hysteria2Credential {
-    authentication: Option<String>,
-    obfuscation: Option<Hysteria2Obfuscation>,
+    pub(crate) authentication: Option<String>,
+    pub(crate) obfuscation: Option<Hysteria2Obfuscation>,
 }
 
 impl Hysteria2Credential {
@@ -125,10 +125,10 @@ pub enum Hysteria2ObfuscationMethod {
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Hysteria2Obfuscation {
-    method: Hysteria2ObfuscationMethod,
-    password: String,
-    min_packet_size: Option<NonZeroU16>,
-    max_packet_size: Option<NonZeroU16>,
+    pub(crate) method: Hysteria2ObfuscationMethod,
+    pub(crate) password: String,
+    pub(crate) min_packet_size: Option<NonZeroU16>,
+    pub(crate) max_packet_size: Option<NonZeroU16>,
 }
 
 impl Hysteria2Obfuscation {

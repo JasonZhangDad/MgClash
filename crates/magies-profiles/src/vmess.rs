@@ -69,9 +69,9 @@ impl VmessSecurity {
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct VmessCredential {
-    user_id: Uuid,
-    security: VmessSecurity,
-    alter_id: u32,
+    pub(crate) user_id: Uuid,
+    pub(crate) security: VmessSecurity,
+    pub(crate) alter_id: u32,
 }
 
 impl VmessCredential {

@@ -25,7 +25,8 @@ use magies_domain::TimestampMillis;
 use magies_platform::network_path::NetworkPathReader;
 use magies_platform::{TargetPlatform, TunAvailability};
 use magies_profiles::{
-    SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore, SqliteSubscriptionStore,
+    ManualNodeDraft, SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore,
+    SqliteSubscriptionStore,
 };
 use magies_session::{DesktopSession, NetworkWatcher, TcpHealthProbe};
 use magies_storage::PlatformSecretStore;
@@ -648,6 +649,21 @@ fn session_import_node(
 #[tauri::command]
 #[expect(
     clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
+fn session_create_node(
+    draft: ManualNodeDraft,
+    state: State<'_, AppState>,
+) -> Result<SessionStatus, CommandError> {
+    state
+        .service()
+        .create_node(draft)
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
     reason = "Tauri commands receive State by value"
 )]
 fn session_nodes(
@@ -1059,6 +1075,65 @@ fn handle_run_event(app: &AppHandle, event: tauri::RunEvent) {
     }
 }
 
+/// Opens the on-disk stores, wires the session service into Tauri state, and
+/// starts the background loops.
+fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let data_directory = app.path().app_data_dir()?;
+    let runtime_directory = data_directory.join("runtime");
+    std::fs::create_dir_all(&runtime_directory)?;
+    let defaults = SessionDefaults::v01();
+    let health_address = SocketAddr::from(([127, 0, 0, 1], defaults.socks.port().get()));
+    let system_proxy =
+        PlatformProxyControl::for_host(data_directory.join("system-proxy-recovery.json"));
+    let session = DesktopSession::new(
+        PlatformSecretStore,
+        LazySingBoxControl::from_env(health_address, HEALTH_TIMEOUT),
+        system_proxy.clone(),
+        runtime_directory,
+    );
+    let node_database = data_directory.join("nodes.sqlite");
+    let nodes = SqliteManualNodeStore::open(&node_database)?;
+    let subscriptions = Arc::new(DesktopSubscriptionController::new(
+        SqliteSubscriptionStore::open(&node_database)?,
+        PlatformSecretStore,
+    ));
+    let traffic = Arc::new(Mutex::new(open_traffic_counter(&node_database)?));
+    let service = Arc::new(Mutex::new(SessionService::new(
+        session,
+        defaults,
+        NodeStores::new(
+            nodes,
+            SqliteSubscriptionStore::open(&node_database)?,
+            SqliteNodeOrderStore::open(&node_database)?,
+            SqliteNodeGroupStore::open(&node_database)?,
+        ),
+        SqliteRoutingModeStore::open(&node_database)?,
+        SqliteRouteSettingsStore::open(&node_database)?,
+        SqliteDnsSettingsStore::open(&node_database)?,
+    )?));
+    let initial_tray_model = {
+        let (service, traffic) = (lock(&service), lock(&traffic).snapshot());
+        menu_model(&service.status(), &service.nodes()?, traffic)
+    };
+    let tray = TrayUi::install(app, initial_tray_model, handle_tray_action)?;
+    app.manage(AppState {
+        service: service.clone(),
+        subscriptions: subscriptions.clone(),
+        traffic: traffic.clone(),
+        system_proxy,
+        export_directory: data_directory,
+        tray,
+        allow_exit: AtomicBool::new(false),
+        exit_in_progress: AtomicBool::new(false),
+    });
+    let probe = TcpHealthProbe::new(health_address, PROBE_TIMEOUT);
+    spawn_recovery_loop(service.clone(), probe);
+    spawn_subscription_update_loop(subscriptions.clone(), service.clone());
+    spawn_traffic_loop(service.clone(), traffic);
+    spawn_tray_refresh_loop(app.handle().clone());
+    Ok(())
+}
+
 /// Starts the desktop application event loop.
 ///
 /// # Panics
@@ -1066,62 +1141,7 @@ fn handle_run_event(app: &AppHandle, event: tauri::RunEvent) {
 /// Panics when Tauri cannot initialize or run the desktop shell.
 pub fn run() {
     tauri::Builder::default()
-        .setup(|app| {
-            let data_directory = app.path().app_data_dir()?;
-            let runtime_directory = data_directory.join("runtime");
-            std::fs::create_dir_all(&runtime_directory)?;
-            let defaults = SessionDefaults::v01();
-            let health_address = SocketAddr::from(([127, 0, 0, 1], defaults.socks.port().get()));
-            let system_proxy =
-                PlatformProxyControl::for_host(data_directory.join("system-proxy-recovery.json"));
-            let session = DesktopSession::new(
-                PlatformSecretStore,
-                LazySingBoxControl::from_env(health_address, HEALTH_TIMEOUT),
-                system_proxy.clone(),
-                runtime_directory,
-            );
-            let node_database = data_directory.join("nodes.sqlite");
-            let nodes = SqliteManualNodeStore::open(&node_database)?;
-            let subscriptions = Arc::new(DesktopSubscriptionController::new(
-                SqliteSubscriptionStore::open(&node_database)?,
-                PlatformSecretStore,
-            ));
-            let traffic = Arc::new(Mutex::new(open_traffic_counter(&node_database)?));
-            let service = Arc::new(Mutex::new(SessionService::new(
-                session,
-                defaults,
-                NodeStores::new(
-                    nodes,
-                    SqliteSubscriptionStore::open(&node_database)?,
-                    SqliteNodeOrderStore::open(&node_database)?,
-                    SqliteNodeGroupStore::open(&node_database)?,
-                ),
-                SqliteRoutingModeStore::open(&node_database)?,
-                SqliteRouteSettingsStore::open(&node_database)?,
-                SqliteDnsSettingsStore::open(&node_database)?,
-            )?));
-            let initial_tray_model = {
-                let (service, traffic) = (lock(&service), lock(&traffic).snapshot());
-                menu_model(&service.status(), &service.nodes()?, traffic)
-            };
-            let tray = TrayUi::install(app, initial_tray_model, handle_tray_action)?;
-            app.manage(AppState {
-                service: service.clone(),
-                subscriptions: subscriptions.clone(),
-                traffic: traffic.clone(),
-                system_proxy,
-                export_directory: data_directory,
-                tray,
-                allow_exit: AtomicBool::new(false),
-                exit_in_progress: AtomicBool::new(false),
-            });
-            let probe = TcpHealthProbe::new(health_address, PROBE_TIMEOUT);
-            spawn_recovery_loop(service.clone(), probe);
-            spawn_subscription_update_loop(subscriptions.clone(), service.clone());
-            spawn_traffic_loop(service.clone(), traffic);
-            spawn_tray_refresh_loop(app.handle().clone());
-            Ok(())
-        })
+        .setup(setup_app)
         .on_window_event(|window, event| {
             if window.label() == "main" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -1139,6 +1159,7 @@ pub fn run() {
             session_set_route_settings,
             session_set_dns_settings,
             session_import_node,
+            session_create_node,
             session_nodes,
             session_node_groups,
             session_test_node,

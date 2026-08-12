@@ -15,9 +15,10 @@ use magies_domain::{
 };
 use magies_profiles::{
     CredentialCodec, CredentialCodecError, DnsConfigError, DnsProfile, LocalHttpProfile,
-    LocalSocksProfile, ManualNodeStoreError, NodeGroup, NodeGroupStoreError, NodeOrderStoreError,
-    ShareLinkParseError, ShareLinkParser, SqliteManualNodeStore, SqliteNodeGroupStore,
-    SqliteNodeOrderStore, SqliteSubscriptionStore, SubscriptionTransactionError,
+    LocalSocksProfile, ManualNodeDraft, ManualNodeDraftError, ManualNodeStoreError, NodeGroup,
+    NodeGroupStoreError, NodeOrderStoreError, ShareLinkParseError, ShareLinkParser,
+    SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore, SqliteSubscriptionStore,
+    StoredNodeCredential, SubscriptionTransactionError,
 };
 use magies_routing::{RouteProfile, RoutingMode};
 use magies_session::{
@@ -306,8 +307,40 @@ where
             .parse(uri, id, credential_ref)
             .map_err(SessionCommandError::ShareLink)?
             .into_parts();
+        self.store_new_node(node, &credential)
+    }
+
+    /// Validates a manually entered node, saves its credential, and selects it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation, credential, or secret store error. The
+    /// previously selected node is kept when any step fails.
+    pub fn create_node(
+        &mut self,
+        draft: ManualNodeDraft,
+    ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
+        if self.session.is_running() {
+            return Err(SessionCommandError::SessionActive);
+        }
+        let id = Uuid::new_v4();
+        let credential_ref =
+            CredentialRef::new(format!("node/{id}")).map_err(SessionCommandError::CredentialRef)?;
+        let (node, credential) = draft
+            .build(id, credential_ref)
+            .map_err(SessionCommandError::ManualNodeDraft)?;
+        self.store_new_node(node, &credential)
+    }
+
+    /// Persists a freshly built node and its credential, rolling the secret back
+    /// when the node store rejects it.
+    fn store_new_node(
+        &mut self,
+        node: ProxyNode,
+        credential: &StoredNodeCredential,
+    ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
         let secret =
-            CredentialCodec::encode(&credential).map_err(SessionCommandError::Credential)?;
+            CredentialCodec::encode(credential).map_err(SessionCommandError::Credential)?;
         self.session
             .secret_store()
             .put(&node.credential_ref, &secret)
@@ -837,6 +870,8 @@ where
     InvalidNode(#[source] NodeModelError),
     #[error("failed to parse the sharing URI")]
     ShareLink(#[source] ShareLinkParseError),
+    #[error("invalid manual node settings")]
+    ManualNodeDraft(#[source] ManualNodeDraftError),
     #[error("failed to encode the node credential")]
     Credential(#[source] CredentialCodecError),
     #[error("failed to save the node credential")]
@@ -889,6 +924,7 @@ where
             Self::CredentialRef(_) => "invalid_credential_reference",
             Self::InvalidNode(_) => "invalid_node",
             Self::ShareLink(_) => "invalid_share_link",
+            Self::ManualNodeDraft(_) => "invalid_manual_node",
             Self::Credential(_) => "credential_encode_failed",
             Self::Secret(_) | Self::DeleteSecret(_) => "secret_store_failed",
             Self::NodeStore(ManualNodeStoreError::NodeNotFound { .. })

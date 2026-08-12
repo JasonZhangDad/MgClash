@@ -5,6 +5,7 @@ mod diagnostics;
 mod dns_config;
 mod hysteria2;
 mod local_proxy_config;
+mod manual_node_draft;
 mod manual_node_store;
 mod node_dedup;
 mod node_group_store;
@@ -35,6 +36,9 @@ pub use hysteria2::{
 pub use local_proxy_config::{
     DEFAULT_HTTP_PORT, DEFAULT_SOCKS_PORT, GeneratedCoreConfig, LocalHttpConfigGenerator,
     LocalHttpProfile, LocalProxyConfigError, LocalSocksConfigGenerator, LocalSocksProfile,
+};
+pub use manual_node_draft::{
+    ManualCredentialDraft, ManualNodeDraft, ManualNodeDraftError, ManualObfuscationDraft,
 };
 pub use manual_node_store::{ManualNodeStoreError, SqliteManualNodeStore};
 pub use node_dedup::{
@@ -177,9 +181,9 @@ impl VlessParser {
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct VlessCredential {
-    user_id: Uuid,
-    encryption: String,
-    flow: Option<String>,
+    pub(crate) user_id: Uuid,
+    pub(crate) encryption: String,
+    pub(crate) flow: Option<String>,
 }
 
 impl VlessCredential {
