@@ -2899,6 +2899,7 @@ export default function App() {
             }
           >
             <option value="managed">自动配置</option>
+            <option value="pac">PAC</option>
             <option value="cleared">清除</option>
             <option value="unchanged">不改变</option>
           </select>

@@ -37,7 +37,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
-use crate::app_settings::{AppSettings, SqliteAppSettingsStore};
+use crate::app_settings::{AppSettings, SqliteAppSettingsStore, SystemProxyModeSetting};
 use crate::core_control::{HostCoreControl, describe};
 use crate::diagnostics::DiagnosticBundle;
 use crate::dns_settings::{DnsSettings, SqliteDnsSettingsStore};
@@ -60,6 +60,7 @@ use crate::traffic::{
 };
 use crate::tray::{TrayAction, TrayUi, menu_model};
 use crate::url_test::{UrlTestError, probe_url};
+use magies_platform::pac::{PacScript, PacServer};
 
 /// How long a started Core has to accept connections on its local SOCKS port.
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -234,6 +235,11 @@ struct AppState {
     /// Cached so the window and exit handlers can read the settings without
     /// touching `SQLite` on every event.
     settings: Mutex<AppSettings>,
+    /// Serves the proxy auto-configuration script while PAC mode is selected.
+    ///
+    /// Held only while that mode is in use: a server nobody asked for would
+    /// keep a loopback port bound for the whole session.
+    pac: Mutex<Option<PacServer>>,
     /// Where an exported diagnostic bundle is written.
     export_directory: PathBuf,
     tray: TrayUi,
@@ -1003,16 +1009,46 @@ fn set_app_settings(
             message: describe(&error),
         })?;
     *lock(&state.settings) = settings;
+    let pac_url = apply_pac_mode(&state, settings)?;
     // The running service keeps its own copy so status and connect do not have
     // to reach back into the settings on every call.
     {
         let mut service = state.service();
         service.set_core_preference(settings.core_preference.preference());
         service.set_tun_enabled(settings.tun_enabled);
-        service.set_system_proxy_mode(settings.system_proxy_mode.mode());
+        service.set_system_proxy_mode(settings.system_proxy_mode.mode(pac_url.as_deref()));
     }
     tracing::info!("application settings updated");
     Ok(settings)
+}
+
+/// Starts or stops the PAC server to match the selected mode.
+///
+/// Returns the URL to point the host at, or `None` when PAC is not selected.
+fn apply_pac_mode(state: &AppState, settings: AppSettings) -> Result<Option<String>, CommandError> {
+    let mut server = lock(&state.pac);
+    if settings.system_proxy_mode != SystemProxyModeSetting::Pac {
+        // Dropping it releases the port and joins the accept thread.
+        *server = None;
+        return Ok(None);
+    }
+    if let Some(running) = server.as_ref() {
+        return Ok(Some(running.url()));
+    }
+
+    let defaults = state.service().defaults().clone();
+    let started = PacServer::start(&PacScript::global(
+        defaults.socks.port().get(),
+        defaults.http.port().get(),
+    ))
+    .map_err(|error| CommandError {
+        code: "pac_server_failed",
+        message: describe(&error),
+    })?;
+    let url = started.url();
+    tracing::info!("serving the proxy auto-configuration script at {url}");
+    *server = Some(started);
+    Ok(Some(url))
 }
 
 /// Registers or removes the OS login item.
@@ -1315,11 +1351,26 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     )?));
     let settings_store = SqliteAppSettingsStore::open(&node_database)?;
     let settings = settings_store.load()?;
+    // Restored before the service reads the mode, so a session started on launch
+    // points at a script that is already being served.
+    let pac = if settings.system_proxy_mode == SystemProxyModeSetting::Pac {
+        let defaults = lock(&service).defaults().clone();
+        Some(PacServer::start(&PacScript::global(
+            defaults.socks.port().get(),
+            defaults.http.port().get(),
+        ))?)
+    } else {
+        None
+    };
     {
         let mut service = lock(&service);
         service.set_core_preference(settings.core_preference.preference());
         service.set_tun_enabled(settings.tun_enabled);
-        service.set_system_proxy_mode(settings.system_proxy_mode.mode());
+        service.set_system_proxy_mode(
+            settings
+                .system_proxy_mode
+                .mode(pac.as_ref().map(PacServer::url).as_deref()),
+        );
     }
     let initial_tray_model = {
         let (service, traffic) = (lock(&service), lock(&traffic).snapshot());
@@ -1334,6 +1385,7 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         logs: logs.clone(),
         settings_store: Mutex::new(settings_store),
         settings: Mutex::new(settings),
+        pac: Mutex::new(pac),
         export_directory: data_directory,
         tray,
         allow_exit: AtomicBool::new(false),

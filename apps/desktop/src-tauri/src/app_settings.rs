@@ -222,6 +222,8 @@ pub enum SystemProxyModeSetting {
     /// Point the host at this session's local proxies.
     #[default]
     Managed,
+    /// Point the host at a proxy auto-configuration file `MgClash` serves.
+    Pac,
     /// Clear the host's proxy while connected, restoring it on disconnect.
     Cleared,
     /// Leave the host's proxy exactly as the user configured it.
@@ -230,10 +232,17 @@ pub enum SystemProxyModeSetting {
 
 impl SystemProxyModeSetting {
     /// Converts to the session layer's own type.
+    ///
+    /// PAC needs the URL of the server handing out the script, which only the
+    /// shell knows, so the caller supplies it. Without one the mode falls back
+    /// to the managed proxy rather than pointing the host at nothing.
     #[must_use]
-    pub const fn mode(self) -> SystemProxyMode {
+    pub fn mode(self, pac_url: Option<&str>) -> SystemProxyMode {
         match self {
             Self::Managed => SystemProxyMode::Managed,
+            Self::Pac => pac_url.map_or(SystemProxyMode::Managed, |url| {
+                SystemProxyMode::Pac(url.to_owned())
+            }),
             Self::Cleared => SystemProxyMode::Cleared,
             Self::Unchanged => SystemProxyMode::Unchanged,
         }
@@ -244,6 +253,7 @@ impl SystemProxyModeSetting {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Managed => "managed",
+            Self::Pac => "pac",
             Self::Cleared => "cleared",
             Self::Unchanged => "unchanged",
         }
@@ -255,6 +265,7 @@ impl SystemProxyModeSetting {
 pub fn parse_system_proxy_mode(value: &str) -> Option<SystemProxyModeSetting> {
     match value {
         "managed" => Some(SystemProxyModeSetting::Managed),
+        "pac" => Some(SystemProxyModeSetting::Pac),
         "cleared" => Some(SystemProxyModeSetting::Cleared),
         "unchanged" => Some(SystemProxyModeSetting::Unchanged),
         _ => None,

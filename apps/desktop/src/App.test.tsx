@@ -1602,10 +1602,21 @@ describe("App", () => {
     await act(async () => selectValue("unchanged", control));
 
     // Leaving the host's proxy alone and clearing it are different requests,
-    // which is why there are three values rather than a checkbox.
+    // which is why there are four values rather than a checkbox.
     expect(saveAppSettingsMock).toHaveBeenCalledWith(
       expect.objectContaining({ systemProxyMode: "unchanged" }),
     );
+  });
+
+  it("offers all four System Proxy modes v2rayN has", async () => {
+    await render();
+    const control = container.querySelector<HTMLSelectElement>(
+      "[aria-label='状态栏系统代理']",
+    );
+
+    expect(
+      [...(control?.options ?? [])].map((option) => option.value),
+    ).toEqual(["managed", "pac", "cleared", "unchanged"]);
   });
 
   it("shows each node's own traffic in the table", async () => {

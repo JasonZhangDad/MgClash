@@ -166,9 +166,10 @@ impl From<&ProxyNode> for NodeSummary {
 }
 
 /// The stable name the webview and the settings store share.
-const fn system_proxy_mode_name(mode: SystemProxyMode) -> &'static str {
+const fn system_proxy_mode_name(mode: &SystemProxyMode) -> &'static str {
     match mode {
         SystemProxyMode::Managed => "managed",
+        SystemProxyMode::Pac(_) => "pac",
         SystemProxyMode::Cleared => "cleared",
         SystemProxyMode::Unchanged => "unchanged",
     }
@@ -1157,7 +1158,7 @@ where
         // System Proxy rather than being layered on top of it.
         let profile = match self.tun_profile()? {
             Some(tun) => profile.with_system_proxy(false).with_tun(tun, true),
-            None => profile.with_system_proxy_mode(self.defaults.system_proxy),
+            None => profile.with_system_proxy_mode(self.defaults.system_proxy.clone()),
         };
 
         let output = self
@@ -1228,7 +1229,7 @@ where
     }
 
     /// Replaces what the next session does to the host's System Proxy.
-    pub const fn set_system_proxy_mode(&mut self, mode: SystemProxyMode) {
+    pub fn set_system_proxy_mode(&mut self, mode: SystemProxyMode) {
         self.defaults.system_proxy = mode;
     }
 
@@ -1271,7 +1272,7 @@ where
             mode: self.defaults.mode(),
             route: self.current_route_settings.clone(),
             system_proxy: self.defaults.system_proxy != SystemProxyMode::Unchanged,
-            system_proxy_mode: system_proxy_mode_name(self.defaults.system_proxy),
+            system_proxy_mode: system_proxy_mode_name(&self.defaults.system_proxy),
             socks_port: self.defaults.socks.port().get(),
             http_port: self.defaults.http.port().get(),
         }

@@ -21,7 +21,9 @@ use magies_core_runtime::{
     XrayAdapterError,
 };
 use magies_domain::{CoreType, ProxyNode};
-use magies_platform::system_proxy::{PacSetting, ProxyEndpoint, ProxySetting, SystemProxyState};
+use magies_platform::system_proxy::{
+    PacSetting, ProxyEndpoint, ProxySetting, SystemProxyModelError, SystemProxyState,
+};
 use magies_platform::system_proxy_recovery::{
     RecoveryStore, SystemProxyControl, SystemProxyRecoveryError, SystemProxyRecoveryManager,
 };
@@ -229,7 +231,7 @@ impl DesktopSessionProfile {
     /// Keeps the two-state spelling: enabled means the managed proxy, disabled
     /// means leaving the host's settings alone.
     #[must_use]
-    pub const fn with_system_proxy(mut self, enabled: bool) -> Self {
+    pub fn with_system_proxy(mut self, enabled: bool) -> Self {
         self.system_proxy = if enabled {
             SystemProxyMode::Managed
         } else {
@@ -239,7 +241,7 @@ impl DesktopSessionProfile {
     }
 
     #[must_use]
-    pub const fn with_system_proxy_mode(mut self, mode: SystemProxyMode) -> Self {
+    pub fn with_system_proxy_mode(mut self, mode: SystemProxyMode) -> Self {
         self.system_proxy = mode;
         self
     }
@@ -255,11 +257,16 @@ impl DesktopSessionProfile {
 /// v2rayN offers the same three choices plus PAC, and the distinction between
 /// the last two matters: leaving a proxy alone and clearing it are different
 /// requests, which a single boolean could not express.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum SystemProxyMode {
     /// Point the host at this session's local proxies.
     #[default]
     Managed,
+    /// Point the host at a proxy auto-configuration file served at this URL.
+    ///
+    /// The URL is carried here rather than derived, because the server handing
+    /// out the script lives in the shell and picks its own loopback port.
+    Pac(String),
     /// Clear the host's proxy for the duration of the session.
     Cleared,
     /// Touch nothing, leaving whatever the user configured in place.
@@ -269,8 +276,8 @@ pub enum SystemProxyMode {
 impl SystemProxyMode {
     /// Whether the host's settings are replaced, and therefore snapshotted and
     /// restored on stop.
-    const fn writes_host_settings(self) -> bool {
-        matches!(self, Self::Managed | Self::Cleared)
+    const fn writes_host_settings(&self) -> bool {
+        matches!(self, Self::Managed | Self::Cleared | Self::Pac(_))
     }
 }
 
@@ -352,7 +359,11 @@ where
         }
         // Only the managed mode conflicts with TUN: clearing the host's proxy
         // while TUN carries the traffic is a coherent request, not a conflict.
-        if profile.system_proxy == SystemProxyMode::Managed && profile.tun.is_some() {
+        if matches!(
+            profile.system_proxy,
+            SystemProxyMode::Managed | SystemProxyMode::Pac(_)
+        ) && profile.tun.is_some()
+        {
             return Err(DesktopSessionError::ConflictingNetworkModes);
         }
 
@@ -384,8 +395,10 @@ where
         if profile.system_proxy.writes_host_settings() {
             // Clearing goes through the same path as managing, so the user's own
             // settings are snapshotted first and restored on stop either way.
-            let managed_state = match profile.system_proxy {
+            let managed_state = match &profile.system_proxy {
                 SystemProxyMode::Cleared => cleared_system_proxy(),
+                SystemProxyMode::Pac(url) => pac_system_proxy(url)
+                    .map_err(|source| DesktopSessionError::InvalidPacUrl { source })?,
                 SystemProxyMode::Managed | SystemProxyMode::Unchanged => {
                     managed_system_proxy(profile.socks, profile.http)
                 }
@@ -438,6 +451,20 @@ where
     }
 }
 
+/// A System Proxy state naming a PAC URL and nothing else.
+///
+/// The fixed endpoints stay off: a host given both a PAC file and a fixed proxy
+/// applies them in an order that differs per platform, so naming one is the only
+/// way the result is predictable.
+fn pac_system_proxy(url: &str) -> Result<SystemProxyState, SystemProxyModelError> {
+    Ok(SystemProxyState::new(
+        ProxySetting::disabled(),
+        ProxySetting::disabled(),
+        ProxySetting::disabled(),
+        PacSetting::new(true, Some(url.to_owned()))?,
+    ))
+}
+
 /// A System Proxy state with every protocol and PAC switched off.
 fn cleared_system_proxy() -> SystemProxyState {
     SystemProxyState::new(
@@ -473,6 +500,11 @@ where
 {
     #[error("desktop proxy session is already running")]
     AlreadyRunning,
+    #[error("the proxy auto-configuration URL is unusable")]
+    InvalidPacUrl {
+        #[source]
+        source: SystemProxyModelError,
+    },
     #[error("desktop proxy session is not running")]
     NotRunning,
     #[error("TUN and System Proxy cannot be enabled together")]

@@ -12,6 +12,7 @@ use magies_desktop_lib::app_settings::{
     parse_system_proxy_mode,
 };
 use magies_desktop_lib::logs::LogLevel;
+use magies_session::SystemProxyMode;
 
 #[test]
 fn a_fresh_install_uses_the_documented_defaults() {
@@ -243,6 +244,7 @@ fn every_system_proxy_mode_round_trips_through_storage() {
 
     for mode in [
         SystemProxyModeSetting::Managed,
+        SystemProxyModeSetting::Pac,
         SystemProxyModeSetting::Cleared,
         SystemProxyModeSetting::Unchanged,
     ] {
@@ -312,5 +314,20 @@ fn opening_twice_does_not_repeat_the_migration() {
     assert_eq!(
         second.load().unwrap().system_proxy_mode,
         SystemProxyModeSetting::Cleared
+    );
+}
+
+#[test]
+fn pac_without_a_served_url_falls_back_to_the_managed_proxy() {
+    // The URL belongs to the server handing out the script, which only the shell
+    // knows. Pointing the host at nothing would leave it with no proxy at all
+    // while the UI claimed PAC was on.
+    assert_eq!(
+        SystemProxyModeSetting::Pac.mode(None),
+        SystemProxyMode::Managed
+    );
+    assert_eq!(
+        SystemProxyModeSetting::Pac.mode(Some("http://127.0.0.1:1/proxy.pac")),
+        SystemProxyMode::Pac("http://127.0.0.1:1/proxy.pac".to_owned())
     );
 }
