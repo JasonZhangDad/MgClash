@@ -1832,6 +1832,40 @@ describe("App", () => {
     );
   });
 
+  it("never removes a node the group filter is hiding", async () => {
+    const group = {
+      id: "00000000-0000-0000-0000-000000000021",
+      name: "Asia",
+    };
+    const osaka = {
+      ...SELECTED.node!,
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Osaka",
+      groupId: group.id,
+    };
+    loadSessionStatusMock.mockResolvedValue({ ...SELECTED, node: null });
+    loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
+    loadNodeGroupsMock.mockResolvedValue([group]);
+    deleteNodeMock.mockResolvedValue({ ...SELECTED, node: null });
+    await render();
+    checkNode("Tokyo Edge");
+    checkNode("Osaka");
+    const filter = container.querySelector<HTMLSelectElement>(
+      "[aria-label='节点分组筛选']",
+    );
+    if (!filter) {
+      throw new Error("no group filter");
+    }
+
+    await act(async () => selectValue(group.id, filter));
+    await nodeMenuAction("Osaka", "移除所选");
+
+    // Tokyo Edge is checked but filtered out of view; acting on it would remove
+    // a node the user cannot see.
+    expect(deleteNodeMock).toHaveBeenCalledTimes(1);
+    expect(deleteNodeMock).toHaveBeenCalledWith(osaka.id);
+  });
+
   it("keeps subscription-owned nodes read-only", async () => {
     const managed = {
       ...SELECTED.node,

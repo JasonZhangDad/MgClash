@@ -1498,8 +1498,11 @@ export default function App() {
             };
             // Right-clicking inside the selection acts on all of it;
             // right-clicking outside is a fresh act, not an extension of it.
+            // The selection is intersected with what the filter shows, so a
+            // batch never touches a row the user cannot see.
+            const visible = new Set(visibleNodes.map((item) => item.id));
             const batch = checkedNodes.has(target.id)
-              ? [...checkedNodes]
+              ? [...checkedNodes].filter((id) => visible.has(id))
               : [target.id];
             const suffix = batch.length > 1 ? ` (${batch.length})` : "";
             return (
