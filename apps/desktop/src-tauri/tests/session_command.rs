@@ -238,6 +238,59 @@ fn refuses_to_import_a_list_while_connected() {
 }
 
 #[test]
+fn enabling_tun_replaces_system_proxy_rather_than_adding_to_it() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+
+    service.set_tun_enabled(true);
+
+    // DesktopSession refuses both at once, so a session that still asked for
+    // System Proxy would fail with ConflictingNetworkModes instead of starting.
+    match service.connect() {
+        Ok(status) => assert!(status.connected),
+        Err(error) => assert_eq!(
+            error.code(),
+            "tun_unavailable",
+            "TUN should either start or be refused for this platform, got {error}"
+        ),
+    }
+}
+
+#[test]
+fn tun_makes_the_matrix_rule_out_xray() {
+    let (mut service, _runtime, _fail_start) = service();
+    service
+        .create_node(trojan_draft("Frankfurt", 8443))
+        .unwrap();
+    service.set_core_preference(CorePreference::Fixed(CoreType::Xray));
+    assert_eq!(service.selected_core(), Ok(CoreType::Xray));
+
+    service.set_tun_enabled(true);
+
+    // Xray has no TUN inbound, so the same node now has no usable Core.
+    let error = service.selected_core().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "the selected Core cannot run this node: xray cannot provide TUN mode"
+    );
+}
+
+#[test]
+fn turning_tun_off_restores_the_previous_core_choice() {
+    let (mut service, _runtime, _fail_start) = service();
+    service
+        .create_node(trojan_draft("Frankfurt", 8443))
+        .unwrap();
+    service.set_core_preference(CorePreference::Fixed(CoreType::Xray));
+    service.set_tun_enabled(true);
+    assert!(service.selected_core().is_err());
+
+    service.set_tun_enabled(false);
+
+    assert_eq!(service.selected_core(), Ok(CoreType::Xray));
+}
+
+#[test]
 fn the_status_reports_sing_box_by_default() {
     let (mut service, _runtime, _fail_start) = service();
     assert_eq!(service.status().core, "sing-box");

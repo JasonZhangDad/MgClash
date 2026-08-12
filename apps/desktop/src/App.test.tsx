@@ -140,6 +140,7 @@ const DEFAULT_SETTINGS = {
   connectOnLaunch: false,
   corePreference: "auto" as const,
   launchAtLogin: false,
+  tunEnabled: false,
   logLevel: "info" as const,
 };
 
@@ -720,6 +721,36 @@ describe("App", () => {
       connectOnLaunch: true,
     });
     expect(createField("启动时自动连接").checked).toBe(true);
+  });
+
+  it("offers TUN and explains that it replaces the system proxy", async () => {
+    loadPlatformSummaryMock.mockResolvedValue({
+      artifactIdentifier: "linux-x86_64",
+      tunAvailability: "requiresElevation",
+    });
+    await render();
+
+    const toggle = createField("启用 TUN");
+    expect(toggle.disabled).toBe(false);
+
+    await act(async () => toggle.click());
+
+    expect(saveAppSettingsMock).toHaveBeenCalledWith({
+      ...DEFAULT_SETTINGS,
+      tunEnabled: true,
+    });
+    expect(container.textContent).toContain("TUN 与系统代理互斥");
+  });
+
+  it("keeps TUN unavailable on an unsigned macOS build", async () => {
+    loadPlatformSummaryMock.mockResolvedValue({
+      artifactIdentifier: "macos-aarch64",
+      tunAvailability: "unavailableInUnsignedBuild",
+    });
+    await render();
+
+    // The entitlement is missing, so the switch must not look usable.
+    expect(createField("启用 TUN").disabled).toBe(true);
   });
 
   it("saves a Core choice and shows the matrix caveat", async () => {

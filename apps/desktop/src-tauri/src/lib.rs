@@ -937,9 +937,11 @@ fn set_app_settings(
     *lock(&state.settings) = settings;
     // The running service keeps its own copy so status and connect do not have
     // to reach back into the settings on every call.
-    state
-        .service()
-        .set_core_preference(settings.core_preference.preference());
+    {
+        let mut service = state.service();
+        service.set_core_preference(settings.core_preference.preference());
+        service.set_tun_enabled(settings.tun_enabled);
+    }
     tracing::info!("application settings updated");
     Ok(settings)
 }
@@ -1244,7 +1246,11 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     )?));
     let settings_store = SqliteAppSettingsStore::open(&node_database)?;
     let settings = settings_store.load()?;
-    lock(&service).set_core_preference(settings.core_preference.preference());
+    {
+        let mut service = lock(&service);
+        service.set_core_preference(settings.core_preference.preference());
+        service.set_tun_enabled(settings.tun_enabled);
+    }
     let initial_tray_model = {
         let (service, traffic) = (lock(&service), lock(&traffic).snapshot());
         menu_model(&service.status(), &service.nodes()?, traffic)
