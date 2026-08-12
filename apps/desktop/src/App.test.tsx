@@ -12,6 +12,7 @@ const importNodeMock = vi.hoisted(() => vi.fn());
 const selectNodeMock = vi.hoisted(() => vi.fn());
 const deleteNodeMock = vi.hoisted(() => vi.fn());
 const editNodeMock = vi.hoisted(() => vi.fn());
+const moveNodeMock = vi.hoisted(() => vi.fn());
 const testNodeMock = vi.hoisted(() => vi.fn());
 const testAllNodesMock = vi.hoisted(() => vi.fn());
 const testUrlMock = vi.hoisted(() => vi.fn());
@@ -49,6 +50,7 @@ vi.mock("./session", async () => {
     loadNodes: loadNodesMock,
     loadSessionStatus: loadSessionStatusMock,
     loadTraffic: loadTrafficMock,
+    moveNode: moveNodeMock,
     loadSystemProxyStartupStatus: loadSystemProxyStartupStatusMock,
     recoverSystemProxy: recoverSystemProxyMock,
     selectNode: selectNodeMock,
@@ -140,6 +142,7 @@ describe("App", () => {
     selectNodeMock.mockReset();
     deleteNodeMock.mockReset();
     editNodeMock.mockReset();
+    moveNodeMock.mockReset();
     testNodeMock.mockReset();
     testAllNodesMock.mockReset();
     testUrlMock.mockReset();
@@ -565,6 +568,40 @@ describe("App", () => {
       container.querySelector("[aria-label='节点列表']")?.textContent,
     ).toContain("Tokyo 2");
     expect(container.textContent).toContain("new.example.com:443");
+  });
+
+  it("moves nodes with compact ordering controls", async () => {
+    const osaka = {
+      ...SELECTED.node!,
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Osaka",
+      port: 9000,
+      server: "osaka.example.com",
+    };
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
+    moveNodeMock.mockResolvedValue([osaka, SELECTED.node]);
+    await render();
+
+    expect(
+      container.querySelector<HTMLButtonElement>(
+        "[aria-label='上移 Tokyo Edge']",
+      )?.disabled,
+    ).toBe(true);
+    const moveDown = container.querySelector<HTMLButtonElement>(
+      "[aria-label='下移 Tokyo Edge']",
+    );
+    if (!moveDown) {
+      throw new Error("node move button is missing");
+    }
+    await act(async () => moveDown.click());
+
+    expect(moveNodeMock).toHaveBeenCalledWith(SELECTED.node?.id, "down");
+    const rows = [...container.querySelectorAll("[aria-label='节点列表'] tbody tr")];
+    expect(rows.map((row) => row.textContent)).toEqual([
+      expect.stringContaining("Osaka"),
+      expect.stringContaining("Tokyo Edge"),
+    ]);
   });
 
   it("tests one node and shows its TCP latency", async () => {

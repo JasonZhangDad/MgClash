@@ -14,6 +14,7 @@ import {
   loadSessionStatus,
   loadSystemProxyStartupStatus,
   loadTraffic,
+  moveNode,
   recoverSystemProxy,
   selectNode,
   setDnsSettings,
@@ -504,6 +505,18 @@ export default function App() {
       setBusy(false);
     }
   }, [editingNodeId, nodeName, nodePort, nodeServer, resetNodeForm]);
+
+  const onMoveNode = useCallback(async (id: string, direction: "down" | "up") => {
+    setBusy(true);
+    setError(null);
+    try {
+      setNodes(await moveNode(id, direction));
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
 
   const onTestNode = useCallback(async (id: string) => {
     setError(null);
@@ -1282,7 +1295,7 @@ export default function App() {
               </tr>
             </thead>
             <tbody>
-              {nodes.map((candidate) => {
+              {nodes.map((candidate, index) => {
                 const selected = candidate.id === node?.id;
                 const testResult = nodeTests[candidate.id];
                 let latency =
@@ -1307,6 +1320,26 @@ export default function App() {
                     <td>{`${candidate.server}:${candidate.port}`}</td>
                     <td>{latency}</td>
                     <td className="node-actions">
+                      <button
+                        type="button"
+                        aria-label={`上移 ${candidate.name}`}
+                        disabled={busy || nodeTestInProgress || index === 0}
+                        onClick={() => void onMoveNode(candidate.id, "up")}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`下移 ${candidate.name}`}
+                        disabled={
+                          busy ||
+                          nodeTestInProgress ||
+                          index === nodes.length - 1
+                        }
+                        onClick={() => void onMoveNode(candidate.id, "down")}
+                      >
+                        ↓
+                      </button>
                       <button
                         type="button"
                         aria-label={`测试 ${candidate.name}`}

@@ -14,12 +14,15 @@ use magies_desktop_lib::route_settings::{
     DesktopRouteOutbound, RouteRuleKind, RouteRuleSetting, RouteSettings, SqliteRouteSettingsStore,
 };
 use magies_desktop_lib::routing_mode::SqliteRoutingModeStore;
-use magies_desktop_lib::session::{SessionCommandError, SessionDefaults, SessionService};
+use magies_desktop_lib::session::{
+    NodeMoveDirection, NodeStores, SessionCommandError, SessionDefaults, SessionService,
+};
 use magies_domain::{CredentialRef, ProxyProtocol, Subscription, TimestampMillis};
 use magies_platform::system_proxy::SystemProxyState;
 use magies_profiles::{
     CredentialCodec, LocalHttpProfile, LocalSocksProfile, SqliteManualNodeStore,
-    SqliteSubscriptionStore, SubscriptionContentParser, SubscriptionUpdate, SubscriptionValidators,
+    SqliteNodeOrderStore, SqliteSubscriptionStore, SubscriptionContentParser, SubscriptionUpdate,
+    SubscriptionValidators,
 };
 use magies_routing::RoutingMode;
 use magies_session::{
@@ -124,6 +127,44 @@ fn edits_a_manual_node_while_preserving_its_protocol_and_credential() {
     assert_eq!(edited.port, 443);
     assert_eq!(edited.protocol, ProxyProtocol::Shadowsocks);
     assert_eq!(service.node(original.id).unwrap(), edited);
+}
+
+#[test]
+fn reorders_manual_and_subscription_nodes_together() {
+    let (mut service, managed_id, _runtime) = service_with_subscription_node();
+    let manual_id = service
+        .import_node(SHADOWSOCKS_LINK)
+        .unwrap()
+        .node
+        .unwrap()
+        .id;
+    assert_eq!(
+        service
+            .nodes()
+            .unwrap()
+            .into_iter()
+            .map(|node| node.id)
+            .collect::<Vec<_>>(),
+        vec![manual_id, managed_id]
+    );
+
+    let moved = service
+        .move_node(managed_id, NodeMoveDirection::Up)
+        .unwrap();
+
+    assert_eq!(
+        moved.into_iter().map(|node| node.id).collect::<Vec<_>>(),
+        vec![managed_id, manual_id]
+    );
+    assert_eq!(
+        service
+            .move_node(managed_id, NodeMoveDirection::Up)
+            .unwrap()
+            .into_iter()
+            .map(|node| node.id)
+            .collect::<Vec<_>>(),
+        vec![managed_id, manual_id]
+    );
 }
 
 #[test]
@@ -526,8 +567,11 @@ fn surfaces_a_failing_core_start_as_a_session_error() {
             runtime.path(),
         ),
         SessionDefaults::v01(),
-        SqliteManualNodeStore::open_in_memory().unwrap(),
-        SqliteSubscriptionStore::open_in_memory().unwrap(),
+        NodeStores::new(
+            SqliteManualNodeStore::open_in_memory().unwrap(),
+            SqliteSubscriptionStore::open_in_memory().unwrap(),
+            SqliteNodeOrderStore::open_in_memory().unwrap(),
+        ),
         SqliteRoutingModeStore::open_in_memory().unwrap(),
         SqliteRouteSettingsStore::open_in_memory().unwrap(),
         SqliteDnsSettingsStore::open_in_memory().unwrap(),
@@ -572,8 +616,11 @@ fn service_with_events(
             runtime.path(),
         ),
         SessionDefaults::v01(),
-        SqliteManualNodeStore::open_in_memory().unwrap(),
-        SqliteSubscriptionStore::open_in_memory().unwrap(),
+        NodeStores::new(
+            SqliteManualNodeStore::open_in_memory().unwrap(),
+            SqliteSubscriptionStore::open_in_memory().unwrap(),
+            SqliteNodeOrderStore::open_in_memory().unwrap(),
+        ),
         SqliteRoutingModeStore::open_in_memory().unwrap(),
         SqliteRouteSettingsStore::open_in_memory().unwrap(),
         SqliteDnsSettingsStore::open_in_memory().unwrap(),
@@ -630,8 +677,11 @@ fn service_with_subscription_node() -> (TestService, Uuid, RuntimeDirectory) {
             runtime.path(),
         ),
         SessionDefaults::v01(),
-        SqliteManualNodeStore::open(&database).unwrap(),
-        subscriptions,
+        NodeStores::new(
+            SqliteManualNodeStore::open(&database).unwrap(),
+            subscriptions,
+            SqliteNodeOrderStore::open(&database).unwrap(),
+        ),
         SqliteRoutingModeStore::open(&database).unwrap(),
         SqliteRouteSettingsStore::open(&database).unwrap(),
         SqliteDnsSettingsStore::open(&database).unwrap(),

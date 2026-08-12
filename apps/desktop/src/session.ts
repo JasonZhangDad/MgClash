@@ -24,6 +24,8 @@ export interface NodeEdit {
   server: string;
 }
 
+export type NodeMoveDirection = "down" | "up";
+
 export type NodeTestStatus = "failed" | "success" | "timeout";
 
 export interface NodeTestResult {
@@ -191,6 +193,13 @@ export function selectNode(id: string): Promise<SessionStatus> {
 
 export function editNode(id: string, edit: NodeEdit): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_edit_node", { id, ...edit });
+}
+
+export function moveNode(
+  id: string,
+  direction: NodeMoveDirection,
+): Promise<NodeSummary[]> {
+  return invoke<NodeSummary[]>("session_move_node", { direction, id });
 }
 
 export function deleteNode(id: string): Promise<SessionStatus> {

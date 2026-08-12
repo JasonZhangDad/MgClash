@@ -7,6 +7,7 @@ mod hysteria2;
 mod local_proxy_config;
 mod manual_node_store;
 mod node_dedup;
+mod node_order_store;
 mod shadowsocks;
 mod share_link;
 mod sing_box_outbound;
@@ -39,6 +40,7 @@ pub use node_dedup::{
     CredentialIdentity, NodeDedupCandidate, NodeDedupResult, NodeDedupSummary, NodeDeduplicator,
     NodeFingerprint,
 };
+pub use node_order_store::{NodeOrderStoreError, SqliteNodeOrderStore};
 pub use shadowsocks::{
     ParsedShadowsocksNode, ShadowsocksCredential, ShadowsocksParseError, ShadowsocksParser,
 };

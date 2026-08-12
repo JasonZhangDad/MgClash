@@ -24,7 +24,7 @@ use chrono::Local;
 use magies_domain::TimestampMillis;
 use magies_platform::network_path::NetworkPathReader;
 use magies_platform::{TargetPlatform, TunAvailability};
-use magies_profiles::{SqliteManualNodeStore, SqliteSubscriptionStore};
+use magies_profiles::{SqliteManualNodeStore, SqliteNodeOrderStore, SqliteSubscriptionStore};
 use magies_session::{DesktopSession, NetworkWatcher, TcpHealthProbe};
 use magies_storage::PlatformSecretStore;
 use serde::Serialize;
@@ -38,7 +38,10 @@ use crate::node_latency::{TcpLatencyError, probe_tcp};
 use crate::platform_proxy::{PlatformProxyControl, PlatformProxyError, SystemProxyStartupStatus};
 use crate::route_settings::{RouteSettings, SqliteRouteSettingsStore};
 use crate::routing_mode::{SqliteRoutingModeStore, parse_routing_mode};
-use crate::session::{SessionCommandError, SessionDefaults, SessionService, SessionStatus};
+use crate::session::{
+    NodeMoveDirection, NodeStores, SessionCommandError, SessionDefaults, SessionService,
+    SessionStatus,
+};
 use crate::subscriptions::{
     DesktopSubscriptionController, DesktopSubscriptionError, DesktopSubscriptionSummary,
 };
@@ -758,6 +761,23 @@ fn session_edit_node(
     clippy::needless_pass_by_value,
     reason = "Tauri commands receive State and deserialized arguments by value"
 )]
+fn session_move_node(
+    id: String,
+    direction: NodeMoveDirection,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::session::NodeSummary>, CommandError> {
+    let id = parse_node_id(&id)?;
+    state
+        .service()
+        .move_node(id, direction)
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
 fn session_delete_node(
     id: String,
     state: State<'_, AppState>,
@@ -1037,8 +1057,11 @@ pub fn run() {
             let service = Arc::new(Mutex::new(SessionService::new(
                 session,
                 defaults,
-                nodes,
-                SqliteSubscriptionStore::open(&node_database)?,
+                NodeStores::new(
+                    nodes,
+                    SqliteSubscriptionStore::open(&node_database)?,
+                    SqliteNodeOrderStore::open(&node_database)?,
+                ),
                 SqliteRoutingModeStore::open(&node_database)?,
                 SqliteRouteSettingsStore::open(&node_database)?,
                 SqliteDnsSettingsStore::open(&node_database)?,
@@ -1088,6 +1111,7 @@ pub fn run() {
             session_traffic,
             session_select_node,
             session_edit_node,
+            session_move_node,
             session_delete_node,
             session_connect,
             session_disconnect,
