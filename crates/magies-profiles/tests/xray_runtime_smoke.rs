@@ -38,6 +38,7 @@ fn node() -> (ProxyNode, StoredNodeCredential) {
             allow_insecure: false,
             alpn: vec!["h2".to_owned()],
             fingerprint: Some("chrome".to_owned()),
+            pinned_sha256: None,
         }),
         credential: ManualCredentialDraft::Vless {
             user_id: Uuid::parse_str(USER_ID).unwrap(),

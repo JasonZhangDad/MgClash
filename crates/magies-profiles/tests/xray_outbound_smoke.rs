@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use magies_domain::{CredentialRef, ProxyNode, TlsConfig, TransportConfig};
+use magies_domain::{CertificatePin, CredentialRef, ProxyNode, TlsConfig, TransportConfig};
 use magies_profiles::{
     ManualCredentialDraft, ManualNodeDraft, StoredNodeCredential, VmessSecurity,
     XrayOutboundConfigGenerator,
@@ -137,6 +137,7 @@ fn official_xray_accepts_every_supported_outbound() {
                     allow_insecure: false,
                     alpn: Vec::new(),
                     fingerprint: None,
+                    pinned_sha256: None,
                 }),
             ),
         ),
@@ -179,6 +180,7 @@ fn official_xray_accepts_the_stream_transports() {
                     allow_insecure: false,
                     alpn: vec!["h2".to_owned()],
                     fingerprint: Some("chrome".to_owned()),
+                    pinned_sha256: None,
                 }),
             ),
         ),
@@ -293,10 +295,88 @@ fn official_xray_accepts_tls_without_an_insecure_field() {
             allow_insecure: false,
             alpn: vec!["h2".to_owned()],
             fingerprint: Some("chrome".to_owned()),
+            pinned_sha256: None,
         }),
     );
 
     let (accepted, output) = check(&config_with(&generated), "secure-tls");
 
     assert!(accepted, "Xray rejected the secure TLS outbound:\n{output}");
+}
+
+/// The pin the generator emits has to be the encoding Xray reads.
+///
+/// Xray validates the digest while building the outbound, so `run -test` is
+/// enough to tell hex from Base64 — the wrong encoding is refused outright.
+#[test]
+#[ignore = "requires MAGIES_XRAY_BIN pointing to an official Xray build"]
+fn official_xray_accepts_the_generated_certificate_pin() {
+    const DIGEST: &str = "6ff212bbab490b686b06209c6074865f9340f4c0f9c4aa7d34d568c2a2cebe73";
+
+    let generated = outbound(
+        ManualCredentialDraft::Vless {
+            user_id: user_id(),
+            flow: None,
+        },
+        Some(TransportConfig::Tcp),
+        Some(TlsConfig::Tls {
+            server_name: Some("edge.example.com".to_owned()),
+            allow_insecure: false,
+            alpn: Vec::new(),
+            fingerprint: None,
+            pinned_sha256: Some(CertificatePin::new(DIGEST).unwrap()),
+        }),
+    );
+
+    assert_eq!(
+        generated["streamSettings"]["tlsSettings"]["pinnedPeerCertSha256"], DIGEST,
+        "the generator stopped emitting the pin as a hex string"
+    );
+    let (accepted, output) = check(&config_with(&generated), "pinned-certificate");
+
+    assert!(accepted, "Xray rejected the generated pin:\n{output}");
+}
+
+/// Guards the encodings the generator deliberately does not emit.
+///
+/// If a later Xray starts accepting Base64 or an array, this fails and the
+/// normalization in `CertificatePin` can be revisited.
+#[test]
+#[ignore = "requires MAGIES_XRAY_BIN pointing to an official Xray build"]
+fn official_xray_rejects_every_other_pin_encoding() {
+    for (name, pin) in [
+        (
+            "base64",
+            json!("b/ISu6tJC2hrBiCcYHSGX5NA9MD5xKp9NNVowqLOvnM="),
+        ),
+        (
+            "array",
+            json!(["6ff212bbab490b686b06209c6074865f9340f4c0f9c4aa7d34d568c2a2cebe73"]),
+        ),
+    ] {
+        let generated = json!({
+            "protocol": "vless",
+            "tag": "proxy",
+            "settings": { "vnext": [{
+                "address": "edge.example.com",
+                "port": 443,
+                "users": [{ "id": USER_ID, "encryption": "none" }]
+            }]},
+            "streamSettings": {
+                "network": "tcp",
+                "security": "tls",
+                "tlsSettings": {
+                    "serverName": "edge.example.com",
+                    "pinnedPeerCertSha256": pin
+                }
+            }
+        });
+
+        let (accepted, output) = check(&config_with(&generated), name);
+
+        assert!(
+            !accepted,
+            "Xray accepted the {name} pin encoding, so the generator can emit it:\n{output}"
+        );
+    }
 }

@@ -1,4 +1,4 @@
-use magies_domain::{CredentialRef, ProxyProtocol, TlsConfig};
+use magies_domain::{CertificatePin, CredentialRef, ProxyProtocol, TlsConfig};
 use magies_profiles::{
     Hysteria2ObfuscationMethod, Hysteria2ParseError, Hysteria2Parser, VlessParseError,
 };
@@ -38,6 +38,7 @@ fn parses_default_port_tls_and_materializes_intrinsic_quic_node() {
             allow_insecure: false,
             alpn: Vec::new(),
             fingerprint: None,
+            pinned_sha256: None,
         })
     );
 
@@ -73,6 +74,7 @@ fn parses_userpass_ipv6_and_v2rayn_tls_fields() {
             allow_insecure: true,
             alpn: vec!["h3".to_owned(), "h2".to_owned()],
             fingerprint: Some("chrome".to_owned()),
+            pinned_sha256: None,
         })
     );
 }
@@ -181,13 +183,11 @@ fn validates_gecko_packet_sizes() {
 }
 
 #[test]
-fn rejects_unrepresentable_port_hopping_certificate_pin_and_ech() {
+fn rejects_unrepresentable_port_hopping_and_ech() {
     let authority_hopping = Hysteria2Parser
         .parse("hysteria2://password@example.com:443,8443-8450")
         .unwrap_err();
     let mport = parse_error("?mport=443%2C8443-8450");
-    let pin = parse_error("?pinSHA256=AA%3ABB%3ACC");
-    let v2rayn_pin = parse_error("?pcs=AA%3ABB%3ACC");
     let ech = parse_error("?ech=ZWNoLWNvbmZpZw%3D%3D");
 
     assert!(matches!(
@@ -195,15 +195,45 @@ fn rejects_unrepresentable_port_hopping_certificate_pin_and_ech() {
         Hysteria2ParseError::UnsupportedPortHopping
     ));
     assert!(matches!(mport, Hysteria2ParseError::UnsupportedPortHopping));
-    assert!(matches!(
-        pin,
-        Hysteria2ParseError::UnsupportedCertificatePin
-    ));
-    assert!(matches!(
-        v2rayn_pin,
-        Hysteria2ParseError::UnsupportedCertificatePin
-    ));
     assert!(matches!(ech, Hysteria2ParseError::UnsupportedEch));
+}
+
+#[test]
+fn keeps_the_certificate_pin_from_either_spelling() {
+    const DIGEST: &str = "6ff212bbab490b686b06209c6074865f9340f4c0f9c4aa7d34d568c2a2cebe73";
+
+    for parameter in [
+        // The Hysteria2 spelling, printed with colons as share links carry it.
+        "?pinSHA256=6F%3AF2%3A12%3ABB%3AAB%3A49%3A0B%3A68%3A6B%3A06%3A20%3A9C%3A60%3A74%3A86%3A5F%3A93%3A40%3AF4%3AC0%3AF9%3AC4%3AAA%3A7D%3A34%3AD5%3A68%3AC2%3AA2%3ACE%3ABE%3A73",
+        // The abbreviation v2rayN writes.
+        &format!("?pcs={DIGEST}"),
+    ] {
+        let node = Hysteria2Parser
+            .parse(&format!("hysteria2://password@example.com:443{parameter}"))
+            .unwrap();
+
+        let Some(TlsConfig::Tls { pinned_sha256, .. }) = node.tls() else {
+            panic!("Hysteria2 always carries plain TLS");
+        };
+        assert_eq!(
+            pinned_sha256.as_ref().map(CertificatePin::as_str),
+            Some(DIGEST)
+        );
+    }
+}
+
+#[test]
+fn rejects_a_pin_that_is_not_a_digest_and_two_that_disagree() {
+    assert!(matches!(
+        parse_error("?pinSHA256=AA%3ABB%3ACC"),
+        Hysteria2ParseError::InvalidCertificatePin { .. }
+    ));
+
+    let disagreeing = "?pinSHA256=6ff212bbab490b686b06209c6074865f9340f4c0f9c4aa7d34d568c2a2cebe73&pcs=0000000000000000000000000000000000000000000000000000000000000000";
+    assert!(matches!(
+        parse_error(disagreeing),
+        Hysteria2ParseError::ConflictingCertificatePins
+    ));
 }
 
 #[test]

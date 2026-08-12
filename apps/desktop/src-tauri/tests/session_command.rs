@@ -1361,3 +1361,42 @@ impl SystemProxySessionControl for FakeProxy {
         Ok(())
     }
 }
+
+#[test]
+fn a_pinned_hysteria2_node_imports_but_refuses_to_connect() {
+    let (mut service, _runtime, _fail_start) = service();
+    service
+        .import_node(
+            "hysteria2://password@edge.example.com:5555?sni=edge.example.com\
+             &pinSHA256=6ff212bbab490b686b06209c6074865f9340f4c0f9c4aa7d34d568c2a2cebe73#Pinned",
+        )
+        .unwrap();
+    let id = service.nodes().unwrap()[0].id;
+    service.select_node(id).unwrap();
+
+    // The table has to show the pin: it is why this node behaves differently.
+    assert_eq!(service.nodes().unwrap()[0].tls, Some("tls+pin"));
+    // sing-box has Hysteria2 but no digest verification; Xray has the digest
+    // but no Hysteria2. The refusal names the pin rather than the protocol.
+    let error = service.connect().unwrap_err();
+    let message = format!("{}", ErrorChain(&error));
+    assert!(
+        message.contains("pinned certificate"),
+        "the refusal must name the pin: {message}"
+    );
+}
+
+/// Renders an error with its source chain, the way the Tauri layer reports it.
+struct ErrorChain<'a>(&'a dyn std::error::Error);
+
+impl std::fmt::Display for ErrorChain<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.0)?;
+        let mut source = self.0.source();
+        while let Some(error) = source {
+            write!(formatter, ": {error}")?;
+            source = error.source();
+        }
+        Ok(())
+    }
+}

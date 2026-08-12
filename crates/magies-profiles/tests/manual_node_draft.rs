@@ -66,6 +66,7 @@ fn plain_tls() -> TlsConfig {
         allow_insecure: false,
         alpn: vec!["h3".to_owned()],
         fingerprint: None,
+        pinned_sha256: None,
     }
 }
 

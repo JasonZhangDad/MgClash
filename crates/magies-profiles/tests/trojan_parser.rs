@@ -33,6 +33,7 @@ fn parses_default_tcp_tls_and_materializes_after_secret_storage() {
             allow_insecure: false,
             alpn: Vec::new(),
             fingerprint: None,
+            pinned_sha256: None,
         })
     );
 
@@ -75,6 +76,7 @@ fn parses_websocket_tls_and_v2rayn_insecure_aliases() {
             allow_insecure: true,
             alpn: vec!["h2".to_owned(), "http/1.1".to_owned()],
             fingerprint: Some("chrome".to_owned()),
+            pinned_sha256: None,
         })
     );
 }

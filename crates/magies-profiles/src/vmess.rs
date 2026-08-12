@@ -455,6 +455,7 @@ fn parse_legacy_tls(
             allow_insecure: parse_legacy_boolean(insecure, "insecure")?,
             alpn: parse_legacy_alpn(alpn)?,
             fingerprint: fingerprint.filter(|value| !value.is_empty()),
+            pinned_sha256: None,
         })),
         value => Err(VmessParseError::UnsupportedSecurity {
             value: value.to_owned(),

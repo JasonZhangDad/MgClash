@@ -171,6 +171,7 @@ fn apply_tls(tls: &TlsConfig, stream: &mut Value) -> Result<(), XrayOutboundErro
             allow_insecure,
             alpn,
             fingerprint,
+            pinned_sha256,
         } => {
             // Xray 26.3.27 removed `allowInsecure`, pointing users at
             // `pinnedPeerCertSha256` instead. Emitting it makes Xray refuse to
@@ -181,6 +182,11 @@ fn apply_tls(tls: &TlsConfig, stream: &mut Value) -> Result<(), XrayOutboundErro
             }
             stream["security"] = Value::String("tls".to_owned());
             let mut settings = json!({});
+            if let Some(pin) = pinned_sha256 {
+                // Measured against Xray 26.3.27: a hex *string*. An array is
+                // rejected as the wrong type, Base64 as the wrong encoding.
+                settings["pinnedPeerCertSha256"] = Value::String(pin.as_str().to_owned());
+            }
             if let Some(server_name) = server_name {
                 settings["serverName"] = Value::String(server_name.clone());
             }

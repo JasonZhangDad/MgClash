@@ -2,8 +2,8 @@ use std::fmt::{Debug, Formatter};
 use std::num::NonZeroU16;
 
 use magies_domain::{
-    CredentialRef, NodeModelError, NodeName, ProxyNode, ProxyProtocol, ServerAddress, TlsConfig,
-    TransportConfig,
+    CertificatePin, CredentialRef, NodeModelError, NodeName, ProxyNode, ProxyProtocol,
+    ServerAddress, TlsConfig, TransportConfig,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -57,6 +57,7 @@ impl Hysteria2Parser {
         let allow_insecure = parse_insecure(&mut parameters)?;
         let alpn = parse_alpn(&mut parameters).map_err(invalid_uri)?;
         let fingerprint = parameters.take_non_empty("fp").map_err(invalid_uri)?;
+        let pinned_sha256 = parse_certificate_pin(&mut parameters)?;
         let obfuscation = parse_obfuscation(&mut parameters)?;
         parameters.finish().map_err(invalid_uri)?;
 
@@ -88,6 +89,7 @@ impl Hysteria2Parser {
                 allow_insecure,
                 alpn,
                 fingerprint,
+                pinned_sha256,
             },
         })
     }
@@ -257,8 +259,10 @@ pub enum Hysteria2ParseError {
     InvalidPacketSizeRange,
     #[error("Hysteria2 port hopping is not supported by the shared node model")]
     UnsupportedPortHopping,
-    #[error("Hysteria2 certificate pinning is not supported by the shared TLS model")]
-    UnsupportedCertificatePin,
+    #[error("certificate pin {value:?} is not a SHA-256 digest")]
+    InvalidCertificatePin { value: String },
+    #[error("Hysteria2 link pins two different certificate digests")]
+    ConflictingCertificatePins,
     #[error("Hysteria2 ECH is not supported by the shared TLS model")]
     UnsupportedEch,
     #[error("invalid parsed Hysteria2 node")]
@@ -370,13 +374,32 @@ fn reject_unrepresentable_parameters(
     if parameters.take("mport").is_some() {
         return Err(Hysteria2ParseError::UnsupportedPortHopping);
     }
-    if parameters.take("pinSHA256").is_some() || parameters.take("pcs").is_some() {
-        return Err(Hysteria2ParseError::UnsupportedCertificatePin);
-    }
     if parameters.take("ech").is_some() {
         return Err(Hysteria2ParseError::UnsupportedEch);
     }
     Ok(())
+}
+
+/// Reads the digest from either spelling of the pin parameter.
+///
+/// `pinSHA256` is the Hysteria2 spelling; `pcs` is the abbreviation v2rayN
+/// writes. A link carrying both must agree, because keeping one and discarding
+/// the other would pin against a digest the user did not choose.
+fn parse_certificate_pin(
+    parameters: &mut QueryParameters,
+) -> Result<Option<CertificatePin>, Hysteria2ParseError> {
+    let mut pin = None;
+    for name in ["pinSHA256", "pcs"] {
+        let Some(value) = parameters.take(name) else {
+            continue;
+        };
+        let parsed = CertificatePin::new(&value)
+            .map_err(|_| Hysteria2ParseError::InvalidCertificatePin { value })?;
+        if pin.get_or_insert(parsed.clone()) != &parsed {
+            return Err(Hysteria2ParseError::ConflictingCertificatePins);
+        }
+    }
+    Ok(pin)
 }
 
 fn uses_authority_port_hopping(value: &str) -> bool {
