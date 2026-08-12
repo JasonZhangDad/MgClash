@@ -12,6 +12,8 @@ const loadNodeGroupsMock = vi.hoisted(() => vi.fn());
 const importNodeMock = vi.hoisted(() => vi.fn());
 const createNodeMock = vi.hoisted(() => vi.fn());
 const importNodesMock = vi.hoisted(() => vi.fn());
+const loadLogsMock = vi.hoisted(() => vi.fn());
+const clearLogsMock = vi.hoisted(() => vi.fn());
 const selectNodeMock = vi.hoisted(() => vi.fn());
 const deleteNodeMock = vi.hoisted(() => vi.fn());
 const editNodeMock = vi.hoisted(() => vi.fn());
@@ -43,8 +45,10 @@ vi.mock("./platform", () => ({
 vi.mock("./session", async () => {
   const actual = await vi.importActual<typeof import("./session")>("./session");
   return {
+    clearLogs: clearLogsMock,
     connectSession: connectSessionMock,
     createNode: createNodeMock,
+    loadLogs: loadLogsMock,
     disconnectSession: disconnectSessionMock,
     dismissSystemProxyRecovery: dismissSystemProxyRecoveryMock,
     exportDiagnostics: exportDiagnosticsMock,
@@ -168,6 +172,8 @@ describe("App", () => {
     loadSystemProxyStartupStatusMock.mockReset();
     recoverSystemProxyMock.mockReset();
     dismissSystemProxyRecoveryMock.mockReset();
+    loadLogsMock.mockReset();
+    clearLogsMock.mockReset();
     loadSubscriptionsMock.mockReset();
     createSubscriptionMock.mockReset();
     updateSubscriptionMock.mockReset();
@@ -189,6 +195,8 @@ describe("App", () => {
     });
     loadNodesMock.mockResolvedValue([]);
     loadNodeGroupsMock.mockResolvedValue([]);
+    loadLogsMock.mockResolvedValue([]);
+    clearLogsMock.mockResolvedValue(undefined);
     loadSystemProxyStartupStatusMock.mockResolvedValue("clean");
     recoverSystemProxyMock.mockResolvedValue("clean");
     dismissSystemProxyRecoveryMock.mockResolvedValue("clean");
@@ -669,6 +677,68 @@ describe("App", () => {
       "the text is neither sharing links nor a Base64 node list",
     );
     expect(container.querySelector("[aria-label='批量导入结果']")).toBeNull();
+  });
+
+  const LOG_ENTRIES = [
+    {
+      level: "info" as const,
+      message: "session connected",
+      source: "app" as const,
+      timestampMs: 1_760_000_000_000,
+    },
+    {
+      level: "error" as const,
+      message: "outbound dial failed",
+      source: "core" as const,
+      timestampMs: 1_760_000_001_000,
+    },
+  ];
+
+  it("shows log entries with their source and level", async () => {
+    loadLogsMock.mockResolvedValue(LOG_ENTRIES);
+    await render();
+
+    const list = container.querySelector("[aria-label='日志列表']");
+    expect(list?.textContent).toContain("session connected");
+    expect(list?.textContent).toContain("outbound dial failed");
+    expect(list?.textContent).toContain("Core");
+    expect(list?.textContent).toContain("应用");
+    expect(loadLogsMock).toHaveBeenCalledWith("info", null);
+  });
+
+  it("shows a placeholder when there are no logs", async () => {
+    loadLogsMock.mockResolvedValue([]);
+    await render();
+
+    expect(container.querySelector("[aria-label='日志列表']")).toBeNull();
+    expect(container.textContent).toContain("暂无日志");
+  });
+
+  it("reloads logs when the level or source filter changes", async () => {
+    loadLogsMock.mockResolvedValue(LOG_ENTRIES);
+    await render();
+    loadLogsMock.mockClear();
+
+    await act(async () => {
+      selectValue("error", createSelect("日志级别"));
+    });
+    expect(loadLogsMock).toHaveBeenLastCalledWith("error", null);
+
+    await act(async () => {
+      selectValue("core", createSelect("日志来源"));
+    });
+    expect(loadLogsMock).toHaveBeenLastCalledWith("error", "core");
+  });
+
+  it("clears the log buffer", async () => {
+    loadLogsMock.mockResolvedValue(LOG_ENTRIES);
+    await render();
+    expect(container.querySelector("[aria-label='日志列表']")).not.toBeNull();
+
+    await act(async () => button("清空日志").click());
+
+    expect(clearLogsMock).toHaveBeenCalled();
+    expect(container.textContent).toContain("暂无日志");
   });
 
   it("creates a node from the manual form", async () => {

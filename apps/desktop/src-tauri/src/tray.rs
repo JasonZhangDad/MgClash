@@ -153,7 +153,7 @@ impl TrayUi {
 
     pub fn show_action_failure(&self) {
         if let Err(error) = self.status.set_text("操作失败 · 请打开 MgClash 查看") {
-            eprintln!("tray failure status update failed: {error}");
+            tracing::warn!("tray failure status update failed: {error}");
         }
     }
 }

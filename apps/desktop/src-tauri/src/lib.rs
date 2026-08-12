@@ -3,6 +3,7 @@
 pub mod core_control;
 pub mod diagnostics;
 pub mod dns_settings;
+pub mod logs;
 pub mod node_latency;
 pub mod platform_proxy;
 pub mod route_settings;
@@ -28,7 +29,7 @@ use magies_profiles::{
     ManualNodeDraft, SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore,
     SqliteSubscriptionStore,
 };
-use magies_session::{DesktopSession, NetworkWatcher, TcpHealthProbe};
+use magies_session::{DesktopSession, NetworkWatcher, RecoveryOutcome, TcpHealthProbe};
 use magies_storage::PlatformSecretStore;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
@@ -37,6 +38,9 @@ use uuid::Uuid;
 use crate::core_control::{LazySingBoxControl, describe};
 use crate::diagnostics::DiagnosticBundle;
 use crate::dns_settings::{DnsSettings, SqliteDnsSettingsStore};
+use crate::logs::{
+    LogBuffer, LogBufferLayer, LogEntry, LogLevel, LogSource, spawn_core_log_reader,
+};
 use crate::node_latency::{TcpLatencyError, probe_tcp};
 use crate::platform_proxy::{PlatformProxyControl, PlatformProxyError, SystemProxyStartupStatus};
 use crate::route_settings::{RouteSettings, SqliteRouteSettingsStore};
@@ -220,6 +224,7 @@ struct AppState {
     subscriptions: Arc<DesktopSubscriptionController<PlatformSecretStore>>,
     traffic: Arc<Mutex<SqliteTrafficCounter>>,
     system_proxy: PlatformProxyControl,
+    logs: Arc<LogBuffer>,
     /// Where an exported diagnostic bundle is written.
     export_directory: PathBuf,
     tray: TrayUi,
@@ -254,7 +259,7 @@ fn spawn_traffic_loop(
             let api_address = lock(&service).traffic_api_address().ok();
             let Some(api_address) = api_address else {
                 if let Err(error) = lock(&traffic).tick(Local::now().date_naive(), Instant::now()) {
-                    eprintln!(
+                    tracing::warn!(
                         "traffic counters could not be persisted: {}",
                         describe(&error)
                     );
@@ -273,18 +278,18 @@ fn spawn_traffic_loop(
                         lock(&traffic).tick(Local::now().date_naive(), Instant::now())
                     };
                     if let Err(error) = result {
-                        eprintln!(
+                        tracing::warn!(
                             "traffic counters could not be updated: {}",
                             describe(&error)
                         );
                     }
                 }
                 Err(error) => {
-                    eprintln!("traffic sample failed: {}", describe(&error));
+                    tracing::warn!("traffic sample failed: {}", describe(&error));
                     if let Err(error) =
                         lock(&traffic).tick(Local::now().date_naive(), Instant::now())
                     {
-                        eprintln!(
+                        tracing::warn!(
                             "traffic counters could not be persisted: {}",
                             describe(&error)
                         );
@@ -312,11 +317,21 @@ fn spawn_recovery_loop(service: Arc<Mutex<HostSessionService>>, probe: TcpHealth
                 None
             };
             if let Some(event) = watcher.tick(SystemTime::now(), fingerprint.as_deref()) {
+                tracing::info!(?event, "network change observed");
                 lock(&service).observe_network(event, Instant::now());
             }
 
-            if let Err(error) = lock(&service).monitor_recovery(Instant::now(), &probe) {
-                eprintln!("session recovery failed: {}", describe(&error));
+            match lock(&service).monitor_recovery(Instant::now(), &probe) {
+                Ok(outcome) => {
+                    // Only a real reconnect is worth a line; the common case is
+                    // a healthy probe that would otherwise flood the panel.
+                    if !matches!(outcome, RecoveryOutcome::Idle | RecoveryOutcome::Healthy) {
+                        tracing::info!(?outcome, "session recovery acted");
+                    }
+                }
+                Err(error) => {
+                    tracing::error!("session recovery failed: {}", describe(&error));
+                }
             }
         }
     });
@@ -340,7 +355,7 @@ fn spawn_subscription_update_loop(
             let due_ids = match subscriptions.due_auto_update_ids(now) {
                 Ok(ids) => ids,
                 Err(error) => {
-                    eprintln!(
+                    tracing::warn!(
                         "automatic subscription scheduling failed: {}",
                         describe(&error)
                     );
@@ -355,7 +370,7 @@ fn spawn_subscription_update_loop(
                 }
                 match subscriptions.refresh(id, now) {
                     Ok(_) => refreshed = true,
-                    Err(error) => eprintln!(
+                    Err(error) => tracing::warn!(
                         "automatic subscription refresh failed: {}",
                         describe(&error)
                     ),
@@ -364,7 +379,7 @@ fn spawn_subscription_update_loop(
 
             if refreshed {
                 if let Err(error) = lock(&service).sync_selected_node() {
-                    eprintln!(
+                    tracing::warn!(
                         "automatic subscription node sync failed: {}",
                         describe(&error)
                     );
@@ -379,7 +394,7 @@ fn spawn_tray_refresh_loop(app: AppHandle) {
         loop {
             thread::sleep(TRAY_REFRESH_TICK);
             if let Err(error) = refresh_tray(&app) {
-                eprintln!("tray refresh failed: {}", error.message);
+                tracing::warn!("tray refresh failed: {}", error.message);
             }
         }
     });
@@ -438,11 +453,11 @@ fn handle_background_tray_action(app: &AppHandle, action: TrayAction) {
     match result {
         Ok(()) => {
             if let Err(error) = refresh_tray(app) {
-                eprintln!("tray refresh failed: {}", error.message);
+                tracing::warn!("tray refresh failed: {}", error.message);
             }
         }
         Err(error) => {
-            eprintln!("tray action failed: {}", error.message);
+            tracing::warn!("tray action failed: {}", error.message);
             app.state::<AppState>().tray.show_action_failure();
         }
     }
@@ -463,7 +478,7 @@ fn request_app_exit(app: &AppHandle) {
             app.exit(0);
         }
         Err(error) => {
-            eprintln!("application exit cleanup failed: {}", error.message);
+            tracing::error!("application exit cleanup failed: {}", error.message);
             let state = app.state::<AppState>();
             state.exit_in_progress.store(false, Ordering::Release);
             state.tray.show_action_failure();
@@ -510,7 +525,7 @@ fn disconnect_for_quit(app: &AppHandle) -> Result<(), CommandError> {
 fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         if let Err(error) = window.show().and_then(|()| window.set_focus()) {
-            eprintln!("main window could not be shown: {error}");
+            tracing::warn!("main window could not be shown: {error}");
         }
     }
 }
@@ -742,7 +757,7 @@ async fn session_url_test(
     let proxy_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), target.http_port);
     let probe = probe_url(&url, proxy_address, URL_TEST_TIMEOUT).await;
     if let Err(error) = &probe {
-        eprintln!("URL test did not succeed: {}", describe(error));
+        tracing::debug!("URL test did not succeed: {}", describe(error));
     }
     let result = url_test_result(target.node_id, &probe)?;
     state
@@ -864,10 +879,39 @@ fn session_connect(state: State<'_, AppState>) -> Result<SessionStatus, CommandE
         .startup_status()
         .map_err(|error| system_proxy_error(&error))?;
     ensure_system_proxy_ready(startup_status)?;
-    state
-        .service()
-        .connect()
-        .map_err(|error| command_error(&error))
+    let mut service = state.service();
+    let status = service.connect().map_err(|error| command_error(&error))?;
+    if let Some(output) = service.take_core_output() {
+        spawn_core_log_reader(output, state.logs.clone());
+    }
+    drop(service);
+    tracing::info!(
+        node = status.node.as_ref().map_or("", |node| &node.name),
+        "session connected"
+    );
+    Ok(status)
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
+fn session_logs(
+    level: Option<LogLevel>,
+    source: Option<LogSource>,
+    state: State<'_, AppState>,
+) -> Vec<LogEntry> {
+    state.logs.snapshot(level.unwrap_or(LogLevel::Info), source)
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State by value"
+)]
+fn session_clear_logs(state: State<'_, AppState>) {
+    state.logs.clear();
 }
 
 #[tauri::command]
@@ -876,10 +920,12 @@ fn session_connect(state: State<'_, AppState>) -> Result<SessionStatus, CommandE
     reason = "Tauri commands receive State by value"
 )]
 fn session_disconnect(state: State<'_, AppState>) -> Result<SessionStatus, CommandError> {
-    state
+    let status = state
         .service()
         .disconnect()
-        .map_err(|error| command_error(&error))
+        .map_err(|error| command_error(&error))?;
+    tracing::info!("session disconnected");
+    Ok(status)
 }
 
 #[tauri::command]
@@ -1093,6 +1139,8 @@ fn handle_run_event(app: &AppHandle, event: tauri::RunEvent) {
 /// Opens the on-disk stores, wires the session service into Tauri state, and
 /// starts the background loops.
 fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let logs = Arc::new(LogBuffer::default());
+    install_log_subscriber(logs.clone());
     let data_directory = app.path().app_data_dir()?;
     let runtime_directory = data_directory.join("runtime");
     std::fs::create_dir_all(&runtime_directory)?;
@@ -1136,6 +1184,7 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         subscriptions: subscriptions.clone(),
         traffic: traffic.clone(),
         system_proxy,
+        logs: logs.clone(),
         export_directory: data_directory,
         tray,
         allow_exit: AtomicBool::new(false),
@@ -1147,6 +1196,24 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     spawn_traffic_loop(service.clone(), traffic);
     spawn_tray_refresh_loop(app.handle().clone());
     Ok(())
+}
+
+/// Routes `tracing` events into the buffer the log panel reads.
+///
+/// A failure here means another subscriber is already installed, which only
+/// happens in a test harness; the app keeps running without in-app app logs
+/// rather than refusing to start.
+fn install_log_subscriber(logs: Arc<LogBuffer>) {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    if tracing_subscriber::registry()
+        .with(LogBufferLayer::new(logs))
+        .try_init()
+        .is_err()
+    {
+        eprintln!("log subscriber was already installed; in-app application logs are disabled");
+    }
 }
 
 /// Starts the desktop application event loop.
@@ -1162,7 +1229,7 @@ pub fn run() {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
                     if let Err(error) = window.hide() {
-                        eprintln!("main window could not be hidden: {error}");
+                        tracing::warn!("main window could not be hidden: {error}");
                     }
                 }
             }
@@ -1188,6 +1255,8 @@ pub fn run() {
             session_delete_node,
             session_connect,
             session_disconnect,
+            session_logs,
+            session_clear_logs,
             system_proxy_startup_status,
             system_proxy_recover,
             system_proxy_dismiss,

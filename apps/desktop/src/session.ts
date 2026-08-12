@@ -32,6 +32,17 @@ export interface NodeEdit {
 
 export type NodeMoveDirection = "down" | "up";
 
+export type LogLevel = "error" | "warn" | "info" | "debug" | "trace";
+
+export type LogSource = "app" | "core";
+
+export interface LogEntry {
+  level: LogLevel;
+  message: string;
+  source: LogSource;
+  timestampMs: number;
+}
+
 export interface BulkImportLineReport {
   /** Absent when the failure belongs to no single line. */
   line: number | null;
@@ -207,6 +218,17 @@ export function setDnsSettings(settings: DnsSettings): Promise<SessionStatus> {
 
 export function importNode(uri: string): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_import_node", { uri });
+}
+
+export function loadLogs(
+  level: LogLevel,
+  source: LogSource | null,
+): Promise<LogEntry[]> {
+  return invoke<LogEntry[]>("session_logs", { level, source });
+}
+
+export function clearLogs(): Promise<void> {
+  return invoke<void>("session_clear_logs");
 }
 
 export function importNodes(content: string): Promise<BulkImportReport> {
