@@ -27,6 +27,7 @@ mod tun_config;
 mod vmess;
 mod xray_dns_config;
 mod xray_outbound;
+mod xray_runtime_config;
 
 pub use bulk_import::{
     BulkImportError, BulkImportFailure, BulkImportLineError, BulkImportOutcome,
@@ -94,6 +95,9 @@ pub use tun_config::{SingBoxTunConfigGenerator, TunProfile, TunProfileError, Tun
 pub use vmess::{ParsedVmessNode, VmessCredential, VmessParseError, VmessParser, VmessSecurity};
 pub use xray_dns_config::{FAKE_DNS_SERVER, XrayDnsConfigGenerator};
 pub use xray_outbound::{GeneratedXrayOutbound, XrayOutboundConfigGenerator, XrayOutboundError};
+pub use xray_runtime_config::{
+    XrayRuntimeConfigError, XrayRuntimeConfigGenerator, XrayRuntimeProfile,
+};
 
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
