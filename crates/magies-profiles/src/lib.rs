@@ -15,6 +15,7 @@ mod node_list_text;
 mod node_order_store;
 mod shadowsocks;
 mod share_link;
+mod share_link_serializer;
 mod sing_box_outbound;
 mod sing_box_runtime_config;
 mod subscription;
@@ -65,6 +66,7 @@ pub use shadowsocks::{
     ParsedShadowsocksNode, ShadowsocksCredential, ShadowsocksParseError, ShadowsocksParser,
 };
 pub use share_link::{ParsedShareLink, ShareLinkParseError, ShareLinkParser};
+pub use share_link_serializer::{ShareLinkSerializer, ShareLinkSerializerError};
 pub use sing_box_outbound::{
     GeneratedSingBoxOutbound, NodeCredential, OutboundConfigError, SingBoxOutboundConfigGenerator,
 };

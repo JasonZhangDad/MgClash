@@ -887,6 +887,22 @@ fn session_delete_node(
     clippy::needless_pass_by_value,
     reason = "Tauri commands receive State by value"
 )]
+fn session_export_node_link(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<String, CommandError> {
+    let id = parse_node_id(&id)?;
+    state
+        .service()
+        .export_node_link(id)
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State by value"
+)]
 fn session_connect(state: State<'_, AppState>) -> Result<SessionStatus, CommandError> {
     let startup_status = state
         .system_proxy
@@ -1385,6 +1401,7 @@ pub fn run() {
             session_move_node,
             session_set_node_group,
             session_delete_node,
+            session_export_node_link,
             session_connect,
             session_disconnect,
             session_logs,
