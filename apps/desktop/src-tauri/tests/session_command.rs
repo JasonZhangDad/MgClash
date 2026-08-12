@@ -227,6 +227,33 @@ fn auto_keeps_sing_box_for_a_hysteria2_node() {
 }
 
 #[test]
+fn connecting_with_an_impossible_core_choice_reports_it_instead_of_falling_back() {
+    let (mut service, _runtime, _fail_start) = service();
+    service
+        .import_node("hysteria2://secret@edge.example.com:8443#Tokyo")
+        .unwrap();
+    service.set_core_preference(CorePreference::Fixed(CoreType::Xray));
+
+    let error = service.connect().unwrap_err();
+
+    // Quietly running sing-box would leave the user believing they were on Xray.
+    assert_eq!(error.code(), "core_unavailable");
+    assert!(!service.status().connected);
+}
+
+#[test]
+fn connecting_with_a_workable_core_choice_succeeds() {
+    let (mut service, _runtime, _fail_start) = service();
+    service
+        .create_node(trojan_draft("Frankfurt", 8443))
+        .unwrap();
+    service.set_core_preference(CorePreference::Fixed(CoreType::Xray));
+
+    assert!(service.connect().unwrap().connected);
+    assert_eq!(service.status().core, "xray");
+}
+
+#[test]
 fn creating_a_manual_node_stores_the_credential_and_selects_it() {
     let (mut service, _runtime, _fail_start) = service();
 
@@ -1133,12 +1160,29 @@ impl CoreSessionControl for FakeCore {
         self.events.lock().unwrap().push("core_start");
         let config = fs::read_to_string(config_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&config).unwrap();
-        if parsed["route"]["final"] == "direct" {
+        // sing-box names the section `route` and Xray names it `routing`, so
+        // the direct-only case is detected per Core.
+        let direct_only = parsed["route"]["final"] == "direct"
+            || parsed["routing"]["rules"].as_array().is_some_and(|rules| {
+                rules
+                    .iter()
+                    .all(|rule| rule["outboundTag"].as_str() == Some("direct"))
+            });
+        if direct_only {
             assert!(!config.contains("runtime-secret"));
         } else {
             assert!(config.contains("runtime-secret"));
         }
-        assert!(config.contains("127.0.0.1:9090"));
+        // The API port has to be reachable either way, but each Core spells it
+        // differently: sing-box as one address, Xray as a listener plus a port.
+        let api_exposed = parsed["experimental"]["clash_api"]["external_controller"]
+            == "127.0.0.1:9090"
+            || parsed["inbounds"].as_array().is_some_and(|inbounds| {
+                inbounds
+                    .iter()
+                    .any(|inbound| inbound["tag"] == "api-in" && inbound["port"] == 9_090)
+            });
+        assert!(api_exposed, "the Clash/stats API port is missing: {config}");
         if self.fail_start.load(Ordering::Relaxed) {
             Err(FakeError("core start failed"))
         } else {

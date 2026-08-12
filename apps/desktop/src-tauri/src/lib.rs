@@ -37,7 +37,7 @@ use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
 use crate::app_settings::{AppSettings, SqliteAppSettingsStore};
-use crate::core_control::{LazySingBoxControl, describe};
+use crate::core_control::{HostCoreControl, describe};
 use crate::diagnostics::DiagnosticBundle;
 use crate::dns_settings::{DnsSettings, SqliteDnsSettingsStore};
 use crate::logs::{
@@ -219,7 +219,7 @@ fn platform_summary() -> Result<PlatformSummary, CommandError> {
 
 /// The session the desktop shell drives on the host platform.
 type HostSessionService =
-    SessionService<PlatformSecretStore, LazySingBoxControl, PlatformProxyControl>;
+    SessionService<PlatformSecretStore, HostCoreControl, PlatformProxyControl>;
 
 struct AppState {
     service: Arc<Mutex<HostSessionService>>,
@@ -1218,7 +1218,7 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         PlatformProxyControl::for_host(data_directory.join("system-proxy-recovery.json"));
     let session = DesktopSession::new(
         PlatformSecretStore,
-        LazySingBoxControl::from_env(health_address, HEALTH_TIMEOUT),
+        HostCoreControl::from_env(health_address, HEALTH_TIMEOUT),
         system_proxy.clone(),
         runtime_directory,
     );

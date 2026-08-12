@@ -12,10 +12,14 @@ use std::time::Duration;
 
 use magies_core_runtime::{
     CoreBinaryError, CoreBinaryRequirement, CoreOutput, Sha256Hash, Sha256HashParseError,
-    SingBoxAdapter, locate_core_binary,
+    SingBoxAdapter, XrayAdapter, locate_core_binary,
 };
+use magies_domain::CoreType;
 use magies_platform::{PlatformError, TargetPlatform};
-use magies_session::{CoreSessionControl, SingBoxCoreControl, SingBoxCoreSessionError};
+use magies_session::{
+    CoreSessionControl, SingBoxCoreControl, SingBoxCoreSessionError, XrayCoreControl,
+    XrayCoreSessionError,
+};
 use thiserror::Error;
 
 pub const BINARY_PATH_VARIABLE: &str = "MAGIES_SING_BOX_BIN";
@@ -185,6 +189,189 @@ pub enum CoreSettingsError {
     #[error("{SHA256_VARIABLE} is not a SHA-256 digest")]
     InvalidSha256(#[source] Sha256HashParseError),
 }
+
+/// A [`CoreSessionControl`] that drives whichever Core the session selected.
+///
+/// Both Cores stay lazy: neither binary is located or verified until a session
+/// actually starts on it, so a host with only one installed still works as long
+/// as the user does not pick the other.
+pub struct HostCoreControl {
+    sing_box: LazySingBoxControl,
+    xray: LazyXrayControl,
+    current: CoreType,
+}
+
+impl HostCoreControl {
+    #[must_use]
+    pub fn from_env(health_address: SocketAddr, health_timeout: Duration) -> Self {
+        Self {
+            sing_box: LazySingBoxControl::from_env(health_address, health_timeout),
+            xray: LazyXrayControl::from_env(health_address, health_timeout),
+            current: CoreType::SingBox,
+        }
+    }
+}
+
+impl CoreSessionControl for HostCoreControl {
+    type Error = HostCoreError;
+    type Output = CoreOutput;
+
+    fn select_core(&mut self, core: CoreType) {
+        self.current = core;
+    }
+
+    fn start(&mut self, config_path: &Path) -> Result<Self::Output, Self::Error> {
+        match self.current {
+            CoreType::SingBox => self
+                .sing_box
+                .start(config_path)
+                .map_err(HostCoreError::SingBox),
+            CoreType::Xray => self.xray.start(config_path).map_err(HostCoreError::Xray),
+        }
+    }
+
+    fn stop(&mut self) -> Result<(), Self::Error> {
+        // Both are stopped: a Core switched away from mid-session would
+        // otherwise be left running.
+        let sing_box = self.sing_box.stop().map_err(HostCoreError::SingBox);
+        let xray = self.xray.stop().map_err(HostCoreError::Xray);
+        sing_box.and(xray)
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum HostCoreError {
+    #[error(transparent)]
+    SingBox(LazySingBoxError),
+    #[error(transparent)]
+    Xray(LazyXrayError),
+}
+
+impl HostCoreError {
+    /// The stable machine-readable code the UI branches on.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::SingBox(error) => error.code(),
+            Self::Xray(error) => error.code(),
+        }
+    }
+}
+
+/// The Xray counterpart to [`LazySingBoxControl`].
+pub struct LazyXrayControl {
+    settings: Result<CoreSettings, CoreSettingsError>,
+    health_address: SocketAddr,
+    health_timeout: Duration,
+    control: Option<XrayCoreControl>,
+}
+
+impl LazyXrayControl {
+    #[must_use]
+    pub const fn new(
+        settings: Result<CoreSettings, CoreSettingsError>,
+        health_address: SocketAddr,
+        health_timeout: Duration,
+    ) -> Self {
+        Self {
+            settings,
+            health_address,
+            health_timeout,
+            control: None,
+        }
+    }
+
+    /// Reads the Xray binary and digest from the environment.
+    ///
+    /// Unlike sing-box there is no digest compiled in at build time: ADR 0003
+    /// records that this repo has no verified official Xray digest, so a user
+    /// choosing Xray has to supply both values.
+    #[must_use]
+    pub fn from_env(health_address: SocketAddr, health_timeout: Duration) -> Self {
+        let settings = CoreSettings::from_values(
+            std::env::var_os(XRAY_BINARY_VARIABLE).map(PathBuf::from),
+            std::env::var(XRAY_SHA256_VARIABLE).ok(),
+        );
+        Self::new(settings, health_address, health_timeout)
+    }
+
+    fn resolve_control(&mut self) -> Result<(), LazyXrayError> {
+        if self.control.is_some() {
+            return Ok(());
+        }
+
+        let settings = self
+            .settings
+            .as_ref()
+            .map_err(|source| LazyXrayError::Settings(source.clone()))?;
+        let target = TargetPlatform::parse(std::env::consts::OS, std::env::consts::ARCH)
+            .map_err(LazyXrayError::Target)?;
+        let binary = locate_core_binary(
+            &settings.binary,
+            CoreBinaryRequirement::new(target.architecture(), settings.sha256),
+        )
+        .map_err(|source| LazyXrayError::Binary(Box::new(source)))?;
+        self.control = Some(XrayCoreControl::new(
+            XrayAdapter::new(binary),
+            self.health_address,
+            self.health_timeout,
+        ));
+        Ok(())
+    }
+}
+
+impl CoreSessionControl for LazyXrayControl {
+    type Error = LazyXrayError;
+    type Output = CoreOutput;
+
+    fn start(&mut self, config_path: &Path) -> Result<Self::Output, Self::Error> {
+        self.resolve_control()?;
+        self.control
+            .as_mut()
+            .expect("resolve_control creates the control whenever it is missing")
+            .start(config_path)
+            .map_err(|source| LazyXrayError::Session(Box::new(source)))
+    }
+
+    fn stop(&mut self) -> Result<(), Self::Error> {
+        match self.control.as_mut() {
+            Some(control) => control
+                .stop()
+                .map_err(|source| LazyXrayError::Session(Box::new(source))),
+            None => Ok(()),
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum LazyXrayError {
+    #[error("the Xray binary is not configured")]
+    Settings(#[source] CoreSettingsError),
+    #[error("this build runs on a target outside the V0.1 support matrix")]
+    Target(#[source] PlatformError),
+    #[error("the configured Xray binary does not match its pin")]
+    Binary(#[source] Box<CoreBinaryError>),
+    #[error("the Xray session failed")]
+    Session(#[source] Box<XrayCoreSessionError>),
+}
+
+impl LazyXrayError {
+    /// The stable machine-readable code the UI branches on.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::Settings(_) => "xray_unavailable",
+            Self::Target(_) => "unsupported_target",
+            Self::Binary(_) => "xray_binary_rejected",
+            Self::Session(_) => "core_session_failed",
+        }
+    }
+}
+
+/// Where the user points the app at an Xray build.
+pub const XRAY_BINARY_VARIABLE: &str = "MAGIES_XRAY_BIN";
+/// The digest that build must match.
+pub const XRAY_SHA256_VARIABLE: &str = "MAGIES_XRAY_SHA256";
 
 #[derive(Debug, Error)]
 pub enum LazySingBoxError {

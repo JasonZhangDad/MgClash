@@ -17,25 +17,99 @@ use std::time::Duration;
 
 use magies_core_runtime::{
     AtomicRuntimeConfig, CoreHealthError, CoreOutput, CoreRuntime, CoreRuntimeError, CoreState,
-    RuntimeConfigFile, RuntimeConfigFileError, SingBoxAdapter, SingBoxAdapterError,
+    RuntimeConfigFile, RuntimeConfigFileError, SingBoxAdapter, SingBoxAdapterError, XrayAdapter,
+    XrayAdapterError,
 };
-use magies_domain::ProxyNode;
+use magies_domain::{CoreType, ProxyNode};
 use magies_platform::system_proxy::{PacSetting, ProxyEndpoint, ProxySetting, SystemProxyState};
 use magies_platform::system_proxy_recovery::{
     RecoveryStore, SystemProxyControl, SystemProxyRecoveryError, SystemProxyRecoveryManager,
 };
 use magies_profiles::{
     CredentialCodec, CredentialCodecError, DnsProfile, LocalHttpProfile, LocalSocksProfile,
-    RuntimeConfigError, SingBoxRuntimeConfigGenerator, SingBoxRuntimeProfile, TunProfile,
+    RuntimeConfigError, SingBoxRuntimeConfigGenerator, SingBoxRuntimeProfile, StoredNodeCredential,
+    TunProfile, XrayRuntimeConfigError, XrayRuntimeConfigGenerator, XrayRuntimeProfile,
 };
 use magies_routing::RouteProfile;
 use magies_storage::{SecretStore, SecretStoreError};
 use thiserror::Error;
 use uuid::Uuid;
 
+/// Builds the sing-box document for one profile.
+fn generate_sing_box<C, P>(
+    profile: &DesktopSessionProfile,
+    credential: &StoredNodeCredential,
+) -> Result<serde_json::Value, DesktopSessionError<C, P>>
+where
+    C: Error + 'static,
+    P: Error + 'static,
+{
+    let mut runtime_profile = SingBoxRuntimeProfile::new(
+        &profile.node,
+        credential.as_node_credential(),
+        &profile.dns,
+        &profile.route,
+    )
+    .with_local_proxies(profile.socks, profile.http)
+    .map_err(|source| DesktopSessionError::Config { source })?;
+    if let Some(port) = profile.clash_api_port {
+        runtime_profile = runtime_profile
+            .with_clash_api_port(port)
+            .map_err(|source| DesktopSessionError::Config { source })?;
+    }
+    if let Some(tun) = profile.tun.as_ref() {
+        runtime_profile = runtime_profile.with_tun(tun, profile.dns_hijack);
+    }
+    Ok(SingBoxRuntimeConfigGenerator::generate(&runtime_profile)
+        .map_err(|source| DesktopSessionError::Config { source })?
+        .json()
+        .clone())
+}
+
+/// Builds the Xray document for one profile.
+///
+/// TUN never reaches here in practice — the capability matrix keeps TUN
+/// sessions on sing-box — but the refusal is explicit rather than a silently
+/// dropped setting.
+fn generate_xray<C, P>(
+    profile: &DesktopSessionProfile,
+    credential: &StoredNodeCredential,
+) -> Result<serde_json::Value, DesktopSessionError<C, P>>
+where
+    C: Error + 'static,
+    P: Error + 'static,
+{
+    if profile.tun.is_some() {
+        return Err(DesktopSessionError::TunUnsupportedByCore {
+            core: CoreType::Xray,
+        });
+    }
+    let mut runtime_profile = XrayRuntimeProfile::new(
+        &profile.node,
+        credential.as_node_credential(),
+        &profile.dns,
+        &profile.route,
+    )
+    .with_local_proxies(profile.socks, profile.http)
+    .map_err(|source| DesktopSessionError::XrayConfig { source })?;
+    if let Some(port) = profile.clash_api_port {
+        runtime_profile = runtime_profile.with_api_port(port);
+    }
+    Ok(XrayRuntimeConfigGenerator::generate(&runtime_profile)
+        .map_err(|source| DesktopSessionError::XrayConfig { source })?
+        .json()
+        .clone())
+}
+
 pub trait CoreSessionControl {
     type Error: Error + 'static;
     type Output;
+
+    /// Tells the control which Core the next start will use.
+    ///
+    /// Defaults to doing nothing: an implementation that drives one Core has
+    /// nothing to choose. A host that can run either overrides this.
+    fn select_core(&mut self, _core: CoreType) {}
 
     /// Starts a validated Core with the generated configuration.
     ///
@@ -91,6 +165,7 @@ where
 #[derive(Clone, Debug)]
 pub struct DesktopSessionProfile {
     node: ProxyNode,
+    core: CoreType,
     dns: DnsProfile,
     route: RouteProfile,
     socks: LocalSocksProfile,
@@ -106,6 +181,9 @@ impl DesktopSessionProfile {
     pub fn new(node: ProxyNode, dns: DnsProfile, route: RouteProfile) -> Self {
         Self {
             node,
+            // sing-box carries the general case; a caller that wants Xray says
+            // so explicitly with `with_core`.
+            core: CoreType::SingBox,
             dns,
             route,
             socks: LocalSocksProfile::default(),
@@ -138,6 +216,13 @@ impl DesktopSessionProfile {
     #[must_use]
     pub const fn with_clash_api_port(mut self, port: NonZeroU16) -> Self {
         self.clash_api_port = Some(port);
+        self
+    }
+
+    /// Chooses the Core this session runs.
+    #[must_use]
+    pub const fn with_core(mut self, core: CoreType) -> Self {
+        self.core = core;
         self
     }
 
@@ -239,31 +324,20 @@ where
             .map_err(|source| DesktopSessionError::Secret { source })?;
         let credential = CredentialCodec::decode(&payload)
             .map_err(|source| DesktopSessionError::Credential { source })?;
-        let mut runtime_profile = SingBoxRuntimeProfile::new(
-            &profile.node,
-            credential.as_node_credential(),
-            &profile.dns,
-            &profile.route,
-        )
-        .with_local_proxies(profile.socks, profile.http)
-        .map_err(|source| DesktopSessionError::Config { source })?;
-        if let Some(port) = profile.clash_api_port {
-            runtime_profile = runtime_profile
-                .with_clash_api_port(port)
-                .map_err(|source| DesktopSessionError::Config { source })?;
-        }
-        if let Some(tun) = profile.tun.as_ref() {
-            runtime_profile = runtime_profile.with_tun(tun, profile.dns_hijack);
-        }
-        let generated = SingBoxRuntimeConfigGenerator::generate(&runtime_profile)
-            .map_err(|source| DesktopSessionError::Config { source })?;
-        let bytes = serde_json::to_vec(generated.json())
+        let generated = match profile.core {
+            CoreType::SingBox => generate_sing_box(profile, &credential)?,
+            CoreType::Xray => generate_xray(profile, &credential)?,
+        };
+        let bytes = serde_json::to_vec(&generated)
             .map_err(|source| DesktopSessionError::Serialize { source })?;
         let path = self
             .runtime_directory
             .join(format!("session-{}.json", Uuid::new_v4()));
         let runtime_config = AtomicRuntimeConfig::write(path, &bytes)
             .map_err(|source| DesktopSessionError::RuntimeConfig { source })?;
+        // Announced before the start so a host driving both Cores can pick the
+        // right binary; the start order itself is unchanged.
+        self.core.select_core(profile.core);
         let output = self
             .core
             .start(runtime_config.path())
@@ -357,6 +431,13 @@ where
     Credential {
         #[source]
         source: CredentialCodecError,
+    },
+    #[error("{core:?} cannot provide TUN mode")]
+    TunUnsupportedByCore { core: CoreType },
+    #[error("failed to generate the Xray runtime configuration")]
+    XrayConfig {
+        #[source]
+        source: XrayRuntimeConfigError,
     },
     #[error("failed to generate runtime configuration")]
     Config {
@@ -458,6 +539,81 @@ impl CoreSessionControl for SingBoxCoreControl {
         self.stop_running_core()
             .map_err(SingBoxCoreSessionError::Stop)
     }
+}
+
+/// Drives an Xray process for one session, mirroring [`SingBoxCoreControl`].
+pub struct XrayCoreControl {
+    adapter: XrayAdapter,
+    runtime: CoreRuntime,
+    health_address: SocketAddr,
+    health_timeout: Duration,
+}
+
+impl XrayCoreControl {
+    #[must_use]
+    pub fn new(adapter: XrayAdapter, health_address: SocketAddr, health_timeout: Duration) -> Self {
+        Self {
+            adapter,
+            runtime: CoreRuntime::default(),
+            health_address,
+            health_timeout,
+        }
+    }
+
+    fn stop_running_core(&mut self) -> Result<(), CoreRuntimeError> {
+        if self.runtime.poll()? == CoreState::Running {
+            self.runtime.stop()?;
+        }
+        Ok(())
+    }
+}
+
+impl CoreSessionControl for XrayCoreControl {
+    type Error = XrayCoreSessionError;
+    type Output = CoreOutput;
+
+    fn start(&mut self, config_path: &Path) -> Result<Self::Output, Self::Error> {
+        let config = self
+            .adapter
+            .validate_config(config_path)
+            .map_err(XrayCoreSessionError::Validate)?;
+        let output = self
+            .runtime
+            .start(&self.adapter.process_spec(&config))
+            .map_err(XrayCoreSessionError::Start)?;
+        if let Err(health) = self
+            .runtime
+            .wait_for_tcp_health(self.health_address, self.health_timeout)
+        {
+            return match self.stop_running_core() {
+                Ok(()) => Err(XrayCoreSessionError::Health(health)),
+                Err(rollback) => Err(XrayCoreSessionError::HealthAndRollback { health, rollback }),
+            };
+        }
+        Ok(output)
+    }
+
+    fn stop(&mut self) -> Result<(), Self::Error> {
+        self.stop_running_core().map_err(XrayCoreSessionError::Stop)
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum XrayCoreSessionError {
+    #[error("Xray configuration validation failed")]
+    Validate(#[source] XrayAdapterError),
+    #[error("Xray process failed to start")]
+    Start(#[source] CoreRuntimeError),
+    #[error("Xray process failed its health check")]
+    Health(#[source] CoreHealthError),
+    #[error("Xray health check and process rollback both failed")]
+    HealthAndRollback {
+        #[source]
+        health: CoreHealthError,
+        rollback: CoreRuntimeError,
+    },
+    #[error("Xray process failed to stop")]
+    Stop(#[source] CoreRuntimeError),
 }
 
 #[derive(Debug, Error)]

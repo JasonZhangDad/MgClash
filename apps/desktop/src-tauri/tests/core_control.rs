@@ -1,15 +1,16 @@
 use std::fs::write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::id;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use magies_core_runtime::Sha256Hash;
 use magies_desktop_lib::core_control::{
-    CoreSettings, CoreSettingsError, LazySingBoxControl, LazySingBoxError, bundled_core_in,
-    describe,
+    CoreSettings, CoreSettingsError, HostCoreControl, HostCoreError, LazySingBoxControl,
+    LazySingBoxError, bundled_core_in, describe,
 };
+use magies_domain::CoreType;
 use magies_session::CoreSessionControl;
 
 const HEALTH_TIMEOUT: Duration = Duration::from_millis(5);
@@ -264,4 +265,45 @@ impl Drop for Fixture {
             eprintln!("failed to remove fixture {}: {error}", self.path.display());
         }
     }
+}
+
+#[test]
+fn the_host_control_defaults_to_sing_box() {
+    let mut control = HostCoreControl::from_env(address(), Duration::from_millis(10));
+
+    // Nothing is configured in the test environment, so the failure names the
+    // Core that was tried — which is how the default is observed.
+    let error = control.start(Path::new("/nonexistent.json")).unwrap_err();
+
+    assert!(
+        matches!(error, HostCoreError::SingBox(_)),
+        "expected the sing-box control by default, got {error:?}"
+    );
+}
+
+#[test]
+fn selecting_xray_routes_the_start_to_the_xray_control() {
+    let mut control = HostCoreControl::from_env(address(), Duration::from_millis(10));
+
+    control.select_core(CoreType::Xray);
+    let error = control.start(Path::new("/nonexistent.json")).unwrap_err();
+
+    assert!(
+        matches!(error, HostCoreError::Xray(_)),
+        "expected the Xray control after selecting it, got {error:?}"
+    );
+    assert_eq!(error.code(), "xray_unavailable");
+}
+
+#[test]
+fn stopping_an_unstarted_host_control_is_not_an_error() {
+    let mut control = HostCoreControl::from_env(address(), Duration::from_millis(10));
+
+    // Both Cores are stopped so one switched away from mid-session cannot be
+    // left running; neither was started here.
+    assert!(control.stop().is_ok());
+}
+
+fn address() -> SocketAddr {
+    SocketAddr::from(([127, 0, 0, 1], 59_999))
 }
