@@ -24,7 +24,9 @@ use chrono::Local;
 use magies_domain::TimestampMillis;
 use magies_platform::network_path::NetworkPathReader;
 use magies_platform::{TargetPlatform, TunAvailability};
-use magies_profiles::{SqliteManualNodeStore, SqliteNodeOrderStore, SqliteSubscriptionStore};
+use magies_profiles::{
+    SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore, SqliteSubscriptionStore,
+};
 use magies_session::{DesktopSession, NetworkWatcher, TcpHealthProbe};
 use magies_storage::PlatformSecretStore;
 use serde::Serialize;
@@ -658,6 +660,20 @@ fn session_nodes(
 }
 
 #[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State by value"
+)]
+fn session_node_groups(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::session::NodeGroupSummary>, CommandError> {
+    state
+        .service()
+        .node_groups()
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
 async fn session_test_node(
     id: String,
     state: State<'_, AppState>,
@@ -770,6 +786,23 @@ fn session_move_node(
     state
         .service()
         .move_node(id, direction)
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
+fn session_set_node_group(
+    id: String,
+    group_name: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::session::NodeSummary>, CommandError> {
+    let id = parse_node_id(&id)?;
+    state
+        .service()
+        .set_node_group(id, group_name.as_deref())
         .map_err(|error| command_error(&error))
 }
 
@@ -1061,6 +1094,7 @@ pub fn run() {
                     nodes,
                     SqliteSubscriptionStore::open(&node_database)?,
                     SqliteNodeOrderStore::open(&node_database)?,
+                    SqliteNodeGroupStore::open(&node_database)?,
                 ),
                 SqliteRoutingModeStore::open(&node_database)?,
                 SqliteRouteSettingsStore::open(&node_database)?,
@@ -1106,12 +1140,14 @@ pub fn run() {
             session_set_dns_settings,
             session_import_node,
             session_nodes,
+            session_node_groups,
             session_test_node,
             session_url_test,
             session_traffic,
             session_select_node,
             session_edit_node,
             session_move_node,
+            session_set_node_group,
             session_delete_node,
             session_connect,
             session_disconnect,
