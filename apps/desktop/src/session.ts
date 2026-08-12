@@ -347,6 +347,19 @@ export function deleteNode(id: string): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_delete_node", { id });
 }
 
+/** One node's own traffic, split by direction. */
+export interface NodeTraffic {
+  todayUploadBytes: number;
+  todayDownloadBytes: number;
+  totalUploadBytes: number;
+  totalDownloadBytes: number;
+}
+
+/** Every node's counters, keyed by node id. */
+export function loadNodeTraffic(): Promise<Record<string, NodeTraffic>> {
+  return invoke<Record<string, NodeTraffic>>("session_node_traffic");
+}
+
 /** Duplicates a manual node, credential and all. Returns the new list. */
 export function cloneNode(id: string): Promise<NodeSummary[]> {
   return invoke<NodeSummary[]>("session_clone_node", { id });

@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 
 use chrono::NaiveDate;
 use magies_desktop_lib::traffic::{SqliteTrafficCounter, TrafficCounterError, TrafficRate};
+use uuid::Uuid;
 
 #[test]
 fn rolls_today_and_month_without_losing_the_lifetime_total() {
@@ -17,6 +18,7 @@ fn rolls_today_and_month_without_losing_the_lifetime_total() {
                 download_bytes_per_second: 300,
             },
             started_at,
+            None,
         )
         .unwrap();
     assert_totals(counter.snapshot(), 400, 400, 400);
@@ -29,6 +31,7 @@ fn rolls_today_and_month_without_losing_the_lifetime_total() {
                 download_bytes_per_second: 20,
             },
             started_at + Duration::from_secs(1),
+            None,
         )
         .unwrap();
     assert_totals(counter.snapshot(), 30, 430, 430);
@@ -41,6 +44,7 @@ fn rolls_today_and_month_without_losing_the_lifetime_total() {
                 download_bytes_per_second: 2,
             },
             started_at + Duration::from_secs(2),
+            None,
         )
         .unwrap();
     assert_totals(counter.snapshot(), 3, 3, 433);
@@ -54,13 +58,14 @@ fn saves_accumulated_bytes_once_the_minute_boundary_is_reached() {
         let mut counter =
             SqliteTrafficCounter::open(database.path(), day(2026, 8, 11), started_at).unwrap();
         counter
-            .record(day(2026, 8, 11), rate(100), started_at)
+            .record(day(2026, 8, 11), rate(100), started_at, None)
             .unwrap();
         counter
             .record(
                 day(2026, 8, 11),
                 rate(200),
                 started_at + Duration::from_secs(60),
+                None,
             )
             .unwrap();
     }
@@ -78,7 +83,7 @@ fn explicit_flush_persists_bytes_before_exit() {
         let mut counter =
             SqliteTrafficCounter::open(database.path(), day(2026, 8, 11), started_at).unwrap();
         counter
-            .record(day(2026, 8, 11), rate(512), started_at)
+            .record(day(2026, 8, 11), rate(512), started_at, None)
             .unwrap();
         counter.flush().unwrap();
     }
@@ -96,7 +101,7 @@ fn idle_tick_clears_the_rate_and_persists_a_day_rollover() {
         let mut counter =
             SqliteTrafficCounter::open(database.path(), day(2026, 8, 11), started_at).unwrap();
         counter
-            .record(day(2026, 8, 11), rate(128), started_at)
+            .record(day(2026, 8, 11), rate(128), started_at, None)
             .unwrap();
         assert_eq!(counter.snapshot().upload_bytes_per_second, 128);
 
@@ -120,7 +125,7 @@ fn reopening_in_a_new_month_resets_periods_but_keeps_the_total() {
         let mut counter =
             SqliteTrafficCounter::open(database.path(), day(2026, 8, 31), started_at).unwrap();
         counter
-            .record(day(2026, 8, 31), rate(64), started_at)
+            .record(day(2026, 8, 31), rate(64), started_at, None)
             .unwrap();
         counter.flush().unwrap();
     }
@@ -142,6 +147,7 @@ fn rejects_a_counter_that_cannot_fit_in_sqlite() {
                 download_bytes_per_second: 0,
             },
             started_at,
+            None,
         )
         .unwrap();
 
@@ -150,6 +156,7 @@ fn rejects_a_counter_that_cannot_fit_in_sqlite() {
             day(2026, 8, 11),
             rate(1),
             started_at + Duration::from_secs(1),
+            None,
         ),
         Err(TrafficCounterError::CounterOverflow)
     ));
@@ -207,5 +214,109 @@ impl TestDatabase {
 impl Drop for TestDatabase {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+#[test]
+fn traffic_is_attributed_to_the_node_that_was_active() {
+    let started_at = Instant::now();
+    let mut counter = SqliteTrafficCounter::open_in_memory(day(2026, 8, 11), started_at).unwrap();
+    let tokyo = Uuid::from_u128(1);
+    let osaka = Uuid::from_u128(2);
+
+    counter
+        .record(
+            day(2026, 8, 11),
+            split_rate(100, 900),
+            started_at,
+            Some(tokyo),
+        )
+        .unwrap();
+    counter
+        .record(
+            day(2026, 8, 11),
+            split_rate(10, 20),
+            started_at,
+            Some(osaka),
+        )
+        .unwrap();
+    counter
+        .record(day(2026, 8, 11), split_rate(1, 2), started_at, Some(tokyo))
+        .unwrap();
+
+    let totals = counter.node_totals();
+    assert_eq!(totals[&tokyo].today_upload_bytes, 101);
+    assert_eq!(totals[&tokyo].today_download_bytes, 902);
+    assert_eq!(totals[&osaka].today_upload_bytes, 10);
+    assert_eq!(totals[&osaka].today_download_bytes, 20);
+    // The global counters still see every byte, whichever node carried it.
+    assert_eq!(counter.snapshot().today_bytes, 1_033);
+}
+
+#[test]
+fn traffic_with_no_selected_node_is_counted_globally_only() {
+    let started_at = Instant::now();
+    let mut counter = SqliteTrafficCounter::open_in_memory(day(2026, 8, 11), started_at).unwrap();
+
+    counter
+        .record(day(2026, 8, 11), split_rate(5, 7), started_at, None)
+        .unwrap();
+
+    // Attributing to a node that is not there would be inventing a number.
+    assert!(counter.node_totals().is_empty());
+    assert_eq!(counter.snapshot().today_bytes, 12);
+}
+
+#[test]
+fn a_node_daily_counter_rolls_over_but_its_lifetime_total_does_not() {
+    let started_at = Instant::now();
+    let mut counter = SqliteTrafficCounter::open_in_memory(day(2026, 8, 11), started_at).unwrap();
+    let node = Uuid::from_u128(1);
+    counter
+        .record(
+            day(2026, 8, 11),
+            split_rate(100, 200),
+            started_at,
+            Some(node),
+        )
+        .unwrap();
+
+    counter
+        .record(day(2026, 8, 12), split_rate(1, 2), started_at, Some(node))
+        .unwrap();
+
+    let totals = counter.node_totals();
+    assert_eq!(totals[&node].today_upload_bytes, 1);
+    assert_eq!(totals[&node].today_download_bytes, 2);
+    assert_eq!(totals[&node].total_upload_bytes, 101);
+    assert_eq!(totals[&node].total_download_bytes, 202);
+}
+
+#[test]
+fn node_totals_survive_a_restart() {
+    let database = TestDatabase::new("node-traffic");
+    let started_at = Instant::now();
+    let node = Uuid::from_u128(7);
+    {
+        let mut counter =
+            SqliteTrafficCounter::open(database.path(), day(2026, 8, 11), started_at).unwrap();
+        counter
+            .record(day(2026, 8, 11), split_rate(30, 40), started_at, Some(node))
+            .unwrap();
+        counter.flush().unwrap();
+    }
+
+    let counter =
+        SqliteTrafficCounter::open(database.path(), day(2026, 8, 11), started_at).unwrap();
+
+    let totals = counter.node_totals();
+    assert_eq!(totals[&node].total_upload_bytes, 30);
+    assert_eq!(totals[&node].total_download_bytes, 40);
+}
+
+fn split_rate(upload: u64, download: u64) -> TrafficRate {
+    TrafficRate {
+        upload_bytes_per_second: upload,
+        download_bytes_per_second: download,
     }
 }
