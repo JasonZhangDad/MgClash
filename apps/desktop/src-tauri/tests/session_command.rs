@@ -17,12 +17,13 @@ use magies_desktop_lib::routing_mode::SqliteRoutingModeStore;
 use magies_desktop_lib::session::{
     NodeMoveDirection, NodeStores, SessionCommandError, SessionDefaults, SessionService,
 };
-use magies_domain::{CredentialRef, ProxyProtocol, Subscription, TimestampMillis};
+use magies_domain::{CoreType, CredentialRef, ProxyProtocol, Subscription, TimestampMillis};
 use magies_platform::system_proxy::SystemProxyState;
 use magies_profiles::{
-    CredentialCodec, LocalHttpProfile, LocalSocksProfile, ManualCredentialDraft, ManualNodeDraft,
-    ManualNodeStoreError, SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore,
-    SqliteSubscriptionStore, SubscriptionContentParser, SubscriptionUpdate, SubscriptionValidators,
+    CorePreference, CredentialCodec, LocalHttpProfile, LocalSocksProfile, ManualCredentialDraft,
+    ManualNodeDraft, ManualNodeStoreError, SqliteManualNodeStore, SqliteNodeGroupStore,
+    SqliteNodeOrderStore, SqliteSubscriptionStore, SubscriptionContentParser, SubscriptionUpdate,
+    SubscriptionValidators,
 };
 use magies_routing::RoutingMode;
 use magies_session::{
@@ -171,6 +172,58 @@ fn refuses_to_import_a_list_while_connected() {
             .code(),
         "session_active"
     );
+}
+
+#[test]
+fn the_status_reports_sing_box_by_default() {
+    let (mut service, _runtime, _fail_start) = service();
+    assert_eq!(service.status().core, "sing-box");
+
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+
+    assert_eq!(service.status().core, "sing-box");
+    assert_eq!(service.selected_core(), Ok(CoreType::SingBox));
+}
+
+#[test]
+fn choosing_xray_changes_the_reported_core() {
+    let (mut service, _runtime, _fail_start) = service();
+    service
+        .create_node(trojan_draft("Frankfurt", 8443))
+        .unwrap();
+
+    service.set_core_preference(CorePreference::Fixed(CoreType::Xray));
+
+    assert_eq!(service.selected_core(), Ok(CoreType::Xray));
+    assert_eq!(service.status().core, "xray");
+}
+
+#[test]
+fn choosing_xray_for_a_hysteria2_node_reports_why_it_cannot_run() {
+    let (mut service, _runtime, _fail_start) = service();
+    service
+        .import_node("hysteria2://secret@edge.example.com:8443#Tokyo")
+        .unwrap();
+
+    service.set_core_preference(CorePreference::Fixed(CoreType::Xray));
+
+    let error = service.selected_core().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "the selected Core cannot run this node: xray does not support Hysteria2"
+    );
+}
+
+#[test]
+fn auto_keeps_sing_box_for_a_hysteria2_node() {
+    let (mut service, _runtime, _fail_start) = service();
+    service
+        .import_node("hysteria2://secret@edge.example.com:8443#Tokyo")
+        .unwrap();
+
+    service.set_core_preference(CorePreference::Auto);
+
+    assert_eq!(service.selected_core(), Ok(CoreType::SingBox));
 }
 
 #[test]

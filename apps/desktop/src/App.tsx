@@ -42,6 +42,7 @@ import {
   testUrl,
   type AppSettings,
   type BulkImportReport,
+  type CorePreference,
   type LogEntry,
   type LogLevel,
   type LogSource,
@@ -2421,6 +2422,26 @@ export default function App() {
               />
               关闭窗口时最小化到托盘，而不是退出
             </label>
+            <label>
+              Core
+              <select
+                aria-label="Core 选择"
+                value={settings.corePreference}
+                disabled={busy || connected}
+                onChange={(event) =>
+                  void onChangeSettings({
+                    corePreference: event.target.value as CorePreference,
+                  })
+                }
+              >
+                <option value="auto">自动</option>
+                <option value="sing-box">sing-box</option>
+                <option value="xray">Xray</option>
+              </select>
+            </label>
+            <p className="hint">
+              自动模式按节点协议和能力矩阵决定。Xray 不支持 Hysteria2，选中后遇到该协议的节点会提示原因。
+            </p>
             <label>
               默认日志级别
               <select

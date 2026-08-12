@@ -7,7 +7,8 @@ use std::process::id;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use magies_desktop_lib::app_settings::{
-    AppSettings, AppSettingsStoreError, SqliteAppSettingsStore, log_level_name, parse_log_level,
+    AppSettings, AppSettingsStoreError, CorePreferenceSetting, SqliteAppSettingsStore,
+    log_level_name, parse_core_preference, parse_log_level,
 };
 use magies_desktop_lib::logs::LogLevel;
 
@@ -34,6 +35,7 @@ fn saved_settings_survive_a_restart() {
         connect_on_launch: true,
         close_to_tray: false,
         launch_at_login: true,
+        core_preference: CorePreferenceSetting::Xray,
         log_level: LogLevel::Debug,
     };
 
@@ -112,6 +114,72 @@ fn a_corrupt_stored_level_is_a_typed_error() {
         store.load().unwrap_err(),
         AppSettingsStoreError::InvalidStoredValue { value } if value == "verbose"
     ));
+}
+
+#[test]
+fn the_default_core_preference_is_auto() {
+    let store = SqliteAppSettingsStore::open_in_memory().unwrap();
+
+    assert_eq!(
+        store.load().unwrap().core_preference,
+        CorePreferenceSetting::Auto
+    );
+}
+
+#[test]
+fn every_core_preference_round_trips_through_storage() {
+    let store = SqliteAppSettingsStore::open_in_memory().unwrap();
+
+    for preference in [
+        CorePreferenceSetting::Auto,
+        CorePreferenceSetting::SingBox,
+        CorePreferenceSetting::Xray,
+    ] {
+        store
+            .save(AppSettings {
+                core_preference: preference,
+                ..AppSettings::default()
+            })
+            .unwrap();
+
+        assert_eq!(store.load().unwrap().core_preference, preference);
+    }
+}
+
+#[test]
+fn a_corrupt_stored_core_preference_is_a_typed_error() {
+    let database = TestDatabase::new("app-settings-core");
+    {
+        let store = SqliteAppSettingsStore::open(database.path()).unwrap();
+        store.save(AppSettings::default()).unwrap();
+    }
+    let connection = rusqlite::Connection::open(database.path()).unwrap();
+    connection
+        .execute(
+            "UPDATE app_settings SET core_preference = 'clash' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    let store = SqliteAppSettingsStore::open(database.path()).unwrap();
+
+    assert!(matches!(
+        store.load().unwrap_err(),
+        AppSettingsStoreError::InvalidStoredValue { value } if value == "clash"
+    ));
+}
+
+#[test]
+fn core_preference_names_are_stable_in_both_directions() {
+    for preference in [
+        CorePreferenceSetting::Auto,
+        CorePreferenceSetting::SingBox,
+        CorePreferenceSetting::Xray,
+    ] {
+        assert_eq!(parse_core_preference(preference.name()), Some(preference));
+    }
+    assert_eq!(parse_core_preference("clash"), None);
 }
 
 #[test]

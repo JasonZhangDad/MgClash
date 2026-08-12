@@ -138,6 +138,7 @@ const CONNECTED: SessionStatus = { ...SELECTED, connected: true };
 const DEFAULT_SETTINGS = {
   closeToTray: true,
   connectOnLaunch: false,
+  corePreference: "auto" as const,
   launchAtLogin: false,
   logLevel: "info" as const,
 };
@@ -719,6 +720,29 @@ describe("App", () => {
       connectOnLaunch: true,
     });
     expect(createField("启动时自动连接").checked).toBe(true);
+  });
+
+  it("saves a Core choice and shows the matrix caveat", async () => {
+    await render();
+
+    await act(async () => {
+      selectValue("xray", createSelect("Core 选择"));
+    });
+
+    expect(saveAppSettingsMock).toHaveBeenCalledWith({
+      ...DEFAULT_SETTINGS,
+      corePreference: "xray",
+    });
+    // The UI must not decide what Xray can do; it repeats what the matrix says.
+    expect(container.textContent).toContain("Xray 不支持 Hysteria2");
+  });
+
+  it("locks the Core picker while connected", async () => {
+    loadSessionStatusMock.mockResolvedValue(CONNECTED);
+    loadNodesMock.mockResolvedValue([CONNECTED.node]);
+    await render();
+
+    expect(createSelect("Core 选择").disabled).toBe(true);
   });
 
   it("seeds the log filter from the saved level", async () => {
