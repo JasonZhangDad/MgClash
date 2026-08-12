@@ -130,6 +130,8 @@ const SELECTED: SessionStatus = {
     port: 8388,
     protocol: "shadowsocks",
     server: "edge.example.com",
+    transport: "tcp",
+    tls: null,
   },
 };
 
@@ -1140,6 +1142,8 @@ describe("App", () => {
       port: 9000,
       protocol: "shadowsocks" as const,
       server: "osaka.example.com",
+      transport: "tcp",
+      tls: null,
     };
     loadSessionStatusMock.mockResolvedValue(SELECTED);
     loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);

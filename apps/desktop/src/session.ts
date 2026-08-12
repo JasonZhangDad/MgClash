@@ -10,6 +10,10 @@ export type ProxyProtocol =
 export interface NodeSummary {
   deletable: boolean;
   groupId: string | null;
+  /// The stream transport; Hysteria2 reports its own QUIC transport.
+  transport: string;
+  /// The TLS layer, or null for plaintext.
+  tls: string | null;
   id: string;
   lastTestedAt: number | null;
   latencyMs: number | null;
