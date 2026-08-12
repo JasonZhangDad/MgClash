@@ -15,6 +15,7 @@ const exportNodeLinkMock = vi.hoisted(() => vi.fn());
 const cloneNodeMock = vi.hoisted(() => vi.fn());
 const nodeQrCodeMock = vi.hoisted(() => vi.fn());
 const readQrCodeMock = vi.hoisted(() => vi.fn());
+const checkUpdateMock = vi.hoisted(() => vi.fn());
 const removeDuplicateNodesMock = vi.hoisted(() => vi.fn());
 const createNodeMock = vi.hoisted(() => vi.fn());
 const importNodesMock = vi.hoisted(() => vi.fn());
@@ -71,6 +72,7 @@ vi.mock("./session", async () => {
   cloneNode: cloneNodeMock,
   nodeQrCode: nodeQrCodeMock,
   readQrCode: readQrCodeMock,
+  checkUpdate: checkUpdateMock,
   removeDuplicateNodes: removeDuplicateNodesMock,
     loadNodeGroups: loadNodeGroupsMock,
     loadNodes: loadNodesMock,
@@ -1958,6 +1960,58 @@ describe("App", () => {
       "no QR code was found",
     );
     expect(importNodesMock).not.toHaveBeenCalled();
+  });
+
+  it("contacts nothing until the user asks for an update check", async () => {
+    await render();
+
+    // A proxy client that phones home on launch tells an observer it is
+    // running; that is the user's decision, not a default.
+    expect(checkUpdateMock).not.toHaveBeenCalled();
+
+    checkUpdateMock.mockResolvedValue({
+      current: "0.1.0",
+      latest: "0.2.0",
+      url: "https://example.invalid/releases/v0.2.0",
+      updateAvailable: true,
+    });
+    await act(async () => button("检查更新").click());
+
+    expect(checkUpdateMock).toHaveBeenCalledTimes(1);
+    const dialog = container.querySelector("[aria-label='检查更新结果']");
+    expect(dialog?.textContent).toContain("有新版本 0.2.0");
+    expect(dialog?.textContent).toContain("https://example.invalid/releases/v0.2.0");
+  });
+
+  it("says so when the build is already current", async () => {
+    checkUpdateMock.mockResolvedValue({
+      current: "0.1.0",
+      latest: "0.1.0",
+      url: "https://example.invalid/releases",
+      updateAvailable: false,
+    });
+    await render();
+
+    await act(async () => button("检查更新").click());
+
+    expect(
+      container.querySelector("[aria-label='检查更新结果']")?.textContent,
+    ).toContain("已是最新版本 0.1.0");
+  });
+
+  it("reports a failed update check without a dialog", async () => {
+    checkUpdateMock.mockRejectedValue({
+      code: "release_check_failed",
+      message: "network unreachable",
+    });
+    await render();
+
+    await act(async () => button("检查更新").click());
+
+    expect(container.querySelector("[role='alert']")?.textContent).toContain(
+      "network unreachable",
+    );
+    expect(container.querySelector("[aria-label='检查更新结果']")).toBeNull();
   });
 
   it("keeps subscription-owned nodes read-only", async () => {

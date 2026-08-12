@@ -26,14 +26,16 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use chrono::Local;
 use magies_domain::TimestampMillis;
 use magies_platform::network_path::NetworkPathReader;
+use magies_platform::release::{ReleaseVersion, UpdateStatus};
 use magies_platform::{TargetPlatform, TunAvailability};
+use magies_profiles::ensure_rustls_crypto_provider;
 use magies_profiles::{
     ManualNodeDraft, ShareLinkQrScanError, ShareLinkQrScanner, SqliteManualNodeStore,
     SqliteNodeGroupStore, SqliteNodeOrderStore, SqliteSubscriptionStore,
 };
 use magies_session::{DesktopSession, NetworkWatcher, RecoveryOutcome, TcpHealthProbe};
 use magies_storage::PlatformSecretStore;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
@@ -912,6 +914,109 @@ fn session_node_traffic(state: State<'_, AppState>) -> HashMap<String, NodeTraff
         .collect()
 }
 
+/// Where the app looks for a newer release.
+///
+/// GitHub's API rather than a server of our own: there is nothing to run, and
+/// the releases already live there.
+const RELEASE_API: &str = "https://api.github.com/repos/JasonZhangDad/MgClash/releases/latest";
+
+/// How long a release check may take before it is abandoned.
+const RELEASE_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// What a release check found.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateCheck {
+    current: String,
+    latest: String,
+    /// Where the user can read about and download the release.
+    url: String,
+    update_available: bool,
+}
+
+/// Asks GitHub whether a newer release exists.
+///
+/// **Only ever called from the menu.** The app contacts nothing on its own: a
+/// proxy client that phones home on launch tells an observer it is running, and
+/// that is the user's decision to make rather than a default.
+#[tauri::command]
+async fn session_check_update() -> Result<UpdateCheck, CommandError> {
+    let current =
+        ReleaseVersion::parse(env!("CARGO_PKG_VERSION")).map_err(|error| CommandError {
+            code: "release_version_malformed",
+            message: describe(&error),
+        })?;
+
+    ensure_rustls_crypto_provider();
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(RELEASE_CHECK_TIMEOUT)
+        // GitHub rejects a request with no user agent outright.
+        .user_agent(concat!("MgClash/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|error| release_check_error(&error.without_url()))?;
+    let response = client
+        .get(RELEASE_API)
+        .send()
+        .await
+        .map_err(|error| release_check_error(&error.without_url()))?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        // No release has been published yet, which is not a failure.
+        return Ok(UpdateCheck {
+            current: current.to_string(),
+            latest: current.to_string(),
+            url: RELEASE_HTML.to_owned(),
+            update_available: false,
+        });
+    }
+    let response = response
+        .error_for_status()
+        .map_err(|error| release_check_error(&error.without_url()))?;
+    // Parsed with `serde_json` rather than reqwest's `json` feature: one field
+    // does not justify widening what the HTTP client pulls in.
+    let body = response
+        .text()
+        .await
+        .map_err(|error| release_check_error(&error.without_url()))?;
+    let release: GithubRelease = serde_json::from_str(&body).map_err(|error| CommandError {
+        code: "release_check_failed",
+        message: describe(&error),
+    })?;
+
+    let latest = ReleaseVersion::parse(&release.tag_name).map_err(|error| CommandError {
+        code: "release_version_malformed",
+        message: describe(&error),
+    })?;
+    Ok(UpdateCheck {
+        current: current.to_string(),
+        latest: latest.to_string(),
+        url: if release.html_url.is_empty() {
+            RELEASE_HTML.to_owned()
+        } else {
+            release.html_url
+        },
+        update_available: current.compare(&latest) == UpdateStatus::UpdateAvailable,
+    })
+}
+
+/// The page a user is sent to when there is no release to link.
+const RELEASE_HTML: &str = "https://github.com/JasonZhangDad/MgClash/releases";
+
+/// Only the two fields the check reads; GitHub sends many more.
+#[derive(Deserialize)]
+struct GithubRelease {
+    tag_name: String,
+    #[serde(default)]
+    html_url: String,
+}
+
+fn release_check_error(error: &reqwest::Error) -> CommandError {
+    CommandError {
+        code: "release_check_failed",
+        message: describe(error),
+    }
+}
+
 /// Reads a sharing link out of a QR code image the user picked.
 ///
 /// Takes the bytes rather than a path: the webview reads the file the user chose
@@ -1539,6 +1644,7 @@ pub fn run() {
             session_clone_node,
             session_node_qr_code,
             session_read_qr_code,
+            session_check_update,
             session_node_traffic,
             session_remove_duplicate_nodes,
             session_connect,

@@ -360,6 +360,20 @@ export function loadNodeTraffic(): Promise<Record<string, NodeTraffic>> {
   return invoke<Record<string, NodeTraffic>>("session_node_traffic");
 }
 
+/** What a release check found. */
+export interface UpdateCheck {
+  current: string;
+  latest: string;
+  url: string;
+  updateAvailable: boolean;
+}
+
+/** Asks GitHub whether a newer release exists. Only ever called from the menu:
+ * the app contacts nothing on its own. */
+export function checkUpdate(): Promise<UpdateCheck> {
+  return invoke<UpdateCheck>("session_check_update");
+}
+
 /** Reads a sharing link out of a QR code image the user picked. */
 export function readQrCode(image: Uint8Array): Promise<string> {
   return invoke<string>("session_read_qr_code", { image: [...image] });
