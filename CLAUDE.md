@@ -121,8 +121,9 @@ Places where meaning cannot survive the translation are pinned by tests; look fo
 assuming a field maps across.
 
 Each sub-generator has its own unit test file *and* an `--ignored` smoke test that feeds the output
-to a real `sing-box check` or `xray run -test`. Adding a config field means updating both. **The
-Xray smokes have never been run** — no Xray binary was available when they were written.
+to a real `sing-box check` or `xray run -test`. Adding a config field means updating both. The Xray
+smokes were last run against Xray 26.3.27 on macos-x86_64 and all passed; what they prove is that
+the schema is accepted, not that traffic routes correctly.
 
 ### Session lifecycle (`magies-session`)
 
