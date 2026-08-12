@@ -985,6 +985,7 @@ fn set_app_settings(
         let mut service = state.service();
         service.set_core_preference(settings.core_preference.preference());
         service.set_tun_enabled(settings.tun_enabled);
+        service.set_system_proxy_mode(settings.system_proxy_mode.mode());
     }
     tracing::info!("application settings updated");
     Ok(settings)
@@ -1294,6 +1295,7 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         let mut service = lock(&service);
         service.set_core_preference(settings.core_preference.preference());
         service.set_tun_enabled(settings.tun_enabled);
+        service.set_system_proxy_mode(settings.system_proxy_mode.mode());
     }
     let initial_tray_model = {
         let (service, traffic) = (lock(&service), lock(&traffic).snapshot());

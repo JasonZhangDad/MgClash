@@ -173,7 +173,7 @@ pub struct DesktopSessionProfile {
     clash_api_port: Option<NonZeroU16>,
     tun: Option<TunProfile>,
     dns_hijack: bool,
-    system_proxy: bool,
+    system_proxy: SystemProxyMode,
 }
 
 impl DesktopSessionProfile {
@@ -191,7 +191,7 @@ impl DesktopSessionProfile {
             clash_api_port: None,
             tun: None,
             dns_hijack: false,
-            system_proxy: false,
+            system_proxy: SystemProxyMode::Unchanged,
         }
     }
 
@@ -226,15 +226,51 @@ impl DesktopSessionProfile {
         self
     }
 
+    /// Keeps the two-state spelling: enabled means the managed proxy, disabled
+    /// means leaving the host's settings alone.
     #[must_use]
     pub const fn with_system_proxy(mut self, enabled: bool) -> Self {
-        self.system_proxy = enabled;
+        self.system_proxy = if enabled {
+            SystemProxyMode::Managed
+        } else {
+            SystemProxyMode::Unchanged
+        };
+        self
+    }
+
+    #[must_use]
+    pub const fn with_system_proxy_mode(mut self, mode: SystemProxyMode) -> Self {
+        self.system_proxy = mode;
         self
     }
 
     #[must_use]
     pub const fn node(&self) -> &ProxyNode {
         &self.node
+    }
+}
+
+/// What a session does to the host's System Proxy.
+///
+/// v2rayN offers the same three choices plus PAC, and the distinction between
+/// the last two matters: leaving a proxy alone and clearing it are different
+/// requests, which a single boolean could not express.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SystemProxyMode {
+    /// Point the host at this session's local proxies.
+    #[default]
+    Managed,
+    /// Clear the host's proxy for the duration of the session.
+    Cleared,
+    /// Touch nothing, leaving whatever the user configured in place.
+    Unchanged,
+}
+
+impl SystemProxyMode {
+    /// Whether the host's settings are replaced, and therefore snapshotted and
+    /// restored on stop.
+    const fn writes_host_settings(self) -> bool {
+        matches!(self, Self::Managed | Self::Cleared)
     }
 }
 
@@ -314,7 +350,9 @@ where
         if self.active.is_some() {
             return Err(DesktopSessionError::AlreadyRunning);
         }
-        if profile.system_proxy && profile.tun.is_some() {
+        // Only the managed mode conflicts with TUN: clearing the host's proxy
+        // while TUN carries the traffic is a coherent request, not a conflict.
+        if profile.system_proxy == SystemProxyMode::Managed && profile.tun.is_some() {
             return Err(DesktopSessionError::ConflictingNetworkModes);
         }
 
@@ -343,8 +381,15 @@ where
             .start(runtime_config.path())
             .map_err(|source| DesktopSessionError::CoreStart { source })?;
 
-        if profile.system_proxy {
-            let managed_state = managed_system_proxy(profile.socks, profile.http);
+        if profile.system_proxy.writes_host_settings() {
+            // Clearing goes through the same path as managing, so the user's own
+            // settings are snapshotted first and restored on stop either way.
+            let managed_state = match profile.system_proxy {
+                SystemProxyMode::Cleared => cleared_system_proxy(),
+                SystemProxyMode::Managed | SystemProxyMode::Unchanged => {
+                    managed_system_proxy(profile.socks, profile.http)
+                }
+            };
             if let Err(proxy) = self.system_proxy.enable(&managed_state) {
                 return match self.core.stop() {
                     Ok(()) => Err(DesktopSessionError::ProxyEnable { source: proxy }),
@@ -362,7 +407,7 @@ where
 
         self.active = Some(ActiveSession {
             runtime_config,
-            system_proxy: profile.system_proxy,
+            system_proxy: profile.system_proxy.writes_host_settings(),
             profile: profile.clone(),
         });
         Ok(output)
@@ -391,6 +436,16 @@ where
         self.active.take();
         Ok(())
     }
+}
+
+/// A System Proxy state with every protocol and PAC switched off.
+fn cleared_system_proxy() -> SystemProxyState {
+    SystemProxyState::new(
+        ProxySetting::disabled(),
+        ProxySetting::disabled(),
+        ProxySetting::disabled(),
+        PacSetting::disabled(),
+    )
 }
 
 fn managed_system_proxy(socks: LocalSocksProfile, http: LocalHttpProfile) -> SystemProxyState {

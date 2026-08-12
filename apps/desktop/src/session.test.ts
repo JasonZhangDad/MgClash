@@ -54,6 +54,7 @@ const IDLE: SessionStatus = {
   node: null,
   socksPort: 10808,
   systemProxy: true,
+  systemProxyMode: "managed" as const,
 };
 
 describe("session commands", () => {

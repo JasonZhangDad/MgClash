@@ -29,7 +29,7 @@ use magies_profiles::{
 use magies_routing::RoutingMode;
 use magies_session::{
     CoreSessionControl, DesktopSession, NetworkEvent, RecoveryOutcome, SessionHealthProbe,
-    SystemProxySessionControl,
+    SystemProxyMode, SystemProxySessionControl,
 };
 use magies_storage::{MemorySecretStore, SecretStore};
 use uuid::Uuid;
@@ -1269,7 +1269,8 @@ fn v01_defaults_use_the_documented_loopback_ports() {
     assert_eq!(defaults.socks, LocalSocksProfile::default());
     assert_eq!(defaults.http, LocalHttpProfile::default());
     assert_eq!(defaults.clash_api_port.get(), 9_090);
-    assert!(defaults.system_proxy);
+    // Managed is the mode every install already had before the choice existed.
+    assert_eq!(defaults.system_proxy, SystemProxyMode::Managed);
 }
 
 static RUNTIME_SEQUENCE: AtomicUsize = AtomicUsize::new(0);

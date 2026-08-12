@@ -42,6 +42,9 @@ export type LogSource = "app" | "core";
 
 export type CorePreference = "auto" | "sing-box" | "xray";
 
+/** Three of v2rayN's four System Proxy choices; PAC has no counterpart yet. */
+export type SystemProxyMode = "managed" | "cleared" | "unchanged";
+
 export interface AppSettings {
   closeToTray: boolean;
   connectOnLaunch: boolean;
@@ -49,6 +52,7 @@ export interface AppSettings {
   launchAtLogin: boolean;
   tunEnabled: boolean;
   logLevel: LogLevel;
+  systemProxyMode: SystemProxyMode;
 }
 
 export interface LogEntry {
@@ -150,6 +154,7 @@ export interface SessionStatus {
   route: RouteSettings;
   socksPort: number;
   systemProxy: boolean;
+  systemProxyMode: SystemProxyMode;
 }
 
 export type RoutingMode = "direct" | "global" | "rule";

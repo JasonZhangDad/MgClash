@@ -8,7 +8,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use magies_desktop_lib::app_settings::{
     AppSettings, AppSettingsStoreError, CorePreferenceSetting, SqliteAppSettingsStore,
-    log_level_name, parse_core_preference, parse_log_level,
+    SystemProxyModeSetting, log_level_name, parse_core_preference, parse_log_level,
+    parse_system_proxy_mode,
 };
 use magies_desktop_lib::logs::LogLevel;
 
@@ -40,6 +41,7 @@ fn saved_settings_survive_a_restart() {
         core_preference: CorePreferenceSetting::Xray,
         tun_enabled: true,
         log_level: LogLevel::Debug,
+        system_proxy_mode: SystemProxyModeSetting::Cleared,
     };
 
     {
@@ -222,4 +224,93 @@ impl Drop for TestDatabase {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
     }
+}
+
+#[test]
+fn the_default_system_proxy_mode_is_managed() {
+    let store = SqliteAppSettingsStore::open_in_memory().unwrap();
+
+    // The behaviour every existing install already has.
+    assert_eq!(
+        store.load().unwrap().system_proxy_mode,
+        SystemProxyModeSetting::Managed
+    );
+}
+
+#[test]
+fn every_system_proxy_mode_round_trips_through_storage() {
+    let store = SqliteAppSettingsStore::open_in_memory().unwrap();
+
+    for mode in [
+        SystemProxyModeSetting::Managed,
+        SystemProxyModeSetting::Cleared,
+        SystemProxyModeSetting::Unchanged,
+    ] {
+        store
+            .save(AppSettings {
+                system_proxy_mode: mode,
+                ..AppSettings::default()
+            })
+            .unwrap();
+
+        assert_eq!(store.load().unwrap().system_proxy_mode, mode);
+        assert_eq!(parse_system_proxy_mode(mode.name()), Some(mode));
+    }
+}
+
+#[test]
+fn a_database_written_before_the_mode_existed_still_opens() {
+    let database = TestDatabase::new("app-settings-migration");
+    {
+        // The schema exactly as it was before the System Proxy mode was added.
+        let connection = rusqlite::Connection::open(database.path()).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE app_settings (
+                     id INTEGER PRIMARY KEY CHECK (id = 1),
+                     connect_on_launch INTEGER NOT NULL,
+                     close_to_tray INTEGER NOT NULL,
+                     core_preference TEXT NOT NULL,
+                     tun_enabled INTEGER NOT NULL,
+                     launch_at_login INTEGER NOT NULL,
+                     log_level TEXT NOT NULL
+                 );
+                 INSERT INTO app_settings VALUES (1, 1, 0, 'xray', 0, 1, 'debug');",
+            )
+            .unwrap();
+    }
+
+    let store = SqliteAppSettingsStore::open(database.path()).unwrap();
+    let settings = store.load().unwrap();
+
+    // The user's existing choices survive, and the new one takes the default
+    // rather than failing to read the row.
+    assert!(settings.connect_on_launch);
+    assert!(!settings.close_to_tray);
+    assert!(settings.launch_at_login);
+    assert_eq!(settings.core_preference, CorePreferenceSetting::Xray);
+    assert_eq!(settings.log_level, LogLevel::Debug);
+    assert_eq!(settings.system_proxy_mode, SystemProxyModeSetting::Managed);
+}
+
+#[test]
+fn opening_twice_does_not_repeat_the_migration() {
+    let database = TestDatabase::new("app-settings-migration-twice");
+    let first = SqliteAppSettingsStore::open(database.path()).unwrap();
+    first
+        .save(AppSettings {
+            system_proxy_mode: SystemProxyModeSetting::Cleared,
+            ..AppSettings::default()
+        })
+        .unwrap();
+    drop(first);
+
+    // SQLite has no ADD COLUMN IF NOT EXISTS, so every launch after the first
+    // hits a duplicate-column error that has to be tolerated, not propagated.
+    let second = SqliteAppSettingsStore::open(database.path()).unwrap();
+
+    assert_eq!(
+        second.load().unwrap().system_proxy_mode,
+        SystemProxyModeSetting::Cleared
+    );
 }

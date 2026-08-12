@@ -13,7 +13,7 @@ use magies_profiles::{
 use magies_routing::{RouteOutbound, RouteProfile, RoutingMode};
 use magies_session::{
     CoreSessionControl, DesktopSession, DesktopSessionError, DesktopSessionProfile,
-    SystemProxySessionControl,
+    SystemProxyMode, SystemProxySessionControl,
 };
 use magies_storage::{MemorySecretStore, SecretStore};
 use uuid::Uuid;
@@ -442,9 +442,17 @@ impl SystemProxySessionControl for FakeProxy {
 
     fn enable(&mut self, state: &SystemProxyState) -> Result<(), Self::Error> {
         self.events.lock().unwrap().push("proxy_enable");
-        assert_eq!(state.http().endpoint().unwrap().port(), 10_809);
-        assert_eq!(state.https().endpoint().unwrap().port(), 10_809);
-        assert_eq!(state.socks().endpoint().unwrap().port(), 10_808);
+        // A managed state points at the session's local proxies; a cleared one
+        // carries no endpoint at all.
+        if let Some(socks) = state.socks().endpoint() {
+            assert_eq!(state.http().endpoint().unwrap().port(), 10_809);
+            assert_eq!(state.https().endpoint().unwrap().port(), 10_809);
+            assert_eq!(socks.port(), 10_808);
+        } else {
+            assert!(!state.http().enabled());
+            assert!(!state.https().enabled());
+            assert!(!state.pac().enabled());
+        }
         if self.fail_enable {
             Err(FakeError("proxy enable failed"))
         } else {
@@ -495,4 +503,73 @@ fn profile_protocol_is_the_expected_test_protocol() {
         profile_without_stored_credential().node().protocol_type,
         ProxyProtocol::Shadowsocks
     );
+}
+
+#[test]
+fn the_cleared_mode_writes_a_disabled_state_and_restores_it_on_stop() {
+    let store = MemorySecretStore::default();
+    let profile =
+        profile_with_stored_credential(&store).with_system_proxy_mode(SystemProxyMode::Cleared);
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let runtime = RuntimeDirectory::new("proxy-cleared");
+    let mut session = DesktopSession::new(
+        store,
+        FakeCore::new(events.clone()),
+        FakeProxy::new(events.clone()),
+        runtime.path(),
+    );
+
+    session.start(&profile).unwrap();
+    session.stop().unwrap();
+
+    // Clearing goes through the same snapshot path as managing, so the user's
+    // own proxy comes back when the session ends.
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        ["core_start", "proxy_enable", "proxy_stop", "core_stop"]
+    );
+}
+
+#[test]
+fn the_unchanged_mode_never_touches_the_host() {
+    let store = MemorySecretStore::default();
+    let profile =
+        profile_with_stored_credential(&store).with_system_proxy_mode(SystemProxyMode::Unchanged);
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let runtime = RuntimeDirectory::new("proxy-unchanged");
+    let mut session = DesktopSession::new(
+        store,
+        FakeCore::new(events.clone()),
+        FakeProxy::new(events.clone()),
+        runtime.path(),
+    );
+
+    session.start(&profile).unwrap();
+    session.stop().unwrap();
+
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        ["core_start", "core_stop"]
+    );
+}
+
+#[test]
+fn clearing_the_host_proxy_is_compatible_with_tun() {
+    let store = MemorySecretStore::default();
+    let tun = TunProfile::new(OperatingSystem::Windows, false, 1_500, true, true).unwrap();
+    let profile = profile_with_stored_credential(&store)
+        .with_system_proxy_mode(SystemProxyMode::Cleared)
+        .with_tun(tun, true);
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let runtime = RuntimeDirectory::new("proxy-cleared-tun");
+    let mut session = DesktopSession::new(
+        store,
+        FakeCore::new(events.clone()),
+        FakeProxy::new(events.clone()),
+        runtime.path(),
+    );
+
+    // Only the managed mode conflicts: clearing the host proxy while TUN carries
+    // the traffic is what a TUN user wants, not a contradiction.
+    assert!(session.start(&profile).is_ok());
 }
