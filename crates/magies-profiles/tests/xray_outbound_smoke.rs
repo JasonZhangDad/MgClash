@@ -249,3 +249,54 @@ fn official_xray_still_has_no_hysteria2_outbound() {
         "Xray accepted a hysteria2 outbound, so the capability matrix is wrong:\n{output}"
     );
 }
+
+/// Xray 26.3.27 removed `allowInsecure`. This asserts the removal, so if a later
+/// Xray restores it the test fails and the generator's refusal can be revisited.
+#[test]
+#[ignore = "requires MAGIES_XRAY_BIN pointing to an official Xray build"]
+fn official_xray_still_rejects_allow_insecure() {
+    let generated = json!({
+        "protocol": "vless",
+        "tag": "proxy",
+        "settings": { "vnext": [{
+            "address": "edge.example.com",
+            "port": 443,
+            "users": [{ "id": USER_ID, "encryption": "none" }]
+        }]},
+        "streamSettings": {
+            "network": "tcp",
+            "security": "tls",
+            "tlsSettings": { "serverName": "edge.example.com", "allowInsecure": true }
+        }
+    });
+
+    let (accepted, output) = check(&config_with(&generated), "allow-insecure");
+
+    assert!(
+        !accepted,
+        "Xray accepted allowInsecure, so the generator can stop refusing it:\n{output}"
+    );
+}
+
+/// The shape the generator now emits for secure TLS has to keep working.
+#[test]
+#[ignore = "requires MAGIES_XRAY_BIN pointing to an official Xray build"]
+fn official_xray_accepts_tls_without_an_insecure_field() {
+    let generated = outbound(
+        ManualCredentialDraft::Vless {
+            user_id: user_id(),
+            flow: None,
+        },
+        None,
+        Some(TlsConfig::Tls {
+            server_name: Some("edge.example.com".to_owned()),
+            allow_insecure: false,
+            alpn: vec!["h2".to_owned()],
+            fingerprint: Some("chrome".to_owned()),
+        }),
+    );
+
+    let (accepted, output) = check(&config_with(&generated), "secure-tls");
+
+    assert!(accepted, "Xray rejected the secure TLS outbound:\n{output}");
+}

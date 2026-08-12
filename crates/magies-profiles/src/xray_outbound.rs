@@ -159,12 +159,12 @@ fn stream_settings(node: &ProxyNode) -> Result<Value, XrayOutboundError> {
     }
 
     if let Some(tls) = node.tls.as_ref() {
-        apply_tls(tls, &mut stream);
+        apply_tls(tls, &mut stream)?;
     }
     Ok(stream)
 }
 
-fn apply_tls(tls: &TlsConfig, stream: &mut Value) {
+fn apply_tls(tls: &TlsConfig, stream: &mut Value) -> Result<(), XrayOutboundError> {
     match tls {
         TlsConfig::Tls {
             server_name,
@@ -172,8 +172,15 @@ fn apply_tls(tls: &TlsConfig, stream: &mut Value) {
             alpn,
             fingerprint,
         } => {
+            // Xray 26.3.27 removed `allowInsecure`, pointing users at
+            // `pinnedPeerCertSha256` instead. Emitting it makes Xray refuse to
+            // start, and silently dropping it would turn a node the user marked
+            // insecure into one that fails its TLS handshake at connect time.
+            if *allow_insecure {
+                return Err(XrayOutboundError::InsecureTlsUnsupported);
+            }
             stream["security"] = Value::String("tls".to_owned());
-            let mut settings = json!({ "allowInsecure": allow_insecure });
+            let mut settings = json!({});
             if let Some(server_name) = server_name {
                 settings["serverName"] = Value::String(server_name.clone());
             }
@@ -212,6 +219,7 @@ fn apply_tls(tls: &TlsConfig, stream: &mut Value) {
             stream["realitySettings"] = settings;
         }
     }
+    Ok(())
 }
 
 /// Rejects a protocol the capability matrix already excludes, so the two can
@@ -259,4 +267,6 @@ pub enum XrayOutboundError {
     MissingTransport { protocol: ProxyProtocol },
     #[error("Xray does not accept a Trojan flow")]
     UnsupportedTrojanFlow,
+    #[error("Xray no longer accepts insecure TLS; this node needs certificate pinning")]
+    InsecureTlsUnsupported,
 }
