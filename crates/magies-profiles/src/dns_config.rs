@@ -54,7 +54,7 @@ pub struct DnsServer {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum DnsServerKind {
+pub(crate) enum DnsServerKind {
     System,
     Plain {
         transport: PlainDnsTransport,
@@ -177,6 +177,14 @@ impl DnsServer {
         }
     }
 
+    pub(crate) fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    pub(crate) const fn kind(&self) -> &DnsServerKind {
+        &self.kind
+    }
+
     fn json(&self) -> Value {
         match &self.kind {
             DnsServerKind::System => json!({
@@ -238,7 +246,7 @@ pub struct DnsRule {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DnsRuleKind {
+pub(crate) enum DnsRuleKind {
     Domain,
     DomainSuffix,
     DomainKeyword,
@@ -296,6 +304,18 @@ impl DnsRule {
         })
     }
 
+    pub(crate) const fn kind(&self) -> DnsRuleKind {
+        self.kind
+    }
+
+    pub(crate) fn values(&self) -> &[String] {
+        &self.values
+    }
+
+    pub(crate) fn server(&self) -> &str {
+        &self.server
+    }
+
     fn json(&self) -> Value {
         let mut value = json!({
             "action": "route",
@@ -317,6 +337,22 @@ pub struct DnsProfile {
 }
 
 impl DnsProfile {
+    pub(crate) fn servers(&self) -> &[DnsServer] {
+        &self.servers
+    }
+
+    pub(crate) fn rules(&self) -> &[DnsRule] {
+        &self.rules
+    }
+
+    pub(crate) const fn strategy(&self) -> DnsStrategy {
+        self.strategy
+    }
+
+    pub(crate) const fn fake_ip_enabled(&self) -> bool {
+        self.fake_ip_enabled
+    }
+
     /// Creates a validated DNS profile.
     ///
     /// # Errors
@@ -416,6 +452,10 @@ pub struct GeneratedDnsConfig {
 }
 
 impl GeneratedDnsConfig {
+    pub(crate) const fn from_json(json: Value) -> Self {
+        Self { json }
+    }
+
     #[must_use]
     pub const fn json(&self) -> &Value {
         &self.json

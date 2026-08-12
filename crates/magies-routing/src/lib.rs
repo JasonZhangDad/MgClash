@@ -1,5 +1,9 @@
 //! Ordered route models and Core route generation for `MgClash`.
 
+mod xray;
+
+pub use xray::XrayRouteConfigGenerator;
+
 use std::collections::HashSet;
 use std::num::NonZeroU16;
 
