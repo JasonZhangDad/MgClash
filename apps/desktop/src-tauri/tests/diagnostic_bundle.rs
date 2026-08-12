@@ -23,6 +23,8 @@ fn status() -> SessionStatus {
             server: "edge.example.com".to_owned(),
             port: 8388,
             group_id: None,
+            transport: "tcp",
+            tls: None,
             latency_ms: None,
             last_tested_at: None,
         }),

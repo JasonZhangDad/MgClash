@@ -14,10 +14,10 @@
       {
         "label": "main",
         "title": "MgClash",
-        "width": 720,
-        "height": 800,
-        "minWidth": 560,
-        "minHeight": 480
+        "width": 1280,
+        "height": 820,
+        "minWidth": 960,
+        "minHeight": 600
       }
     ]
   },

@@ -291,6 +291,32 @@ fn turning_tun_off_restores_the_previous_core_choice() {
 }
 
 #[test]
+fn the_node_summary_carries_its_transport_and_tls() {
+    let (mut service, _runtime, _fail_start) = service();
+    // A share link with no TLS parameters: plaintext over plain TCP.
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+
+    let node = &service.nodes().unwrap()[0];
+
+    assert_eq!(node.transport, "tcp");
+    assert_eq!(node.tls, None);
+}
+
+#[test]
+fn a_hysteria2_node_reports_its_own_quic_transport() {
+    let (mut service, _runtime, _fail_start) = service();
+    service
+        .import_node("hysteria2://secret@edge.example.com:8443#Tokyo")
+        .unwrap();
+
+    let node = &service.nodes().unwrap()[0];
+
+    // The model stores no transport for Hysteria2 because it carries its own.
+    assert_eq!(node.transport, "quic");
+    assert_eq!(node.tls, Some("tls"));
+}
+
+#[test]
 fn the_status_reports_sing_box_by_default() {
     let (mut service, _runtime, _fail_start) = service();
     assert_eq!(service.status().core, "sing-box");

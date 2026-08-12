@@ -12,7 +12,7 @@ use std::time::Instant;
 
 use magies_domain::{
     CoreType, CredentialRef, NodeModelError, NodeName, ProxyNode, ProxyProtocol, ServerAddress,
-    TimestampMillis,
+    TimestampMillis, TlsConfig, TransportConfig,
 };
 use magies_platform::{CpuArchitecture, OperatingSystem};
 use magies_profiles::{
@@ -136,6 +136,10 @@ pub struct NodeSummary {
     pub server: String,
     pub port: u16,
     pub group_id: Option<Uuid>,
+    /// The stream transport, as the node table shows it.
+    pub transport: &'static str,
+    /// Which TLS layer the node uses, or `None` for plaintext.
+    pub tls: Option<&'static str>,
     pub deletable: bool,
     pub latency_ms: Option<u32>,
     pub last_tested_at: Option<i64>,
@@ -150,10 +154,29 @@ impl From<&ProxyNode> for NodeSummary {
             server: node.server.as_str().to_owned(),
             port: node.port.get(),
             group_id: node.group_id,
+            transport: transport_name(node.transport.as_ref()),
+            tls: node.tls.as_ref().map(tls_name),
             deletable: node.subscription_id.is_none(),
             latency_ms: node.latency_ms,
             last_tested_at: node.last_tested_at.map(TimestampMillis::get),
         }
+    }
+}
+
+/// Hysteria2 carries its own QUIC transport, which the model stores as `None`.
+const fn transport_name(transport: Option<&TransportConfig>) -> &'static str {
+    match transport {
+        Some(TransportConfig::Tcp) => "tcp",
+        Some(TransportConfig::WebSocket { .. }) => "ws",
+        Some(TransportConfig::Grpc { .. }) => "grpc",
+        None => "quic",
+    }
+}
+
+const fn tls_name(tls: &TlsConfig) -> &'static str {
+    match tls {
+        TlsConfig::Tls { .. } => "tls",
+        TlsConfig::Reality { .. } => "reality",
     }
 }
 

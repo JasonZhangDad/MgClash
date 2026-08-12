@@ -150,6 +150,25 @@ function savedUrlTestAddress(): string {
   }
 }
 
+type PanelId =
+  | "connection"
+  | "nodes"
+  | "subscriptions"
+  | "routing"
+  | "settings"
+  | "logs";
+
+/// The node table is the main view; everything else opens over it, which is how
+/// v2rayN keeps the list in front while you configure.
+const TABS: { id: PanelId; label: string }[] = [
+  { id: "connection", label: "概览" },
+  { id: "nodes", label: "添加节点" },
+  { id: "subscriptions", label: "订阅分组" },
+  { id: "routing", label: "路由设置" },
+  { id: "settings", label: "参数设置" },
+  { id: "logs", label: "诊断" },
+];
+
 function formatRate(bytesPerSecond: number): string {
   const units = ["B/s", "KB/s", "MB/s", "GB/s"];
   let value = bytesPerSecond;
@@ -198,6 +217,7 @@ export default function App() {
   const [uri, setUri] = useState("");
   const [createForm, setCreateForm] =
     useState<ManualNodeForm>(emptyManualNodeForm);
+  const [panel, setPanel] = useState<PanelId | null>(null);
   const [bulkText, setBulkText] = useState("");
   const [bulkReport, setBulkReport] = useState<BulkImportReport | null>(null);
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -967,8 +987,28 @@ export default function App() {
 
   return (
     <main className="app-shell">
-      <header className="toolbar">
-        <h1>MgClash</h1>
+      <header className="menubar">
+        <span className="brand">MgClash</span>
+        <nav aria-label="配置入口">
+          {TABS.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              className="menu-item"
+              onClick={() => setPanel(entry.id)}
+            >
+              {entry.label}
+            </button>
+          ))}
+        </nav>
+        <button
+          type="button"
+          className={connected ? "primary danger" : "primary"}
+          disabled={busy || node === null || systemProxyStartup !== "clean"}
+          onClick={() => void run(connected ? disconnectSession : connectSession)}
+        >
+          {connected ? "断开" : "连接"}
+        </button>
       </header>
 
       <section className="content">
@@ -1015,458 +1055,7 @@ export default function App() {
           </div>
         )}
 
-        <h2>连接</h2>
-
-        <dl>
-          <div>
-            <dt>状态</dt>
-            <dd className={connected ? "connected" : undefined}>
-              {connected ? "已连接" : "未连接"}
-            </dd>
-          </div>
-          <div>
-            <dt>下载</dt>
-            <dd aria-label="下载速率">
-              {connected ? formatRate(traffic.downloadBytesPerSecond) : "—"}
-            </dd>
-          </div>
-          <div>
-            <dt>上传</dt>
-            <dd aria-label="上传速率">
-              {connected ? formatRate(traffic.uploadBytesPerSecond) : "—"}
-            </dd>
-          </div>
-          <div>
-            <dt>今日</dt>
-            <dd aria-label="今日流量">{formatBytes(traffic.todayBytes)}</dd>
-          </div>
-          <div>
-            <dt>本月</dt>
-            <dd aria-label="本月流量">{formatBytes(traffic.monthBytes)}</dd>
-          </div>
-          <div>
-            <dt>累计</dt>
-            <dd aria-label="累计流量">{formatBytes(traffic.totalBytes)}</dd>
-          </div>
-          <div>
-            <dt>节点</dt>
-            <dd>{node ? node.name : "尚未导入"}</dd>
-          </div>
-          <div>
-            <dt>协议</dt>
-            <dd>{node ? node.protocol : "—"}</dd>
-          </div>
-          <div>
-            <dt>地址</dt>
-            <dd>{node ? `${node.server}:${node.port}` : "—"}</dd>
-          </div>
-          <div>
-            <dt>Core</dt>
-            <dd>{status ? status.core : "—"}</dd>
-          </div>
-          <div>
-            <dt>模式</dt>
-            <dd>
-              <select
-                aria-label="路由模式"
-                disabled={busy || connected || status === null}
-                value={status?.mode ?? "global"}
-                onChange={(event) =>
-                  void run(() =>
-                    setRoutingMode(event.target.value as RoutingMode),
-                  )
-                }
-              >
-                <option value="global">全局</option>
-                <option value="rule">规则</option>
-                <option value="direct">直连</option>
-              </select>
-            </dd>
-          </div>
-          <div>
-            <dt>本地代理</dt>
-            <dd>
-              {status
-                ? `SOCKS ${status.socksPort} · HTTP ${status.httpPort}`
-                : "—"}
-            </dd>
-          </div>
-          <div>
-            <dt>系统代理</dt>
-            <dd>
-              {connected && status?.systemProxy
-                ? "已接管系统代理"
-                : "未接管系统代理"}
-            </dd>
-          </div>
-          <div>
-            <dt>TUN</dt>
-            <dd>{platform ? TUN_LABEL[platform.tunAvailability] : "—"}</dd>
-          </div>
-          <div>
-            <dt>构建目标</dt>
-            <dd>{platform ? platform.artifactIdentifier : platformError}</dd>
-          </div>
-        </dl>
-
-        <div className="actions">
-          <button
-            type="button"
-            disabled={
-              busy ||
-              nodeTestInProgress ||
-              node === null ||
-              systemProxyStartup !== "clean"
-            }
-            onClick={() =>
-              void run(connected ? disconnectSession : connectSession)
-            }
-          >
-            {connected ? "断开" : "连接"}
-          </button>
-        </div>
-
-        <h2>DNS</h2>
-
-        {dnsDraft === null ? (
-          <p className="hint">正在读取 DNS 设置</p>
-        ) : (
-          <div className="settings-form">
-            <label>
-              模式
-              <select
-                aria-label="DNS 模式"
-                disabled={busy || connected}
-                value={dnsDraft.mode}
-                onChange={(event) => {
-                  const mode = event.target.value as DnsMode;
-                  const upstream =
-                    mode === "doh"
-                      ? { port: 443, server: "cloudflare-dns.com" }
-                      : mode === "dot"
-                        ? {
-                            port: 853,
-                            server: "1dot1dot1dot1.cloudflare-dns.com",
-                          }
-                        : mode === "plainUdp" || mode === "plainTcp"
-                          ? { port: 53, server: "1.1.1.1" }
-                          : {};
-                  setDnsDraft((current) =>
-                    current === null ? null : { ...current, ...upstream, mode },
-                  );
-                  setDnsDirty(true);
-                }}
-              >
-                <option value="system">系统 DNS</option>
-                <option value="plainUdp">UDP</option>
-                <option value="plainTcp">TCP</option>
-                <option value="doh">DoH</option>
-                <option value="dot">DoT</option>
-              </select>
-            </label>
-            {dnsDraft.mode !== "system" && (
-              <>
-                <label>
-                  服务器
-                  <input
-                    aria-label="DNS 服务器"
-                    disabled={busy || connected}
-                    value={dnsDraft.server}
-                    onChange={(event) => {
-                      setDnsDraft({ ...dnsDraft, server: event.target.value });
-                      setDnsDirty(true);
-                    }}
-                  />
-                </label>
-                <label>
-                  端口
-                  <input
-                    aria-label="DNS 端口"
-                    disabled={busy || connected}
-                    min="1"
-                    max="65535"
-                    type="number"
-                    value={dnsDraft.port}
-                    onChange={(event) => {
-                      setDnsDraft({ ...dnsDraft, port: Number(event.target.value) });
-                      setDnsDirty(true);
-                    }}
-                  />
-                </label>
-              </>
-            )}
-            {dnsDraft.mode === "doh" && (
-              <label>
-                DoH 路径
-                <input
-                  aria-label="DoH 路径"
-                  disabled={busy || connected}
-                  value={dnsDraft.dohPath}
-                  onChange={(event) => {
-                    setDnsDraft({ ...dnsDraft, dohPath: event.target.value });
-                    setDnsDirty(true);
-                  }}
-                />
-              </label>
-            )}
-            <label>
-              地址策略
-              <select
-                aria-label="DNS 地址策略"
-                disabled={busy || connected}
-                value={dnsDraft.strategy}
-                onChange={(event) => {
-                  setDnsDraft({
-                    ...dnsDraft,
-                    strategy: event.target.value as DnsStrategy,
-                  });
-                  setDnsDirty(true);
-                }}
-              >
-                <option value="preferIpv4">优先 IPv4</option>
-                <option value="preferIpv6">优先 IPv6</option>
-                <option value="ipv4Only">仅 IPv4</option>
-                <option value="ipv6Only">仅 IPv6</option>
-              </select>
-            </label>
-            <label>
-              系统 DNS 域名后缀
-              <textarea
-                aria-label="系统 DNS 域名后缀"
-                disabled={busy || connected}
-                rows={2}
-                placeholder="每行一个，例如 lan"
-                value={dnsDraft.systemDomains.join("\n")}
-                onChange={(event) => {
-                  setDnsDraft({
-                    ...dnsDraft,
-                    systemDomains: event.target.value.split("\n"),
-                  });
-                  setDnsDirty(true);
-                }}
-              />
-            </label>
-            <label className="checkbox-label">
-              <input
-                aria-label="启用 IPv6 DNS"
-                checked={dnsDraft.ipv6Enabled}
-                disabled={busy || connected}
-                type="checkbox"
-                onChange={(event) => {
-                  setDnsDraft({ ...dnsDraft, ipv6Enabled: event.target.checked });
-                  setDnsDirty(true);
-                }}
-              />
-              IPv6
-            </label>
-            <label className="checkbox-label">
-              <input
-                aria-label="启用 FakeIP"
-                checked={dnsDraft.fakeIpEnabled}
-                disabled={busy || connected}
-                type="checkbox"
-                onChange={(event) => {
-                  setDnsDraft({ ...dnsDraft, fakeIpEnabled: event.target.checked });
-                  setDnsDirty(true);
-                }}
-              />
-              FakeIP
-            </label>
-          </div>
-        )}
-
-        <div className="actions">
-          <button
-            type="button"
-            disabled={busy || connected || dnsDraft === null || !dnsDirty}
-            onClick={() => void onSaveDns()}
-          >
-            保存 DNS
-          </button>
-        </div>
-
-        <h2>路由规则</h2>
-
-        <p className="hint">
-          运行顺序固定为：本地安全规则 → 用户规则 → Geo 规则 → 默认出口。仅规则模式应用列表。
-        </p>
-        {routeDraft === null ? (
-          <p className="hint">正在读取路由设置</p>
-        ) : (
-          <>
-            <div className="settings-form">
-              <label>
-                规则类型
-                <select
-                  aria-label="规则类型"
-                  disabled={busy || connected}
-                  value={routeRuleKind}
-                  onChange={(event) =>
-                    setRouteRuleKind(event.target.value as RouteRuleKind)
-                  }
-                >
-                  {Object.entries(ROUTE_KIND_LABEL).map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                规则值
-                <input
-                  aria-label="规则值"
-                  disabled={busy || connected}
-                  placeholder={routeRuleKind === "network" ? "tcp 或 udp" : undefined}
-                  value={routeRuleValue}
-                  onChange={(event) => setRouteRuleValue(event.target.value)}
-                />
-              </label>
-              <label>
-                出口
-                <select
-                  aria-label="规则出口"
-                  disabled={busy || connected}
-                  value={routeRuleOutbound}
-                  onChange={(event) =>
-                    setRouteRuleOutbound(event.target.value as RouteOutbound)
-                  }
-                >
-                  <option value="proxy">代理</option>
-                  <option value="direct">直连</option>
-                </select>
-              </label>
-            </div>
-            <div className="actions">
-              <button
-                type="button"
-                disabled={busy || connected}
-                onClick={onAddRouteRule}
-              >
-                添加规则
-              </button>
-            </div>
-
-            {routeDraft.rules.length === 0 ? (
-              <p className="hint">尚未添加规则</p>
-            ) : (
-              <table className="node-list" aria-label="路由规则列表">
-                <thead>
-                  <tr>
-                    <th>顺序</th>
-                    <th>类型</th>
-                    <th>值</th>
-                    <th>出口</th>
-                    <th>启用</th>
-                    <th>操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {routeDraft.rules.map((rule, index) => (
-                    <tr key={`${rule.kind}-${rule.value}-${index}`}>
-                      <td>{index + 1}</td>
-                      <td>{ROUTE_KIND_LABEL[rule.kind]}</td>
-                      <td>{rule.value}</td>
-                      <td>{rule.outbound === "proxy" ? "代理" : "直连"}</td>
-                      <td>
-                        <input
-                          aria-label={`启用规则 ${index + 1}`}
-                          checked={rule.enabled}
-                          disabled={busy || connected}
-                          type="checkbox"
-                          onChange={(event) => {
-                            const rules = [...routeDraft.rules];
-                            rules[index] = {
-                              ...rule,
-                              enabled: event.target.checked,
-                            };
-                            setRouteDraft({ ...routeDraft, rules });
-                            setRouteDirty(true);
-                          }}
-                        />
-                      </td>
-                      <td className="node-actions">
-                        <button
-                          type="button"
-                          disabled={
-                            busy ||
-                            connected ||
-                            index === 0 ||
-                            isGeoRule(rule.kind) !==
-                              isGeoRule(routeDraft.rules[index - 1].kind)
-                          }
-                          onClick={() => onMoveRouteRule(index, -1)}
-                        >
-                          上移
-                        </button>
-                        <button
-                          type="button"
-                          disabled={
-                            busy ||
-                            connected ||
-                            index === routeDraft.rules.length - 1 ||
-                            isGeoRule(rule.kind) !==
-                              isGeoRule(routeDraft.rules[index + 1].kind)
-                          }
-                          onClick={() => onMoveRouteRule(index, 1)}
-                        >
-                          下移
-                        </button>
-                        <button
-                          type="button"
-                          disabled={busy || connected}
-                          onClick={() => {
-                            setRouteDraft({
-                              ...routeDraft,
-                              rules: routeDraft.rules.filter(
-                                (_, ruleIndex) => ruleIndex !== index,
-                              ),
-                            });
-                            setRouteDirty(true);
-                          }}
-                        >
-                          删除
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-
-            <div className="settings-form">
-              <label>
-                默认出口
-                <select
-                  aria-label="默认出口"
-                  disabled={busy || connected}
-                  value={routeDraft.finalOutbound}
-                  onChange={(event) => {
-                    setRouteDraft({
-                      ...routeDraft,
-                      finalOutbound: event.target.value as RouteOutbound,
-                    });
-                    setRouteDirty(true);
-                  }}
-                >
-                  <option value="proxy">代理</option>
-                  <option value="direct">直连</option>
-                </select>
-              </label>
-            </div>
-          </>
-        )}
-
-        <div className="actions">
-          <button
-            type="button"
-            disabled={busy || connected || routeDraft === null || !routeDirty}
-            onClick={() => void onSaveRoute()}
-          >
-            保存路由
-          </button>
-        </div>
-
+        <div className="node-panel">
         <h2>节点</h2>
 
         <div className="url-test">
@@ -1486,6 +1075,73 @@ export default function App() {
           >
             URL 测试
           </button>
+        </div>
+        <div className="log-pane">
+        <h2>日志</h2>
+
+        <p className="hint">
+          Core 输出在写入前已脱敏，凭据字段一律替换为 [REDACTED]。最多保留最近 2000 条。
+        </p>
+
+        <div className="log-controls">
+          <label>
+            级别
+            <select
+              aria-label="日志级别"
+              value={logLevel}
+              onChange={(event) => setLogLevel(event.target.value as LogLevel)}
+            >
+              <option value="error">error</option>
+              <option value="warn">warn</option>
+              <option value="info">info</option>
+              <option value="debug">debug</option>
+              <option value="trace">trace</option>
+            </select>
+          </label>
+          <label>
+            来源
+            <select
+              aria-label="日志来源"
+              value={logSource}
+              onChange={(event) =>
+                setLogSource(event.target.value as LogSource | "all")
+              }
+            >
+              <option value="all">全部</option>
+              <option value="app">应用</option>
+              <option value="core">Core</option>
+            </select>
+          </label>
+          <button type="button" onClick={() => void refreshLogs()}>
+            刷新日志
+          </button>
+          <button type="button" onClick={() => void onClearLogs()}>
+            清空日志
+          </button>
+        </div>
+
+        {logs.length === 0 ? (
+          <p className="hint">暂无日志</p>
+        ) : (
+          <ul className="log-list" aria-label="日志列表">
+            {logs.map((entry, index) => (
+              <li
+                key={`${entry.timestampMs}-${index}`}
+                className={`log-entry log-${entry.level}`}
+              >
+                <span className="log-time">
+                  {new Date(entry.timestampMs).toLocaleTimeString()}
+                </span>
+                <span className="log-source">
+                  {entry.source === "core" ? "Core" : "应用"}
+                </span>
+                <span className="log-level">{entry.level}</span>
+                <span className="log-message">{entry.message}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+
         </div>
 
         <div className="actions">
@@ -1533,6 +1189,8 @@ export default function App() {
               <tr>
                 <th>名称</th>
                 <th>协议</th>
+                <th>传输</th>
+                <th>TLS</th>
                 <th>分组</th>
                 <th>服务器</th>
                 <th>延迟</th>
@@ -1563,6 +1221,8 @@ export default function App() {
                   <tr key={candidate.id}>
                     <td>{candidate.name}</td>
                     <td>{candidate.protocol}</td>
+                    <td>{candidate.transport}</td>
+                    <td>{candidate.tls ?? "—"}</td>
                     <td>{
                       candidate.groupId === null
                         ? "未分组"
@@ -1727,155 +1387,155 @@ export default function App() {
           </div>
         )}
 
-        <h2>订阅</h2>
+        </div>
+        <div
+          className="dialog-backdrop"
+          hidden={panel === null}
+          onClick={() => setPanel(null)}
+        >
+          <div
+            className="dialog"
+            role="dialog"
+            aria-label="配置"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="dialog-head">
+              <div className="tabs">
+                {TABS.map((entry) => (
+                  <button
+                    key={entry.id}
+                    type="button"
+                    className={panel === entry.id ? "tab active" : "tab"}
+                    onClick={() => setPanel(entry.id)}
+                  >
+                    {entry.label}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                className="dialog-close"
+                aria-label="关闭配置"
+                onClick={() => setPanel(null)}
+              >
+                关闭
+              </button>
+            </header>
+            <div className="dialog-body">
+              <div className="tab-panel" hidden={panel !== "connection"}>
+        <h2>连接</h2>
+
+        <dl>
+          <div>
+            <dt>状态</dt>
+            <dd className={connected ? "connected" : undefined}>
+              {connected ? "已连接" : "未连接"}
+            </dd>
+          </div>
+          <div>
+            <dt>下载</dt>
+            <dd aria-label="下载速率">
+              {connected ? formatRate(traffic.downloadBytesPerSecond) : "—"}
+            </dd>
+          </div>
+          <div>
+            <dt>上传</dt>
+            <dd aria-label="上传速率">
+              {connected ? formatRate(traffic.uploadBytesPerSecond) : "—"}
+            </dd>
+          </div>
+          <div>
+            <dt>今日</dt>
+            <dd aria-label="今日流量">{formatBytes(traffic.todayBytes)}</dd>
+          </div>
+          <div>
+            <dt>本月</dt>
+            <dd aria-label="本月流量">{formatBytes(traffic.monthBytes)}</dd>
+          </div>
+          <div>
+            <dt>累计</dt>
+            <dd aria-label="累计流量">{formatBytes(traffic.totalBytes)}</dd>
+          </div>
+          <div>
+            <dt>节点</dt>
+            <dd>{node ? node.name : "尚未导入"}</dd>
+          </div>
+          <div>
+            <dt>协议</dt>
+            <dd>{node ? node.protocol : "—"}</dd>
+          </div>
+          <div>
+            <dt>地址</dt>
+            <dd>{node ? `${node.server}:${node.port}` : "—"}</dd>
+          </div>
+          <div>
+            <dt>Core</dt>
+            <dd>{status ? status.core : "—"}</dd>
+          </div>
+          <div>
+            <dt>模式</dt>
+            <dd>
+              <select
+                aria-label="路由模式"
+                disabled={busy || connected || status === null}
+                value={status?.mode ?? "global"}
+                onChange={(event) =>
+                  void run(() =>
+                    setRoutingMode(event.target.value as RoutingMode),
+                  )
+                }
+              >
+                <option value="global">全局</option>
+                <option value="rule">规则</option>
+                <option value="direct">直连</option>
+              </select>
+            </dd>
+          </div>
+          <div>
+            <dt>本地代理</dt>
+            <dd>
+              {status
+                ? `SOCKS ${status.socksPort} · HTTP ${status.httpPort}`
+                : "—"}
+            </dd>
+          </div>
+          <div>
+            <dt>系统代理</dt>
+            <dd>
+              {connected && status?.systemProxy
+                ? "已接管系统代理"
+                : "未接管系统代理"}
+            </dd>
+          </div>
+          <div>
+            <dt>TUN</dt>
+            <dd>{platform ? TUN_LABEL[platform.tunAvailability] : "—"}</dd>
+          </div>
+          <div>
+            <dt>构建目标</dt>
+            <dd>{platform ? platform.artifactIdentifier : platformError}</dd>
+          </div>
+        </dl>
 
         <div className="actions">
           <button
             type="button"
             disabled={
               busy ||
-              connected ||
               nodeTestInProgress ||
-              subscriptions.length === 0
+              node === null ||
+              systemProxyStartup !== "clean"
             }
-            onClick={() => void onRefreshAllSubscriptions()}
+            onClick={() =>
+              void run(connected ? disconnectSession : connectSession)
+            }
           >
-            全部更新
+            {connected ? "断开" : "连接"}
           </button>
         </div>
 
-        {subscriptions.length === 0 ? (
-          <p className="hint">尚未添加订阅</p>
-        ) : (
-          <table className="node-list" aria-label="订阅列表">
-            <thead>
-              <tr>
-                <th>名称</th>
-                <th>节点</th>
-                <th>更新</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {subscriptions.map((item) => (
-                <tr key={item.id}>
-                  <td>{item.name}</td>
-                  <td>{item.nodeCount}</td>
-                  <td>
-                    {item.lastError ??
-                      (item.lastUpdatedAt === null ? "从未" : "已更新")}
-                  </td>
-                  <td className="node-actions">
-                    <button
-                      type="button"
-                      aria-label={`编辑 ${item.name}`}
-                      disabled={busy || connected || nodeTestInProgress}
-                      onClick={() => onEditSubscription(item)}
-                    >
-                      编辑
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`刷新 ${item.name}`}
-                      disabled={
-                        busy || connected || nodeTestInProgress || !item.enabled
-                      }
-                      onClick={() => void onRefreshSubscription(item.id)}
-                    >
-                      刷新
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`删除订阅 ${item.name}`}
-                      disabled={busy || connected || nodeTestInProgress}
-                      onClick={() => void onDeleteSubscription(item.id)}
-                    >
-                      删除
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-
-        <div className="subscription-form">
-          <label>
-            名称
-            <input
-              aria-label="订阅名称"
-              value={subscriptionName}
-              disabled={busy}
-              onChange={(event) => setSubscriptionName(event.target.value)}
-            />
-          </label>
-          <label>
-            地址
-            <input
-              aria-label="订阅地址"
-              type="password"
-              value={subscriptionUrl}
-              disabled={busy}
-              placeholder={
-                editingSubscriptionId === null ? "https://" : "留空则不修改"
-              }
-              onChange={(event) => setSubscriptionUrl(event.target.value)}
-            />
-          </label>
-          <label>
-            更新间隔（分钟）
-            <input
-              aria-label="更新间隔"
-              type="number"
-              min="1"
-              value={subscriptionInterval}
-              disabled={busy}
-              onChange={(event) => setSubscriptionInterval(event.target.value)}
-            />
-          </label>
-          <label className="checkbox-label">
-            <input
-              type="checkbox"
-              checked={subscriptionAutoUpdate}
-              disabled={busy}
-              onChange={(event) =>
-                setSubscriptionAutoUpdate(event.target.checked)
-              }
-            />
-            自动更新
-          </label>
-          {editingSubscriptionId !== null && (
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={subscriptionEnabled}
-                disabled={busy}
-                onChange={(event) => setSubscriptionEnabled(event.target.checked)}
-              />
-              启用订阅
-            </label>
-          )}
-        </div>
-
-        <div className="actions">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void onSaveSubscription()}
-          >
-            {editingSubscriptionId === null ? "添加订阅" : "保存修改"}
-          </button>
-          {editingSubscriptionId !== null && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={resetSubscriptionForm}
-            >
-              取消
-            </button>
-          )}
-        </div>
-
+              </div>
+              <div className="tab-panel" hidden={panel !== "nodes"}>
         <h2>导入节点</h2>
 
         <textarea
@@ -2378,6 +2038,502 @@ export default function App() {
           </div>
         </div>
 
+              </div>
+              <div className="tab-panel" hidden={panel !== "subscriptions"}>
+        <h2>订阅</h2>
+
+        <div className="actions">
+          <button
+            type="button"
+            disabled={
+              busy ||
+              connected ||
+              nodeTestInProgress ||
+              subscriptions.length === 0
+            }
+            onClick={() => void onRefreshAllSubscriptions()}
+          >
+            全部更新
+          </button>
+        </div>
+
+        {subscriptions.length === 0 ? (
+          <p className="hint">尚未添加订阅</p>
+        ) : (
+          <table className="node-list" aria-label="订阅列表">
+            <thead>
+              <tr>
+                <th>名称</th>
+                <th>节点</th>
+                <th>更新</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {subscriptions.map((item) => (
+                <tr key={item.id}>
+                  <td>{item.name}</td>
+                  <td>{item.nodeCount}</td>
+                  <td>
+                    {item.lastError ??
+                      (item.lastUpdatedAt === null ? "从未" : "已更新")}
+                  </td>
+                  <td className="node-actions">
+                    <button
+                      type="button"
+                      aria-label={`编辑 ${item.name}`}
+                      disabled={busy || connected || nodeTestInProgress}
+                      onClick={() => onEditSubscription(item)}
+                    >
+                      编辑
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`刷新 ${item.name}`}
+                      disabled={
+                        busy || connected || nodeTestInProgress || !item.enabled
+                      }
+                      onClick={() => void onRefreshSubscription(item.id)}
+                    >
+                      刷新
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`删除订阅 ${item.name}`}
+                      disabled={busy || connected || nodeTestInProgress}
+                      onClick={() => void onDeleteSubscription(item.id)}
+                    >
+                      删除
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        <div className="subscription-form">
+          <label>
+            名称
+            <input
+              aria-label="订阅名称"
+              value={subscriptionName}
+              disabled={busy}
+              onChange={(event) => setSubscriptionName(event.target.value)}
+            />
+          </label>
+          <label>
+            地址
+            <input
+              aria-label="订阅地址"
+              type="password"
+              value={subscriptionUrl}
+              disabled={busy}
+              placeholder={
+                editingSubscriptionId === null ? "https://" : "留空则不修改"
+              }
+              onChange={(event) => setSubscriptionUrl(event.target.value)}
+            />
+          </label>
+          <label>
+            更新间隔（分钟）
+            <input
+              aria-label="更新间隔"
+              type="number"
+              min="1"
+              value={subscriptionInterval}
+              disabled={busy}
+              onChange={(event) => setSubscriptionInterval(event.target.value)}
+            />
+          </label>
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={subscriptionAutoUpdate}
+              disabled={busy}
+              onChange={(event) =>
+                setSubscriptionAutoUpdate(event.target.checked)
+              }
+            />
+            自动更新
+          </label>
+          {editingSubscriptionId !== null && (
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={subscriptionEnabled}
+                disabled={busy}
+                onChange={(event) => setSubscriptionEnabled(event.target.checked)}
+              />
+              启用订阅
+            </label>
+          )}
+        </div>
+
+        <div className="actions">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void onSaveSubscription()}
+          >
+            {editingSubscriptionId === null ? "添加订阅" : "保存修改"}
+          </button>
+          {editingSubscriptionId !== null && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={resetSubscriptionForm}
+            >
+              取消
+            </button>
+          )}
+        </div>
+
+              </div>
+              <div className="tab-panel" hidden={panel !== "routing"}>
+        <h2>路由规则</h2>
+
+        <p className="hint">
+          运行顺序固定为：本地安全规则 → 用户规则 → Geo 规则 → 默认出口。仅规则模式应用列表。
+        </p>
+        {routeDraft === null ? (
+          <p className="hint">正在读取路由设置</p>
+        ) : (
+          <>
+            <div className="settings-form">
+              <label>
+                规则类型
+                <select
+                  aria-label="规则类型"
+                  disabled={busy || connected}
+                  value={routeRuleKind}
+                  onChange={(event) =>
+                    setRouteRuleKind(event.target.value as RouteRuleKind)
+                  }
+                >
+                  {Object.entries(ROUTE_KIND_LABEL).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                规则值
+                <input
+                  aria-label="规则值"
+                  disabled={busy || connected}
+                  placeholder={routeRuleKind === "network" ? "tcp 或 udp" : undefined}
+                  value={routeRuleValue}
+                  onChange={(event) => setRouteRuleValue(event.target.value)}
+                />
+              </label>
+              <label>
+                出口
+                <select
+                  aria-label="规则出口"
+                  disabled={busy || connected}
+                  value={routeRuleOutbound}
+                  onChange={(event) =>
+                    setRouteRuleOutbound(event.target.value as RouteOutbound)
+                  }
+                >
+                  <option value="proxy">代理</option>
+                  <option value="direct">直连</option>
+                </select>
+              </label>
+            </div>
+            <div className="actions">
+              <button
+                type="button"
+                disabled={busy || connected}
+                onClick={onAddRouteRule}
+              >
+                添加规则
+              </button>
+            </div>
+
+            {routeDraft.rules.length === 0 ? (
+              <p className="hint">尚未添加规则</p>
+            ) : (
+              <table className="node-list" aria-label="路由规则列表">
+                <thead>
+                  <tr>
+                    <th>顺序</th>
+                    <th>类型</th>
+                    <th>值</th>
+                    <th>出口</th>
+                    <th>启用</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {routeDraft.rules.map((rule, index) => (
+                    <tr key={`${rule.kind}-${rule.value}-${index}`}>
+                      <td>{index + 1}</td>
+                      <td>{ROUTE_KIND_LABEL[rule.kind]}</td>
+                      <td>{rule.value}</td>
+                      <td>{rule.outbound === "proxy" ? "代理" : "直连"}</td>
+                      <td>
+                        <input
+                          aria-label={`启用规则 ${index + 1}`}
+                          checked={rule.enabled}
+                          disabled={busy || connected}
+                          type="checkbox"
+                          onChange={(event) => {
+                            const rules = [...routeDraft.rules];
+                            rules[index] = {
+                              ...rule,
+                              enabled: event.target.checked,
+                            };
+                            setRouteDraft({ ...routeDraft, rules });
+                            setRouteDirty(true);
+                          }}
+                        />
+                      </td>
+                      <td className="node-actions">
+                        <button
+                          type="button"
+                          disabled={
+                            busy ||
+                            connected ||
+                            index === 0 ||
+                            isGeoRule(rule.kind) !==
+                              isGeoRule(routeDraft.rules[index - 1].kind)
+                          }
+                          onClick={() => onMoveRouteRule(index, -1)}
+                        >
+                          上移
+                        </button>
+                        <button
+                          type="button"
+                          disabled={
+                            busy ||
+                            connected ||
+                            index === routeDraft.rules.length - 1 ||
+                            isGeoRule(rule.kind) !==
+                              isGeoRule(routeDraft.rules[index + 1].kind)
+                          }
+                          onClick={() => onMoveRouteRule(index, 1)}
+                        >
+                          下移
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy || connected}
+                          onClick={() => {
+                            setRouteDraft({
+                              ...routeDraft,
+                              rules: routeDraft.rules.filter(
+                                (_, ruleIndex) => ruleIndex !== index,
+                              ),
+                            });
+                            setRouteDirty(true);
+                          }}
+                        >
+                          删除
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+
+            <div className="settings-form">
+              <label>
+                默认出口
+                <select
+                  aria-label="默认出口"
+                  disabled={busy || connected}
+                  value={routeDraft.finalOutbound}
+                  onChange={(event) => {
+                    setRouteDraft({
+                      ...routeDraft,
+                      finalOutbound: event.target.value as RouteOutbound,
+                    });
+                    setRouteDirty(true);
+                  }}
+                >
+                  <option value="proxy">代理</option>
+                  <option value="direct">直连</option>
+                </select>
+              </label>
+            </div>
+          </>
+        )}
+
+        <div className="actions">
+          <button
+            type="button"
+            disabled={busy || connected || routeDraft === null || !routeDirty}
+            onClick={() => void onSaveRoute()}
+          >
+            保存路由
+          </button>
+        </div>
+
+        <h2>DNS</h2>
+
+        {dnsDraft === null ? (
+          <p className="hint">正在读取 DNS 设置</p>
+        ) : (
+          <div className="settings-form">
+            <label>
+              模式
+              <select
+                aria-label="DNS 模式"
+                disabled={busy || connected}
+                value={dnsDraft.mode}
+                onChange={(event) => {
+                  const mode = event.target.value as DnsMode;
+                  const upstream =
+                    mode === "doh"
+                      ? { port: 443, server: "cloudflare-dns.com" }
+                      : mode === "dot"
+                        ? {
+                            port: 853,
+                            server: "1dot1dot1dot1.cloudflare-dns.com",
+                          }
+                        : mode === "plainUdp" || mode === "plainTcp"
+                          ? { port: 53, server: "1.1.1.1" }
+                          : {};
+                  setDnsDraft((current) =>
+                    current === null ? null : { ...current, ...upstream, mode },
+                  );
+                  setDnsDirty(true);
+                }}
+              >
+                <option value="system">系统 DNS</option>
+                <option value="plainUdp">UDP</option>
+                <option value="plainTcp">TCP</option>
+                <option value="doh">DoH</option>
+                <option value="dot">DoT</option>
+              </select>
+            </label>
+            {dnsDraft.mode !== "system" && (
+              <>
+                <label>
+                  服务器
+                  <input
+                    aria-label="DNS 服务器"
+                    disabled={busy || connected}
+                    value={dnsDraft.server}
+                    onChange={(event) => {
+                      setDnsDraft({ ...dnsDraft, server: event.target.value });
+                      setDnsDirty(true);
+                    }}
+                  />
+                </label>
+                <label>
+                  端口
+                  <input
+                    aria-label="DNS 端口"
+                    disabled={busy || connected}
+                    min="1"
+                    max="65535"
+                    type="number"
+                    value={dnsDraft.port}
+                    onChange={(event) => {
+                      setDnsDraft({ ...dnsDraft, port: Number(event.target.value) });
+                      setDnsDirty(true);
+                    }}
+                  />
+                </label>
+              </>
+            )}
+            {dnsDraft.mode === "doh" && (
+              <label>
+                DoH 路径
+                <input
+                  aria-label="DoH 路径"
+                  disabled={busy || connected}
+                  value={dnsDraft.dohPath}
+                  onChange={(event) => {
+                    setDnsDraft({ ...dnsDraft, dohPath: event.target.value });
+                    setDnsDirty(true);
+                  }}
+                />
+              </label>
+            )}
+            <label>
+              地址策略
+              <select
+                aria-label="DNS 地址策略"
+                disabled={busy || connected}
+                value={dnsDraft.strategy}
+                onChange={(event) => {
+                  setDnsDraft({
+                    ...dnsDraft,
+                    strategy: event.target.value as DnsStrategy,
+                  });
+                  setDnsDirty(true);
+                }}
+              >
+                <option value="preferIpv4">优先 IPv4</option>
+                <option value="preferIpv6">优先 IPv6</option>
+                <option value="ipv4Only">仅 IPv4</option>
+                <option value="ipv6Only">仅 IPv6</option>
+              </select>
+            </label>
+            <label>
+              系统 DNS 域名后缀
+              <textarea
+                aria-label="系统 DNS 域名后缀"
+                disabled={busy || connected}
+                rows={2}
+                placeholder="每行一个，例如 lan"
+                value={dnsDraft.systemDomains.join("\n")}
+                onChange={(event) => {
+                  setDnsDraft({
+                    ...dnsDraft,
+                    systemDomains: event.target.value.split("\n"),
+                  });
+                  setDnsDirty(true);
+                }}
+              />
+            </label>
+            <label className="checkbox-label">
+              <input
+                aria-label="启用 IPv6 DNS"
+                checked={dnsDraft.ipv6Enabled}
+                disabled={busy || connected}
+                type="checkbox"
+                onChange={(event) => {
+                  setDnsDraft({ ...dnsDraft, ipv6Enabled: event.target.checked });
+                  setDnsDirty(true);
+                }}
+              />
+              IPv6
+            </label>
+            <label className="checkbox-label">
+              <input
+                aria-label="启用 FakeIP"
+                checked={dnsDraft.fakeIpEnabled}
+                disabled={busy || connected}
+                type="checkbox"
+                onChange={(event) => {
+                  setDnsDraft({ ...dnsDraft, fakeIpEnabled: event.target.checked });
+                  setDnsDirty(true);
+                }}
+              />
+              FakeIP
+            </label>
+          </div>
+        )}
+
+        <div className="actions">
+          <button
+            type="button"
+            disabled={busy || connected || dnsDraft === null || !dnsDirty}
+            onClick={() => void onSaveDns()}
+          >
+            保存 DNS
+          </button>
+        </div>
+
+              </div>
+              <div className="tab-panel" hidden={panel !== "settings"}>
         <h2>设置</h2>
 
         {settings === null ? (
@@ -2484,71 +2640,8 @@ export default function App() {
           </div>
         )}
 
-        <h2>日志</h2>
-
-        <p className="hint">
-          Core 输出在写入前已脱敏，凭据字段一律替换为 [REDACTED]。最多保留最近 2000 条。
-        </p>
-
-        <div className="log-controls">
-          <label>
-            级别
-            <select
-              aria-label="日志级别"
-              value={logLevel}
-              onChange={(event) => setLogLevel(event.target.value as LogLevel)}
-            >
-              <option value="error">error</option>
-              <option value="warn">warn</option>
-              <option value="info">info</option>
-              <option value="debug">debug</option>
-              <option value="trace">trace</option>
-            </select>
-          </label>
-          <label>
-            来源
-            <select
-              aria-label="日志来源"
-              value={logSource}
-              onChange={(event) =>
-                setLogSource(event.target.value as LogSource | "all")
-              }
-            >
-              <option value="all">全部</option>
-              <option value="app">应用</option>
-              <option value="core">Core</option>
-            </select>
-          </label>
-          <button type="button" onClick={() => void refreshLogs()}>
-            刷新日志
-          </button>
-          <button type="button" onClick={() => void onClearLogs()}>
-            清空日志
-          </button>
-        </div>
-
-        {logs.length === 0 ? (
-          <p className="hint">暂无日志</p>
-        ) : (
-          <ul className="log-list" aria-label="日志列表">
-            {logs.map((entry, index) => (
-              <li
-                key={`${entry.timestampMs}-${index}`}
-                className={`log-entry log-${entry.level}`}
-              >
-                <span className="log-time">
-                  {new Date(entry.timestampMs).toLocaleTimeString()}
-                </span>
-                <span className="log-source">
-                  {entry.source === "core" ? "Core" : "应用"}
-                </span>
-                <span className="log-level">{entry.level}</span>
-                <span className="log-message">{entry.message}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-
+              </div>
+              <div className="tab-panel" hidden={panel !== "logs"}>
         <h2>诊断</h2>
 
         <p className="hint">
@@ -2572,7 +2665,58 @@ export default function App() {
             {error}
           </p>
         )}
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
+
+      <footer className="statusbar">
+        <span>
+          本地 SOCKS {status?.socksPort ?? "—"} · HTTP {status?.httpPort ?? "—"}
+        </span>
+        <span>Core {status?.core ?? "—"}</span>
+        <label className="status-control">
+          路由
+          <select
+            aria-label="状态栏路由模式"
+            disabled={busy || connected || status === null}
+            value={status?.mode ?? "global"}
+            onChange={(event) =>
+              void run(() => setRoutingMode(event.target.value as RoutingMode))
+            }
+          >
+            <option value="global">全局</option>
+            <option value="rule">规则</option>
+            <option value="direct">直连</option>
+          </select>
+        </label>
+        <label className="status-control">
+          <input
+            aria-label="状态栏 TUN"
+            type="checkbox"
+            checked={settings?.tunEnabled ?? false}
+            disabled={
+              busy ||
+              connected ||
+              settings === null ||
+              platform?.tunAvailability === "unavailableInUnsignedBuild"
+            }
+            onChange={(event) =>
+              void onChangeSettings({ tunEnabled: event.target.checked })
+            }
+          />
+          TUN
+        </label>
+        <span>系统代理 {status?.systemProxy ? "开" : "关"}</span>
+        <span className="statusbar-rates">
+          ↓ {formatRate(traffic.downloadBytesPerSecond)} ↑{" "}
+          {formatRate(traffic.uploadBytesPerSecond)}
+        </span>
+        <span className={connected ? "badge on" : "badge off"}>
+          {connected ? "已连接" : "未连接"}
+        </span>
+      </footer>
     </main>
   );
 }
