@@ -11,6 +11,7 @@ permissions:
 
 env:
   SING_BOX_VERSION: "1.13.18"
+  XRAY_VERSION: "26.3.27"
   WINTUN_VERSION: "0.14.1"
   WINTUN_ARCHIVE_SHA256: 07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51
 
@@ -28,24 +29,32 @@ jobs:
             core_archive_sha256: 500f0decfc21f7cdb2aaa4fe193b7857a41b07c38ee3a0b15bd53e3c7af3671c
             core_directory: sing-box-1.13.18-darwin-amd64
             core_file_name: sing-box
+            xray_asset: Xray-macos-64.zip
+            xray_archive_sha256: f5b0471d3459eff1b82e48af0aeac186abcc3298210070afbbbd8437a4e8b203
           - target: macos-aarch64
             runner: macos-15
             core_asset: sing-box-1.13.18-darwin-arm64.tar.gz
             core_archive_sha256: 9fbc05946b584423457a2778035e0cee2d9b239a4af5ae1932d9b79991149107
             core_directory: sing-box-1.13.18-darwin-arm64
             core_file_name: sing-box
+            xray_asset: Xray-macos-arm64-v8a.zip
+            xray_archive_sha256: 2e93a67e8aa1936ecefb307e120830fcbd4c643ab9b1c46a2d0838d5f8409eaf
           - target: windows-x86_64
             runner: windows-2022
             core_asset: sing-box-1.13.18-windows-amd64.zip
             core_archive_sha256: 65045155ffdc506334f01a4353889657ddfc024f72b394081a9abaef34dfbef3
             core_directory: sing-box-1.13.18-windows-amd64
             core_file_name: sing-box.exe
+            xray_asset: Xray-windows-64.zip
+            xray_archive_sha256: d004c39288ce9ada487c6f398c7c545f7d749e44bdfdd59dbc9f865afba4e1ad
           - target: linux-x86_64
             runner: ubuntu-22.04
             core_asset: sing-box-1.13.18-linux-amd64.tar.gz
             core_archive_sha256: d34d987ed6ae39ca3760269264fb502b867e5477db45518c829b07776245c495
             core_directory: sing-box-1.13.18-linux-amd64
             core_file_name: sing-box
+            xray_asset: Xray-linux-64.zip
+            xray_archive_sha256: 23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -125,6 +134,63 @@ jobs:
             printf 'MAGIES_BUNDLED_SING_BOX_BIN=%s\n' "${core}"
             printf 'MAGIES_BUNDLED_SING_BOX_LICENSE=%s\n' "${license}"
             printf 'MAGIES_SING_BOX_SHA256=%s\n' "${core_sha256}"
+          } >> "${github_env}"
+      - name: Prepare pinned Xray
+        shell: bash
+        env:
+          XRAY_ASSET: ${{ matrix.xray_asset }}
+          XRAY_ARCHIVE_SHA256: ${{ matrix.xray_archive_sha256 }}
+          XRAY_FILE_NAME: ${{ matrix.core_file_name == 'sing-box.exe' && 'xray.exe' || 'xray' }}
+        run: |
+          set -euo pipefail
+
+          runner_temp="${RUNNER_TEMP}"
+          github_env="${GITHUB_ENV}"
+          if command -v cygpath >/dev/null 2>&1; then
+            runner_temp="$(cygpath -u "${runner_temp}")"
+            github_env="$(cygpath -u "${github_env}")"
+          fi
+
+          archive="${runner_temp}/${XRAY_ASSET}"
+          curl --fail --location --silent --show-error \
+            --output "${archive}" \
+            "https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/${XRAY_ASSET}"
+
+          if command -v shasum >/dev/null 2>&1; then
+            actual_archive_sha256="$(shasum -a 256 "${archive}" | awk '{print $1}')"
+          else
+            actual_archive_sha256="$(sha256sum "${archive}" | awk '{print $1}')"
+          fi
+          if [[ "${actual_archive_sha256}" != "${XRAY_ARCHIVE_SHA256}" ]]; then
+            echo "Xray archive SHA-256 mismatch" >&2
+            exit 1
+          fi
+
+          # Unlike sing-box, Xray archives are flat, so they extract into a
+          # directory of their own to keep the two Cores apart.
+          extracted="${runner_temp}/xray-${XRAY_VERSION}"
+          mkdir -p "${extracted}"
+          7z x -y "-o${extracted}" "${archive}" >/dev/null
+
+          core="${extracted}/${XRAY_FILE_NAME}"
+          license="${extracted}/LICENSE"
+          geoip="${extracted}/geoip.dat"
+          geosite="${extracted}/geosite.dat"
+          for required in "${core}" "${license}" "${geoip}" "${geosite}"; do
+            [[ -f "${required}" ]] || { echo "Xray archive is missing ${required}" >&2; exit 1; }
+          done
+
+          if command -v shasum >/dev/null 2>&1; then
+            core_sha256="$(shasum -a 256 "${core}" | awk '{print $1}')"
+          else
+            core_sha256="$(sha256sum "${core}" | awk '{print $1}')"
+          fi
+          {
+            printf 'MAGIES_BUNDLED_XRAY_BIN=%s\n' "${core}"
+            printf 'MAGIES_BUNDLED_XRAY_LICENSE=%s\n' "${license}"
+            printf 'MAGIES_BUNDLED_XRAY_GEOIP=%s\n' "${geoip}"
+            printf 'MAGIES_BUNDLED_XRAY_GEOSITE=%s\n' "${geosite}"
+            printf 'MAGIES_XRAY_SHA256=%s\n' "${core_sha256}"
           } >> "${github_env}"
       - name: Verify official Wintun
         if: runner.os == 'Windows'
