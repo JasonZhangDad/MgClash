@@ -448,6 +448,10 @@ impl SystemProxySessionControl for FakeProxy {
             assert_eq!(state.http().endpoint().unwrap().port(), 10_809);
             assert_eq!(state.https().endpoint().unwrap().port(), 10_809);
             assert_eq!(socks.port(), 10_808);
+        } else if state.pac().enabled() {
+            // A PAC state names the script and nothing else.
+            assert!(!state.http().enabled());
+            assert!(state.pac().url().is_some());
         } else {
             assert!(!state.http().enabled());
             assert!(!state.https().enabled());
@@ -572,4 +576,52 @@ fn clearing_the_host_proxy_is_compatible_with_tun() {
     // Only the managed mode conflicts: clearing the host proxy while TUN carries
     // the traffic is what a TUN user wants, not a contradiction.
     assert!(session.start(&profile).is_ok());
+}
+
+#[test]
+fn the_pac_mode_names_the_script_url_and_no_fixed_endpoint() {
+    let store = MemorySecretStore::default();
+    let profile = profile_with_stored_credential(&store).with_system_proxy_mode(
+        SystemProxyMode::Pac("http://127.0.0.1:9/proxy.pac".to_owned()),
+    );
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let runtime = RuntimeDirectory::new("proxy-pac");
+    let mut session = DesktopSession::new(
+        store,
+        FakeCore::new(events.clone()),
+        FakeProxy::new(events.clone()),
+        runtime.path(),
+    );
+
+    session.start(&profile).unwrap();
+    session.stop().unwrap();
+
+    // A host given both a PAC file and a fixed proxy applies them in an order
+    // that differs per platform, so only one of them is ever named.
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        ["core_start", "proxy_enable", "proxy_stop", "core_stop"]
+    );
+}
+
+#[test]
+fn an_empty_pac_url_is_refused_before_the_host_is_touched() {
+    let store = MemorySecretStore::default();
+    let profile = profile_with_stored_credential(&store)
+        .with_system_proxy_mode(SystemProxyMode::Pac("   ".to_owned()));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let runtime = RuntimeDirectory::new("proxy-pac-empty");
+    let mut session = DesktopSession::new(
+        store,
+        FakeCore::new(events.clone()),
+        FakeProxy::new(events.clone()),
+        runtime.path(),
+    );
+
+    let error = session.start(&profile).unwrap_err();
+
+    assert!(matches!(error, DesktopSessionError::InvalidPacUrl { .. }));
+    // The Core started before the proxy step, so it has to be left stoppable
+    // rather than the session pretending nothing happened.
+    assert!(events.lock().unwrap().contains(&"core_start"));
 }

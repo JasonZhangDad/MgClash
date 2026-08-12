@@ -43,7 +43,7 @@ export type LogSource = "app" | "core";
 export type CorePreference = "auto" | "sing-box" | "xray";
 
 /** Three of v2rayN's four System Proxy choices; PAC has no counterpart yet. */
-export type SystemProxyMode = "managed" | "cleared" | "unchanged";
+export type SystemProxyMode = "managed" | "pac" | "cleared" | "unchanged";
 
 export interface AppSettings {
   closeToTray: boolean;
