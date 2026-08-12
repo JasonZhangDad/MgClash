@@ -13,6 +13,8 @@ const loadNodeGroupsMock = vi.hoisted(() => vi.fn());
 const importNodeMock = vi.hoisted(() => vi.fn());
 const exportNodeLinkMock = vi.hoisted(() => vi.fn());
 const cloneNodeMock = vi.hoisted(() => vi.fn());
+const nodeQrCodeMock = vi.hoisted(() => vi.fn());
+const readQrCodeMock = vi.hoisted(() => vi.fn());
 const removeDuplicateNodesMock = vi.hoisted(() => vi.fn());
 const createNodeMock = vi.hoisted(() => vi.fn());
 const importNodesMock = vi.hoisted(() => vi.fn());
@@ -67,6 +69,8 @@ vi.mock("./session", async () => {
     deleteNode: deleteNodeMock,
   exportNodeLink: exportNodeLinkMock,
   cloneNode: cloneNodeMock,
+  nodeQrCode: nodeQrCodeMock,
+  readQrCode: readQrCodeMock,
   removeDuplicateNodes: removeDuplicateNodesMock,
     loadNodeGroups: loadNodeGroupsMock,
     loadNodes: loadNodesMock,
@@ -1864,6 +1868,96 @@ describe("App", () => {
     // a node the user cannot see.
     expect(deleteNodeMock).toHaveBeenCalledTimes(1);
     expect(deleteNodeMock).toHaveBeenCalledWith(osaka.id);
+  });
+
+  it("shows a node's QR code with a warning about what it carries", async () => {
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    nodeQrCodeMock.mockResolvedValue(
+      '<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>',
+    );
+    await render();
+
+    await nodeMenuAction("Tokyo Edge", "显示二维码");
+
+    const dialog = container.querySelector("[aria-label='二维码 Tokyo Edge']");
+    expect(dialog).not.toBeNull();
+    expect(dialog?.querySelector("svg")).not.toBeNull();
+    // The code is the credential; a user photographing it hands over the node.
+    expect(dialog?.textContent).toContain("包含凭据");
+  });
+
+  it("reports a node that has no drawable code", async () => {
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    nodeQrCodeMock.mockRejectedValue({
+      code: "share_link_unavailable",
+      message: "this node has no sharing link",
+    });
+    await render();
+
+    await nodeMenuAction("Tokyo Edge", "显示二维码");
+
+    expect(container.querySelector("[role='alert']")?.textContent).toContain(
+      "no sharing link",
+    );
+    expect(container.querySelector("[aria-label^='二维码']")).toBeNull();
+  });
+
+  it("imports the node a QR code image holds", async () => {
+    readQrCodeMock.mockResolvedValue(
+      "ss://aes-256-gcm:hunter2@edge.example.com:8388#Tokyo",
+    );
+    importNodesMock.mockResolvedValue({
+      imported: 1,
+      duplicates: 0,
+      failures: [],
+      status: SELECTED,
+    });
+    await render();
+    const picker = container.querySelector<HTMLInputElement>(
+      "[aria-label='从二维码图片导入节点']",
+    );
+    if (!picker) {
+      throw new Error("no QR image picker");
+    }
+
+    await act(async () => {
+      Object.defineProperty(picker, "files", {
+        configurable: true,
+        value: [new File([new Uint8Array([1, 2, 3])], "node.png")],
+      });
+      picker.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    // The decoded link goes through the same bulk import a paste uses, so it
+    // gets the same validation and the same report.
+    expect(readQrCodeMock).toHaveBeenCalled();
+    expect(importNodesMock).toHaveBeenCalledWith(
+      "ss://aes-256-gcm:hunter2@edge.example.com:8388#Tokyo",
+    );
+  });
+
+  it("reports an image that holds no code", async () => {
+    readQrCodeMock.mockRejectedValue({
+      code: "qr_code_not_found",
+      message: "no QR code was found in the image",
+    });
+    await render();
+    const picker = container.querySelector<HTMLInputElement>(
+      "[aria-label='从二维码图片导入节点']",
+    );
+
+    await act(async () => {
+      Object.defineProperty(picker!, "files", {
+        configurable: true,
+        value: [new File([new Uint8Array([1])], "holiday.png")],
+      });
+      picker!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(container.querySelector("[role='alert']")?.textContent).toContain(
+      "no QR code was found",
+    );
+    expect(importNodesMock).not.toHaveBeenCalled();
   });
 
   it("keeps subscription-owned nodes read-only", async () => {

@@ -14,6 +14,12 @@ magies-platform = { path = "../magies-platform" }
 magies-routing = { path = "../magies-routing" }
 magies-storage = { path = "../magies-storage" }
 percent-encoding = "2"
+# SVG only: the `image` feature pulls a decoder this crate has no use for.
+qrcode = { version = "=0.14.1", default-features = false, features = ["image", "svg"] }
+# PNG and JPEG only: a QR image arrives as one of those, and the other decoders
+# are attack surface for a file the user picked.
+image = { version = "=0.25.9", default-features = false, features = ["jpeg", "png"] }
+rqrr = "=0.10.1"
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls-no-provider"] }
 rusqlite = { version = "=0.35.0", features = ["bundled"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }

@@ -15,6 +15,8 @@ import {
   createNode,
   cloneNode,
   deleteNode,
+  nodeQrCode,
+  readQrCode,
   exportNodeLink,
   removeDuplicateNodes,
   dismissSystemProxyRecovery,
@@ -223,6 +225,9 @@ export default function App() {
   const [groupingNodeId, setGroupingNodeId] = useState<string | null>(null);
   const [nodeMenu, setNodeMenu] = useState<NodeMenuPosition | null>(null);
   const [checkedNodes, setCheckedNodes] = useState<Set<string>>(new Set());
+  const [qrCode, setQrCode] = useState<{ name: string; svg: string } | null>(
+    null,
+  );
   const toggleCheckedNode = (id: string) =>
     setCheckedNodes((current) => {
       const next = new Set(current);
@@ -676,6 +681,30 @@ export default function App() {
     [runBulkImport],
   );
 
+  /// Imports the node a QR code image holds.
+  const onImportQrCode = useCallback(
+    async (file: File | undefined) => {
+      if (!file) {
+        return;
+      }
+      setBusy(true);
+      setError(null);
+      setExportedTo(null);
+      try {
+        const image = new Uint8Array(await file.arrayBuffer());
+        const link = await readQrCode(image);
+        // Straight into the same bulk import a paste uses, so a scanned link
+        // gets the same validation and the same report.
+        await runBulkImport(link);
+      } catch (failure: unknown) {
+        setError(describeFailure(failure));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [runBulkImport],
+  );
+
   const updateCreateForm = useCallback(
     (changes: Partial<ManualNodeForm>) => {
       setCreateForm((current) => ({ ...current, ...changes }));
@@ -796,6 +825,19 @@ export default function App() {
           ? `已复制 ${links.length} 条分享链接`
           : `已复制 ${links.length} 条，${failed} 条无法导出`,
       );
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const onShowNodeQrCode = useCallback(async (candidate: NodeSummary) => {
+    setBusy(true);
+    setError(null);
+    setExportedTo(null);
+    try {
+      setQrCode({ name: candidate.name, svg: await nodeQrCode(candidate.id) });
     } catch (failure: unknown) {
       setError(describeFailure(failure));
     } finally {
@@ -1565,6 +1607,16 @@ export default function App() {
                     type="button"
                     role="menuitem"
                     disabled={busy}
+                    onClick={act(() => void onShowNodeQrCode(target))}
+                  >
+                    显示二维码
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={busy}
                     onClick={act(() => onGroupNode(target))}
                   >
                     设置分组
@@ -1704,6 +1756,32 @@ export default function App() {
         )}
 
         </div>
+        {qrCode !== null && (
+          <div className="dialog-backdrop" onClick={() => setQrCode(null)}>
+            <div
+              className="dialog qr-dialog"
+              role="dialog"
+              aria-label={`二维码 ${qrCode.name}`}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <header className="dialog-head">
+                <strong>{qrCode.name}</strong>
+                <button type="button" onClick={() => setQrCode(null)}>
+                  关闭
+                </button>
+              </header>
+              {/* The markup comes from the Rust renderer, never from a node's
+                  own fields, so there is nothing here a node name could inject. */}
+              <div
+                className="qr-code"
+                dangerouslySetInnerHTML={{ __html: qrCode.svg }}
+              />
+              <p className="hint">
+                扫描即导入该节点。二维码包含凭据，请勿分享给他人。
+              </p>
+            </div>
+          </div>
+        )}
         <div
           className="dialog-backdrop"
           hidden={panel === null}
@@ -1908,6 +1986,20 @@ export default function App() {
                 // Clear the value so picking the same file twice still fires.
                 event.target.value = "";
                 void onImportFile(file);
+              }}
+            />
+          </label>
+          <label className="file-import">
+            扫描二维码图片
+            <input
+              aria-label="从二维码图片导入节点"
+              type="file"
+              accept="image/png,image/jpeg"
+              disabled={busy || connected}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                void onImportQrCode(file);
               }}
             />
           </label>
