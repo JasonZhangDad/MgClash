@@ -25,10 +25,16 @@ if [[ ! -f "${license}" ]]; then
   echo "bundled Core license does not exist: ${license}" >&2
   exit 1
 fi
-if [[ "${file_name}" != "sing-box" && "${file_name}" != "sing-box.exe" ]]; then
-  echo "unsupported bundled Core file name: ${file_name}" >&2
-  exit 1
-fi
+# The license is named after the Core it covers, so the two ship side by side
+# without one overwriting the other.
+case "${file_name}" in
+  sing-box | sing-box.exe) license_name="LICENSE-sing-box" ;;
+  xray | xray.exe) license_name="LICENSE-xray" ;;
+  *)
+    echo "unsupported bundled Core file name: ${file_name}" >&2
+    exit 1
+    ;;
+esac
 
 if command -v shasum >/dev/null 2>&1; then
   actual_sha256="$(shasum -a 256 "${core}" | awk '{print $1}')"
@@ -45,4 +51,4 @@ fi
 mkdir -p "${destination}"
 cp "${core}" "${destination}/${file_name}"
 chmod +x "${destination}/${file_name}"
-cp "${license}" "${destination}/LICENSE-sing-box"
+cp "${license}" "${destination}/${license_name}"
