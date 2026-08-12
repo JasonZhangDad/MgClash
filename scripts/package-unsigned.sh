@@ -17,6 +17,11 @@ output_directory="${1:-${repository}/dist}"
 core="${MAGIES_BUNDLED_SING_BOX_BIN:-}"
 core_sha256="${MAGIES_SING_BOX_SHA256:-}"
 core_license="${MAGIES_BUNDLED_SING_BOX_LICENSE:-}"
+xray="${MAGIES_BUNDLED_XRAY_BIN:-}"
+xray_sha256="${MAGIES_XRAY_SHA256:-}"
+xray_license="${MAGIES_BUNDLED_XRAY_LICENSE:-}"
+xray_geoip="${MAGIES_BUNDLED_XRAY_GEOIP:-}"
+xray_geosite="${MAGIES_BUNDLED_XRAY_GEOSITE:-}"
 wintun="${MAGIES_BUNDLED_WINTUN_DLL:-}"
 wintun_license="${MAGIES_BUNDLED_WINTUN_LICENSE:-}"
 
@@ -56,17 +61,36 @@ scratch="$(mktemp -d)"
 trap 'rm -rf "${scratch}"' EXIT
 if [[ "${os}" == "windows" ]]; then
   core_file_name="sing-box.exe"
+  xray_file_name="xray.exe"
 else
   core_file_name="sing-box"
+  xray_file_name="xray"
 fi
 bash "${repository}/scripts/stage-bundled-core.sh" \
   "${core}" "${core_sha256}" "${core_license}" \
   "${scratch}/core" "${core_file_name}"
+# Both Cores ship so switching in settings works without the user finding a
+# binary. Xray is staged only when it is configured: release.yml has no pinned
+# Xray digest yet (ADR 0003), and failing the whole build over that would block
+# releases that are otherwise fine. The skip is announced rather than silent,
+# because an artifact missing a Core fails later and less clearly.
+if [[ -n "${xray}" ]]; then
+  # The geo databases travel with the binary: Xray refuses to start when a
+  # geoip: or geosite: routing rule cannot find them, which is exactly what
+  # Rule mode generates.
+  bash "${repository}/scripts/stage-bundled-core.sh" \
+    "${xray}" "${xray_sha256}" "${xray_license}" \
+    "${scratch}/core" "${xray_file_name}" \
+    "${xray_geoip}" "${xray_geosite}"
+else
+  echo "no MAGIES_BUNDLED_XRAY_BIN: this artifact ships without Xray" >&2
+fi
 if [[ "${os}" == "windows" ]]; then
   bash "${repository}/scripts/stage-bundled-wintun.sh" \
     "${wintun}" "${wintun_license}" "${scratch}/wintun"
 fi
 export MAGIES_SING_BOX_SHA256="${core_sha256}"
+export MAGIES_XRAY_SHA256="${xray_sha256}"
 
 echo "building ${name}"
 cd "${desktop}"
