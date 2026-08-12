@@ -142,6 +142,69 @@ fn importing_a_list_drops_repeats_inside_the_body() {
 }
 
 #[test]
+fn importing_the_same_list_twice_adds_nothing_the_second_time() {
+    let (mut service, _runtime, _fail_start) = service();
+    let body = format!("{SHADOWSOCKS_LINK}\n{OSAKA_LINK}");
+    service.import_nodes(body.as_bytes()).unwrap();
+
+    let report = service.import_nodes(body.as_bytes()).unwrap();
+
+    assert_eq!(report.imported, 0);
+    assert_eq!(report.duplicates, 2);
+    // Re-importing a subscription export is a normal thing to do; it must not
+    // double the list.
+    assert_eq!(service.nodes().unwrap().len(), 2);
+}
+
+#[test]
+fn a_second_import_keeps_only_the_nodes_that_are_new() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_nodes(SHADOWSOCKS_LINK.as_bytes()).unwrap();
+
+    let report = service
+        .import_nodes(format!("{SHADOWSOCKS_LINK}\n{OSAKA_LINK}").as_bytes())
+        .unwrap();
+
+    assert_eq!(report.imported, 1);
+    assert_eq!(report.duplicates, 1);
+    let names: Vec<_> = service
+        .nodes()
+        .unwrap()
+        .into_iter()
+        .map(|node| node.name)
+        .collect();
+    assert_eq!(names, ["Tokyo Edge", "Osaka"]);
+}
+
+#[test]
+fn a_node_differing_only_by_credential_is_not_a_repeat() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_nodes(SHADOWSOCKS_LINK.as_bytes()).unwrap();
+
+    // Same endpoint, different password: a second account, not a duplicate.
+    let report = service
+        .import_nodes(b"ss://aes-128-gcm:other-secret@edge.example.com:8388#Tokyo%20Edge")
+        .unwrap();
+
+    assert_eq!(report.imported, 1);
+    assert_eq!(report.duplicates, 0);
+    assert_eq!(service.nodes().unwrap().len(), 2);
+}
+
+#[test]
+fn a_manually_created_node_also_blocks_a_repeat_import() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+
+    // The single-link path stores the same way, so the fingerprint matches.
+    let report = service.import_nodes(SHADOWSOCKS_LINK.as_bytes()).unwrap();
+
+    assert_eq!(report.imported, 0);
+    assert_eq!(report.duplicates, 1);
+    assert_eq!(service.nodes().unwrap().len(), 1);
+}
+
+#[test]
 fn importing_an_unreadable_list_is_a_typed_error() {
     let (mut service, _runtime, _fail_start) = service();
 
