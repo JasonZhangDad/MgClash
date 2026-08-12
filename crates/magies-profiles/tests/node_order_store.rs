@@ -4,10 +4,8 @@ use uuid::Uuid;
 
 #[test]
 fn persists_one_order_for_manual_and_subscription_nodes() {
-    let database_path = std::env::temp_dir().join(format!(
-        "mgclash-node-order-{}.sqlite",
-        Uuid::new_v4()
-    ));
+    let database_path =
+        std::env::temp_dir().join(format!("mgclash-node-order-{}.sqlite", Uuid::new_v4()));
     let manual = node(1, "Manual", None);
     let subscription_id = Uuid::from_u128(10);
     let managed = node(2, "Managed", Some(subscription_id));
