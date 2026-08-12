@@ -342,6 +342,16 @@ export function deleteNode(id: string): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_delete_node", { id });
 }
 
+/** Duplicates a manual node, credential and all. Returns the new list. */
+export function cloneNode(id: string): Promise<NodeSummary[]> {
+  return invoke<NodeSummary[]>("session_clone_node", { id });
+}
+
+/** Deletes every node repeating one earlier in the list. Returns how many. */
+export function removeDuplicateNodes(): Promise<number> {
+  return invoke<number>("session_remove_duplicate_nodes");
+}
+
 /** The node's sharing URI. It carries the credential, so it is only ever
  * written to the clipboard the user asked for. */
 export function exportNodeLink(id: string): Promise<string> {

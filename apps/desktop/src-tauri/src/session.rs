@@ -626,6 +626,107 @@ where
             .map_err(SessionCommandError::NodeGroupStore)
     }
 
+    /// Duplicates one manual node, secret and all.
+    ///
+    /// The copy keeps the original's name — it is a clone, not a variant — and
+    /// the selection does not move: cloning exists so a node can be duplicated
+    /// and then edited. Subscription nodes are refused because the subscription
+    /// owns them, and a copy would outlive a refresh that removed the original.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed not-found error for an unknown or subscription-owned
+    /// node, and the secret store's error when the credential cannot be copied.
+    pub fn clone_node(
+        &mut self,
+        id: Uuid,
+    ) -> Result<Vec<NodeSummary>, SessionCommandError<C::Error, P::Error>> {
+        if self.session.is_running() {
+            return Err(SessionCommandError::SessionActive);
+        }
+        let source = self
+            .manual_nodes
+            .nodes()
+            .map_err(SessionCommandError::NodeStore)?
+            .into_iter()
+            .find(|node| node.id == id)
+            .ok_or(SessionCommandError::NodeStore(
+                ManualNodeStoreError::NodeNotFound { id },
+            ))?;
+        let secret = self
+            .session
+            .secret_store()
+            .get(&source.credential_ref)
+            .map_err(SessionCommandError::Secret)?;
+
+        let clone_id = Uuid::new_v4();
+        let credential_ref = CredentialRef::new(format!("node/{clone_id}"))
+            .map_err(SessionCommandError::CredentialRef)?;
+        self.session
+            .secret_store()
+            .put(&credential_ref, &secret)
+            .map_err(SessionCommandError::Secret)?;
+        let mut clone = source;
+        clone.id = clone_id;
+        clone.credential_ref = credential_ref;
+
+        if let Err(store) = self.manual_nodes.save(&clone) {
+            // The copied secret must not outlive the node it belongs to.
+            return match self.session.secret_store().delete(&clone.credential_ref) {
+                Ok(()) => Err(SessionCommandError::NodeStore(store)),
+                Err(secret) => {
+                    Err(SessionCommandError::NodeStoreAndSecretRollback { store, secret })
+                }
+            };
+        }
+        self.nodes()
+    }
+
+    /// Deletes every node that repeats one earlier in the list.
+    ///
+    /// "Repeat" is the same fingerprint the bulk import uses — server, port and
+    /// credential — so two entries that differ only by name count as one. The
+    /// first occurrence is the one kept, which leaves the user's ordering and
+    /// selection alone.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed storage error. A node whose secret cannot be read is
+    /// skipped rather than deleted: without its credential there is no way to
+    /// tell whether it repeats anything.
+    pub fn remove_duplicate_nodes(
+        &mut self,
+    ) -> Result<usize, SessionCommandError<C::Error, P::Error>> {
+        if self.session.is_running() {
+            return Err(SessionCommandError::SessionActive);
+        }
+        let mut seen = HashSet::new();
+        let mut repeated = Vec::new();
+        for node in self
+            .manual_nodes
+            .nodes()
+            .map_err(SessionCommandError::NodeStore)?
+        {
+            let Ok(secret) = self.session.secret_store().get(&node.credential_ref) else {
+                continue;
+            };
+            let Ok(credential) = CredentialCodec::decode(&secret) else {
+                continue;
+            };
+            let Some(fingerprint) = node_fingerprint(&node, &credential) else {
+                continue;
+            };
+            if !seen.insert(fingerprint) {
+                repeated.push(node.id);
+            }
+        }
+        let removed = repeated.len();
+        for id in repeated {
+            self.delete_node(id)?;
+        }
+        Ok(removed)
+    }
+
     /// Writes one stored node back out as a sharing URI.
     ///
     /// The credential is read from the OS store and used only to build the link;

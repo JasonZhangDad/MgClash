@@ -1496,3 +1496,71 @@ fn exporting_an_unknown_node_is_a_typed_not_found() {
         ))
     ));
 }
+
+#[test]
+fn cloning_a_node_copies_its_credential_and_leaves_the_selection_alone() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    let original = service.nodes().unwrap()[0].id;
+    service.select_node(original).unwrap();
+
+    let nodes = service.clone_node(original).unwrap();
+
+    assert_eq!(nodes.len(), 2);
+    // Cloning is for "duplicate, then edit"; it must not move the user off the
+    // node they are on.
+    assert_eq!(service.status().node.unwrap().id, original);
+    let clone = nodes.iter().find(|node| node.id != original).unwrap();
+    assert_eq!(clone.server, nodes[0].server);
+    assert_eq!(clone.port, nodes[0].port);
+    // The copy has to be usable on its own, which means its own stored secret.
+    let link = service.export_node_link(clone.id).unwrap();
+    assert_eq!(link, service.export_node_link(original).unwrap());
+}
+
+#[test]
+fn cloning_a_subscription_node_is_refused() {
+    let (mut service, node_id, _runtime) = service_with_subscription_node();
+
+    // The subscription owns its nodes; a copy would survive a refresh that
+    // removes the original, which is not what "clone" implies here.
+    assert!(matches!(
+        service.clone_node(node_id),
+        Err(SessionCommandError::NodeStore(
+            ManualNodeStoreError::NodeNotFound { .. }
+        ))
+    ));
+}
+
+#[test]
+fn removing_duplicates_keeps_the_first_of_each_repeated_node() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    let original = service.nodes().unwrap()[0].id;
+    service.clone_node(original).unwrap();
+    service.clone_node(original).unwrap();
+    service
+        .import_node("trojan://hunter2@edge.example.com:443#Trojan")
+        .unwrap();
+
+    let removed = service.remove_duplicate_nodes().unwrap();
+
+    assert_eq!(removed, 2);
+    let remaining = service.nodes().unwrap();
+    assert_eq!(remaining.len(), 2);
+    // The first occurrence survives, so the node the user already selected or
+    // ordered does not move.
+    assert!(remaining.iter().any(|node| node.id == original));
+}
+
+#[test]
+fn removing_duplicates_leaves_a_list_without_repeats_untouched() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    service
+        .import_node("trojan://hunter2@edge.example.com:443#Trojan")
+        .unwrap();
+
+    assert_eq!(service.remove_duplicate_nodes().unwrap(), 0);
+    assert_eq!(service.nodes().unwrap().len(), 2);
+}
