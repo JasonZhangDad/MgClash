@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs;
+use std::net::{Ipv4Addr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::id;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -47,8 +48,11 @@ fn reports_an_idle_status_before_a_node_is_imported() {
     assert_eq!(status.mode, "global");
     assert_eq!(status.route, RouteSettings::default());
     assert!(status.system_proxy);
-    assert_eq!(status.socks_port, 10_808);
-    assert_eq!(status.http_port, 10_809);
+    // The documented defaults are asserted by
+    // `v01_defaults_use_the_documented_loopback_ports`; here the fixture picks
+    // free ports, so this only checks the status reports what it was given.
+    assert_eq!(status.socks_port, service.defaults().socks.port().get());
+    assert_eq!(status.http_port, service.defaults().http.port().get());
 }
 
 #[test]
@@ -951,7 +955,7 @@ fn exposes_a_url_test_target_only_while_connected() {
     let target = service.url_test_target().unwrap();
 
     assert_eq!(target.node_id, node.id);
-    assert_eq!(target.http_port, 10_809);
+    assert_eq!(target.http_port, service.defaults().http.port().get());
 }
 
 #[test]
@@ -996,7 +1000,7 @@ fn surfaces_a_failing_core_start_as_a_session_error() {
             FakeProxy::new(events.clone()),
             runtime.path(),
         ),
-        SessionDefaults::v01(),
+        defaults_on_free_ports(),
         NodeStores::new(
             SqliteManualNodeStore::open_in_memory().unwrap(),
             SqliteSubscriptionStore::open_in_memory().unwrap(),
@@ -1060,7 +1064,7 @@ fn service_with_events(
             FakeProxy::new(events.clone()),
             runtime.path(),
         ),
-        SessionDefaults::v01(),
+        defaults_on_free_ports(),
         NodeStores::new(
             SqliteManualNodeStore::open_in_memory().unwrap(),
             SqliteSubscriptionStore::open_in_memory().unwrap(),
@@ -1073,6 +1077,30 @@ fn service_with_events(
     )
     .unwrap();
     (service, runtime, fail_start)
+}
+
+/// The V0.1 defaults with the loopback ports moved out of the way.
+///
+/// `connect` binds the SOCKS and HTTP ports to prove they are free, so a suite
+/// pinned to 10808/10809 would fail on any machine already running a proxy
+/// client. The ports are still real, just chosen by the OS.
+fn defaults_on_free_ports() -> SessionDefaults {
+    let socks = free_port();
+    let http = free_port();
+    SessionDefaults {
+        socks: LocalSocksProfile::new(u32::from(socks)).unwrap(),
+        http: LocalHttpProfile::new(u32::from(http)).unwrap(),
+        ..SessionDefaults::v01()
+    }
+}
+
+/// A port the OS reports as free, released before it is returned.
+fn free_port() -> u16 {
+    TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .expect("the OS must hand out a loopback port")
+        .local_addr()
+        .expect("a bound listener has an address")
+        .port()
 }
 
 fn service_with_subscription_node() -> (TestService, Uuid, RuntimeDirectory) {
@@ -1122,7 +1150,7 @@ fn service_with_subscription_node() -> (TestService, Uuid, RuntimeDirectory) {
             FakeProxy::new(events),
             runtime.path(),
         ),
-        SessionDefaults::v01(),
+        defaults_on_free_ports(),
         NodeStores::new(
             SqliteManualNodeStore::open(&database).unwrap(),
             subscriptions,
@@ -1399,4 +1427,36 @@ impl std::fmt::Display for ErrorChain<'_> {
         }
         Ok(())
     }
+}
+
+#[test]
+fn connecting_names_the_busy_port_instead_of_a_dead_core() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    let id = service.nodes().unwrap()[0].id;
+    service.select_node(id).unwrap();
+    // Another proxy client holding the SOCKS port is the ordinary case: v2rayN
+    // and MgClash both default to 10808.
+    let _busy = TcpListener::bind((Ipv4Addr::LOCALHOST, service.defaults().socks.port().get()))
+        .expect("the fixture port was free a moment ago");
+
+    let error = service.connect().unwrap_err();
+
+    // Without the preflight the Core exits on its own and the user is told only
+    // "Core exited before becoming healthy", which names nothing actionable.
+    let message = format!("{error}: {}", source_chain(&error));
+    assert!(
+        message.contains(&service.defaults().socks.port().to_string()),
+        "the refusal must name the busy port: {message}"
+    );
+}
+
+fn source_chain(error: &dyn std::error::Error) -> String {
+    let mut parts = Vec::new();
+    let mut source = error.source();
+    while let Some(error) = source {
+        parts.push(error.to_string());
+        source = error.source();
+    }
+    parts.join(": ")
 }

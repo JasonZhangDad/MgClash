@@ -10,6 +10,7 @@ use std::num::NonZeroU16;
 use std::path::Path;
 use std::time::Instant;
 
+use magies_core_runtime::{LocalProxyPortChecker, LocalProxyPortError};
 use magies_domain::{
     CoreType, CredentialRef, NodeModelError, NodeName, ProxyNode, ProxyProtocol, ServerAddress,
     TimestampMillis, TlsConfig, TransportConfig,
@@ -967,6 +968,14 @@ where
     /// Returns [`SessionCommandError::NoSelectedNode`] before any node is
     /// imported, otherwise the orchestrator's typed error.
     pub fn connect(&mut self) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
+        // Checked before anything is generated or spawned: another proxy client
+        // holding a loopback port makes the Core exit on its own, and its exit
+        // code names nothing the user can act on.
+        LocalProxyPortChecker::check(
+            self.defaults.socks.port().get(),
+            self.defaults.http.port().get(),
+        )
+        .map_err(SessionCommandError::LocalProxyPort)?;
         let node = self
             .node
             .clone()
@@ -997,6 +1006,12 @@ where
             .map_err(SessionCommandError::Session)?;
         self.core_output = Some(output);
         Ok(self.status())
+    }
+
+    /// The loopback ports, routing and DNS this session starts from.
+    #[must_use]
+    pub const fn defaults(&self) -> &SessionDefaults {
+        &self.defaults
     }
 
     /// Hands the running Core's output stream to the caller, once.
@@ -1176,6 +1191,8 @@ where
     TunProfile(#[source] TunProfileError),
     #[error("no usable Core for this node")]
     CoreSelection(#[source] CoreSelectionError),
+    #[error("a local proxy port is unavailable")]
+    LocalProxyPort(#[source] LocalProxyPortError),
     #[error("invalid manual node settings")]
     ManualNodeDraft(#[source] ManualNodeDraftError),
     #[error("the imported node list could not be read")]
@@ -1234,6 +1251,7 @@ where
             Self::ShareLink(_) => "invalid_share_link",
             Self::ManualNodeDraft(_) => "invalid_manual_node",
             Self::CoreSelection(_) => "core_unavailable",
+            Self::LocalProxyPort(_) => "local_proxy_port_unavailable",
             Self::TunUnavailable | Self::TunProfile(_) => "tun_unavailable",
             Self::BulkImport(_) => "invalid_node_list",
             Self::Credential(_) => "credential_encode_failed",
