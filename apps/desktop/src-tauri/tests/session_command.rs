@@ -22,9 +22,9 @@ use magies_domain::{CoreType, CredentialRef, ProxyProtocol, Subscription, Timest
 use magies_platform::system_proxy::SystemProxyState;
 use magies_profiles::{
     CorePreference, CredentialCodec, LocalHttpProfile, LocalSocksProfile, ManualCredentialDraft,
-    ManualNodeDraft, ManualNodeStoreError, SqliteManualNodeStore, SqliteNodeGroupStore,
-    SqliteNodeOrderStore, SqliteSubscriptionStore, SubscriptionContentParser, SubscriptionUpdate,
-    SubscriptionValidators,
+    ManualNodeDraft, ManualNodeStoreError, ShareLinkParser, SqliteManualNodeStore,
+    SqliteNodeGroupStore, SqliteNodeOrderStore, SqliteSubscriptionStore, SubscriptionContentParser,
+    SubscriptionUpdate, SubscriptionValidators,
 };
 use magies_routing::RoutingMode;
 use magies_session::{
@@ -1459,4 +1459,40 @@ fn source_chain(error: &dyn std::error::Error) -> String {
         source = error.source();
     }
     parts.join(": ")
+}
+
+#[test]
+fn a_stored_node_is_exported_as_a_link_that_parses_back() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    let id = service.nodes().unwrap()[0].id;
+
+    let link = service.export_node_link(id).unwrap();
+
+    // Importing the exported link has to produce the same node, which is the
+    // only thing exporting is for.
+    let reimported = ShareLinkParser
+        .parse(
+            &link,
+            Uuid::new_v4(),
+            CredentialRef::new("keychain://nodes/roundtrip").unwrap(),
+        )
+        .unwrap();
+    let original = &service.nodes().unwrap()[0];
+    assert_eq!(reimported.node().protocol_type, original.protocol);
+    assert_eq!(reimported.node().server.as_str(), original.server);
+    assert_eq!(reimported.node().port.get(), original.port);
+    assert_eq!(reimported.node().name.as_str(), original.name);
+}
+
+#[test]
+fn exporting_an_unknown_node_is_a_typed_not_found() {
+    let (service, _runtime, _fail_start) = service();
+
+    assert!(matches!(
+        service.export_node_link(Uuid::new_v4()),
+        Err(SessionCommandError::NodeStore(
+            ManualNodeStoreError::NodeNotFound { .. }
+        ))
+    ));
 }

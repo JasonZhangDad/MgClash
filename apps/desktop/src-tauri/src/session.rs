@@ -21,9 +21,10 @@ use magies_profiles::{
     CoreSelectionError, CredentialCodec, CredentialCodecError, DnsConfigError, DnsProfile,
     LocalHttpProfile, LocalSocksProfile, ManualNodeDraft, ManualNodeDraftError,
     ManualNodeStoreError, NodeFingerprint, NodeGroup, NodeGroupStoreError, NodeOrderStoreError,
-    ShareLinkParseError, ShareLinkParser, SqliteManualNodeStore, SqliteNodeGroupStore,
-    SqliteNodeOrderStore, SqliteSubscriptionStore, StoredNodeCredential,
-    SubscriptionTransactionError, TunProfile, TunProfileError, core_name, node_fingerprint,
+    ShareLinkParseError, ShareLinkParser, ShareLinkSerializer, ShareLinkSerializerError,
+    SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore, SqliteSubscriptionStore,
+    StoredNodeCredential, SubscriptionTransactionError, TunProfile, TunProfileError, core_name,
+    node_fingerprint,
 };
 use magies_routing::{RouteProfile, RoutingMode};
 use magies_session::{
@@ -625,6 +626,53 @@ where
             .map_err(SessionCommandError::NodeGroupStore)
     }
 
+    /// Writes one stored node back out as a sharing URI.
+    ///
+    /// The credential is read from the OS store and used only to build the link;
+    /// it is never returned on its own, and the link itself is the secret, which
+    /// is why this is only ever handed to the clipboard the user asked for.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed not-found error for an unknown node, the secret store's
+    /// error when the credential cannot be read, and the serializer's error when
+    /// the node has no representation as a link.
+    pub fn export_node_link(
+        &self,
+        id: Uuid,
+    ) -> Result<String, SessionCommandError<C::Error, P::Error>> {
+        let node = self
+            .stored_nodes()?
+            .into_iter()
+            .find(|node| node.id == id)
+            .ok_or(SessionCommandError::NodeStore(
+                ManualNodeStoreError::NodeNotFound { id },
+            ))?;
+        let secret = self
+            .session
+            .secret_store()
+            .get(&node.credential_ref)
+            .map_err(SessionCommandError::Secret)?;
+        let credential =
+            CredentialCodec::decode(&secret).map_err(SessionCommandError::Credential)?;
+        ShareLinkSerializer::serialize(&node, &credential)
+            .map_err(SessionCommandError::ShareLinkExport)
+    }
+
+    /// Every stored node as the shared model, manual and subscription alike.
+    fn stored_nodes(&self) -> Result<Vec<ProxyNode>, SessionCommandError<C::Error, P::Error>> {
+        let mut nodes = self
+            .manual_nodes
+            .nodes()
+            .map_err(SessionCommandError::NodeStore)?;
+        nodes.extend(
+            self.subscription_nodes
+                .active_nodes()
+                .map_err(SessionCommandError::SubscriptionNodeStore)?,
+        );
+        Ok(nodes)
+    }
+
     /// Assigns any active manual or subscription node to a named local group.
     /// Passing `None` clears the node's group.
     ///
@@ -1193,6 +1241,8 @@ where
     CoreSelection(#[source] CoreSelectionError),
     #[error("a local proxy port is unavailable")]
     LocalProxyPort(#[source] LocalProxyPortError),
+    #[error("this node has no sharing link")]
+    ShareLinkExport(#[source] ShareLinkSerializerError),
     #[error("invalid manual node settings")]
     ManualNodeDraft(#[source] ManualNodeDraftError),
     #[error("the imported node list could not be read")]
@@ -1252,6 +1302,7 @@ where
             Self::ManualNodeDraft(_) => "invalid_manual_node",
             Self::CoreSelection(_) => "core_unavailable",
             Self::LocalProxyPort(_) => "local_proxy_port_unavailable",
+            Self::ShareLinkExport(_) => "share_link_unavailable",
             Self::TunUnavailable | Self::TunProfile(_) => "tun_unavailable",
             Self::BulkImport(_) => "invalid_node_list",
             Self::Credential(_) => "credential_encode_failed",

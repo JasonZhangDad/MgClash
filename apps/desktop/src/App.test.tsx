@@ -10,6 +10,7 @@ const loadTrafficMock = vi.hoisted(() => vi.fn());
 const loadNodesMock = vi.hoisted(() => vi.fn());
 const loadNodeGroupsMock = vi.hoisted(() => vi.fn());
 const importNodeMock = vi.hoisted(() => vi.fn());
+const exportNodeLinkMock = vi.hoisted(() => vi.fn());
 const createNodeMock = vi.hoisted(() => vi.fn());
 const importNodesMock = vi.hoisted(() => vi.fn());
 const loadLogsMock = vi.hoisted(() => vi.fn());
@@ -61,6 +62,7 @@ vi.mock("./session", async () => {
     importNodes: importNodesMock,
     isCommandError: actual.isCommandError,
     deleteNode: deleteNodeMock,
+  exportNodeLink: exportNodeLinkMock,
     loadNodeGroups: loadNodeGroupsMock,
     loadNodes: loadNodesMock,
     loadSessionStatus: loadSessionStatusMock,
@@ -1512,6 +1514,30 @@ describe("App", () => {
     });
 
     expect(selectNodeMock).toHaveBeenCalledWith(osaka.id);
+  });
+
+  it("copies an exported share link without rendering it", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    exportNodeLinkMock.mockResolvedValue(
+      "ss://aes-256-gcm:hunter2@edge.example.com:8388#Tokyo Edge",
+    );
+    await render();
+
+    await nodeMenuAction("Tokyo Edge", "导出分享链接");
+
+    expect(exportNodeLinkMock).toHaveBeenCalledWith(SELECTED.node?.id);
+    expect(writeText).toHaveBeenCalledWith(
+      "ss://aes-256-gcm:hunter2@edge.example.com:8388#Tokyo Edge",
+    );
+    // The link is the credential, so it must not appear on screen.
+    expect(container.textContent).not.toContain("hunter2");
+    expect(container.textContent).toContain("已复制到剪贴板");
   });
 
   it("keeps subscription-owned nodes read-only", async () => {

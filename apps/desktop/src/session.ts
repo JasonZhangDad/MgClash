@@ -342,6 +342,12 @@ export function deleteNode(id: string): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_delete_node", { id });
 }
 
+/** The node's sharing URI. It carries the credential, so it is only ever
+ * written to the clipboard the user asked for. */
+export function exportNodeLink(id: string): Promise<string> {
+  return invoke<string>("session_export_node_link", { id });
+}
+
 export function connectSession(): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_connect");
 }

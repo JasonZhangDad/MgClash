@@ -14,6 +14,7 @@ import {
   connectSession,
   createNode,
   deleteNode,
+  exportNodeLink,
   dismissSystemProxyRecovery,
   disconnectSession,
   editNode,
@@ -697,6 +698,23 @@ export default function App() {
     }
   }, []);
 
+  const onExportNodeLink = useCallback(async (id: string) => {
+    setBusy(true);
+    setError(null);
+    setExportedTo(null);
+    try {
+      const link = await exportNodeLink(id);
+      // The link carries the credential, so it goes to the clipboard and is
+      // never rendered: showing it would leave the secret on screen.
+      await navigator.clipboard.writeText(link);
+      setExportedTo("分享链接已复制到剪贴板");
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
   const resetNodeForm = useCallback(() => {
     setEditingNodeId(null);
     setNodeName("");
@@ -1332,6 +1350,16 @@ export default function App() {
                     onClick={act(() => void onTestNode(target.id))}
                   >
                     测试延迟
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={busy}
+                    onClick={act(() => void onExportNodeLink(target.id))}
+                  >
+                    导出分享链接
                   </button>
                 </li>
                 <li>
