@@ -47,14 +47,19 @@ pinned binaries:
 | `MAGIES_SING_BOX_TUN_BIN` | `magies-profiles --test tun_smoke` |
 | `MAGIES_SING_BOX_DNS_BIN` | `magies-profiles --test dns_smoke` |
 | `MAGIES_SING_BOX_CONFIG_BIN` | `magies-profiles --test sing_box_outbound_smoke`, `--test sing_box_runtime_e2e` |
-| `MAGIES_SING_BOX_BIN` / `MAGIES_XRAY_BIN` | macOS Intel core smokes, `local_proxy_core_smoke` |
+| `MAGIES_SING_BOX_BIN` / `MAGIES_XRAY_BIN` | macOS Intel core smokes, `local_proxy_core_smoke`, the Xray smokes below; `MAGIES_XRAY_BIN` is also how the app locates Xray at runtime |
 | `MAGIES_MACOS_NETWORK_SERVICE` | macOS System Proxy real test; also the app's macOS proxy adapter |
 | `MAGIES_SING_BOX_SHA256` | the app's pinned Core digest (also compiled in at build time) |
+| `MAGIES_XRAY_SHA256` | the app's pinned Xray digest. Unlike sing-box there is **no** build-time fallback: ADR 0003 records that no verified official Xray digest exists in this repo, so choosing Xray without this fails with `xray_unavailable` rather than running something unverified |
 | `MAGIES_SOAK_CORE_BIN` / `MAGIES_SOAK_DURATION_SECS` | `magies-session --test soak` |
 
 ```sh
 cargo test -p magies-profiles --test tun_smoke -- --ignored --nocapture
 cargo test -p magies-storage --test secret_store platform_store_obeys_secret_store_contract -- --ignored
+
+# the whole Xray config pipeline against a real binary; nothing in it has run yet
+MAGIES_XRAY_BIN=/path/to/xray cargo test -p magies-profiles \
+    --test xray_runtime_smoke --test xray_outbound_smoke -- --ignored --nocapture
 
 # no pinned binary needed: reads the host's real default route / runs a fixture Core
 cargo test -p magies-platform --test network_path -- --ignored --nocapture
@@ -76,7 +81,7 @@ magies-domain      validated newtypes (NodeName, ServerAddress, CredentialRef, P
 magies-platform    OS/CPU matrix, unsigned-build capabilities, System Proxy adapters + recovery,
                    default-route fingerprint (network_path)
 magies-storage     SecretStore trait; PlatformSecretStore (keyring) / MemorySecretStore
-magies-routing     RouteProfile → ordered sing-box route JSON
+magies-routing     RouteProfile → ordered route JSON for sing-box and for Xray
 magies-core-runtime process lifecycle: binary validation, adapters, spawn/poll/stop, output,
                    health, crash recovery, atomic runtime config file, TUN state machine
 magies-profiles    URI parsers + ShareLinkParser dispatcher, subscriptions (SQLite), credential
@@ -94,8 +99,13 @@ The UI never reads or writes Core JSON (constraint 4); it goes through Tauri com
 
 ### Config generation pipeline
 
-Everything converges on `SingBoxRuntimeConfigGenerator::generate` (`magies-profiles/src/sing_box_runtime_config.rs`),
-which assembles one sing-box JSON document from independently tested sub-generators:
+There is one pipeline per Core, chosen by `CoreCapabilityMatrix` (PRD section 14) from the node's
+protocol and the user's preference; `DesktopSessionProfile::with_core` carries the answer into the
+session. **Never branch on the Core outside the matrix** — PRD 14.2 forbids scattered
+`if core == xray` checks, and the UI only renders what the matrix concluded.
+
+`SingBoxRuntimeConfigGenerator::generate` (`magies-profiles/src/sing_box_runtime_config.rs`)
+assembles one sing-box JSON document from independently tested sub-generators:
 
 - `SingBoxOutboundConfigGenerator` — the selected node's outbound (only emitted when the route
   actually references `proxy`)
@@ -103,8 +113,16 @@ which assembles one sing-box JSON document from independently tested sub-generat
 - `SingBoxTunConfigGenerator` — TUN inbound, plus prepended `sniff` / `hijack-dns` route actions
 - `SingBoxDnsConfigGenerator`, `SingBoxRouteConfigGenerator`
 
+`XrayRuntimeConfigGenerator::generate` (`magies-profiles/src/xray_runtime_config.rs`) is the
+counterpart, built from `XrayOutboundConfigGenerator`, `XrayDnsConfigGenerator`, and
+`XrayRouteConfigGenerator`. The two schemas differ in shape, not just field names — Xray has no
+`final`, no server tags, and no TUN inbound — so the Xray generators translate rather than rename.
+Places where meaning cannot survive the translation are pinned by tests; look for them before
+assuming a field maps across.
+
 Each sub-generator has its own unit test file *and* an `--ignored` smoke test that feeds the output
-to a real `sing-box check`. Adding a config field means updating both.
+to a real `sing-box check` or `xray run -test`. Adding a config field means updating both. **The
+Xray smokes have never been run** — no Xray binary was available when they were written.
 
 ### Session lifecycle (`magies-session`)
 
