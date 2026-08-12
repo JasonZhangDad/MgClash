@@ -90,8 +90,8 @@ impl TrojanParser {
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TrojanCredential {
-    password: String,
-    flow: Option<String>,
+    pub(crate) password: String,
+    pub(crate) flow: Option<String>,
 }
 
 impl TrojanCredential {

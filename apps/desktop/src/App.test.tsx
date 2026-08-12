@@ -10,6 +10,7 @@ const loadTrafficMock = vi.hoisted(() => vi.fn());
 const loadNodesMock = vi.hoisted(() => vi.fn());
 const loadNodeGroupsMock = vi.hoisted(() => vi.fn());
 const importNodeMock = vi.hoisted(() => vi.fn());
+const createNodeMock = vi.hoisted(() => vi.fn());
 const selectNodeMock = vi.hoisted(() => vi.fn());
 const deleteNodeMock = vi.hoisted(() => vi.fn());
 const editNodeMock = vi.hoisted(() => vi.fn());
@@ -42,6 +43,7 @@ vi.mock("./session", async () => {
   const actual = await vi.importActual<typeof import("./session")>("./session");
   return {
     connectSession: connectSessionMock,
+    createNode: createNodeMock,
     disconnectSession: disconnectSessionMock,
     dismissSystemProxyRecovery: dismissSystemProxyRecoveryMock,
     exportDiagnostics: exportDiagnosticsMock,
@@ -145,6 +147,7 @@ describe("App", () => {
     loadNodesMock.mockReset();
     loadNodeGroupsMock.mockReset();
     importNodeMock.mockReset();
+    createNodeMock.mockReset();
     selectNodeMock.mockReset();
     deleteNodeMock.mockReset();
     editNodeMock.mockReset();
@@ -496,6 +499,293 @@ describe("App", () => {
     expect(
       container.querySelector("[aria-label='节点列表']")?.textContent,
     ).toContain("Tokyo Edge");
+  });
+
+  function createField(label: string): HTMLInputElement {
+    const field = container.querySelector<HTMLInputElement>(
+      `input[aria-label='${label}']`,
+    );
+    if (!field) {
+      throw new Error(`no "${label}" field in ${container.innerHTML}`);
+    }
+    return field;
+  }
+
+  function createSelect(label: string): HTMLSelectElement {
+    const field = container.querySelector<HTMLSelectElement>(
+      `select[aria-label='${label}']`,
+    );
+    if (!field) {
+      throw new Error(`no "${label}" select in ${container.innerHTML}`);
+    }
+    return field;
+  }
+
+  it("creates a node from the manual form", async () => {
+    createNodeMock.mockResolvedValue(SELECTED);
+    loadNodesMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([SELECTED.node]);
+    await render();
+
+    await act(async () => {
+      selectValue("trojan", createSelect("节点协议"));
+    });
+    await act(async () => {
+      typeInput("Frankfurt", createField("新建节点名称"));
+      typeInput("edge.example.com", createField("新建节点服务器"));
+      typeInput("8443", createField("新建节点端口"));
+      typeInput("hunter2", createField("节点密码"));
+    });
+    await act(async () => button("创建节点").click());
+
+    expect(createNodeMock).toHaveBeenCalledWith({
+      credential: { password: "hunter2", protocol: "trojan" },
+      name: "Frankfurt",
+      port: 8443,
+      server: "edge.example.com",
+      tls: null,
+      transport: { type: "tcp" },
+      udpEnabled: true,
+    });
+    expect(container.textContent).toContain("Tokyo Edge");
+  });
+
+  it("hides the transport picker for Hysteria2 and always sends TLS", async () => {
+    createNodeMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([]);
+    await render();
+
+    await act(async () => {
+      selectValue("hysteria2", createSelect("节点协议"));
+    });
+
+    expect(
+      container.querySelector("select[aria-label='传输方式']"),
+    ).toBeNull();
+
+    await act(async () => {
+      typeInput("Frankfurt", createField("新建节点名称"));
+      typeInput("edge.example.com", createField("新建节点服务器"));
+      typeInput("8443", createField("新建节点端口"));
+      typeInput("token", createField("Hysteria2 认证密码"));
+    });
+    await act(async () => button("创建节点").click());
+
+    expect(createNodeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credential: {
+          authentication: "token",
+          obfuscation: null,
+          protocol: "hysteria2",
+        },
+        transport: null,
+        tls: expect.objectContaining({ type: "tls" }),
+      }),
+    );
+  });
+
+  it("sends every VLESS field over a WebSocket transport with TLS", async () => {
+    createNodeMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([]);
+    await render();
+
+    await act(async () => {
+      typeInput("Frankfurt", createField("新建节点名称"));
+      typeInput("edge.example.com", createField("新建节点服务器"));
+      typeInput("8443", createField("新建节点端口"));
+      typeInput("b0dd64e4-0fbd-4038-9139-d1f32a68a0dc", createField("节点 UUID"));
+      typeInput("xtls-rprx-vision", createField("VLESS flow"));
+    });
+    await act(async () => {
+      selectValue("websocket", createSelect("传输方式"));
+    });
+    await act(async () => {
+      typeInput("/ray", createField("WebSocket 路径"));
+      typeInput("cdn.example.com", createField("WebSocket Host"));
+      createField("启用 TLS").click();
+    });
+    await act(async () => {
+      typeInput("sni.example.com", createField("TLS SNI"));
+      typeInput("h2, http/1.1", createField("TLS ALPN"));
+      typeInput("chrome", createField("TLS 指纹"));
+      createField("允许不安全证书").click();
+      createField("启用 UDP").click();
+    });
+    await act(async () => button("创建节点").click());
+
+    expect(createNodeMock).toHaveBeenCalledWith({
+      credential: {
+        flow: "xtls-rprx-vision",
+        protocol: "vless",
+        userId: "b0dd64e4-0fbd-4038-9139-d1f32a68a0dc",
+      },
+      name: "Frankfurt",
+      port: 8443,
+      server: "edge.example.com",
+      tls: {
+        allowInsecure: true,
+        alpn: ["h2", "http/1.1"],
+        fingerprint: "chrome",
+        serverName: "sni.example.com",
+        type: "tls",
+      },
+      transport: {
+        host: "cdn.example.com",
+        path: "/ray",
+        type: "websocket",
+      },
+      udpEnabled: false,
+    });
+  });
+
+  it("sends every VMess field over a gRPC transport", async () => {
+    createNodeMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([]);
+    await render();
+
+    await act(async () => {
+      selectValue("vmess", createSelect("节点协议"));
+    });
+    await act(async () => {
+      typeInput("Frankfurt", createField("新建节点名称"));
+      typeInput("edge.example.com", createField("新建节点服务器"));
+      typeInput("8443", createField("新建节点端口"));
+      typeInput("b0dd64e4-0fbd-4038-9139-d1f32a68a0dc", createField("节点 UUID"));
+      typeInput("4", createField("VMess alterId"));
+    });
+    await act(async () => {
+      selectValue("Chacha20Poly1305", createSelect("VMess 加密方式"));
+    });
+    await act(async () => {
+      selectValue("grpc", createSelect("传输方式"));
+    });
+    await act(async () => {
+      typeInput("tunnel", createField("gRPC serviceName"));
+      typeInput("authority.example.com", createField("gRPC authority"));
+    });
+    await act(async () => {
+      selectValue("multi", createSelect("gRPC 模式"));
+    });
+    await act(async () => button("创建节点").click());
+
+    expect(createNodeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credential: {
+          alterId: 4,
+          protocol: "vmess",
+          security: "Chacha20Poly1305",
+          userId: "b0dd64e4-0fbd-4038-9139-d1f32a68a0dc",
+        },
+        transport: {
+          authority: "authority.example.com",
+          mode: "multi",
+          serviceName: "tunnel",
+          type: "grpc",
+        },
+      }),
+    );
+  });
+
+  it("locks Shadowsocks to TCP and sends the chosen cipher", async () => {
+    createNodeMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([]);
+    await render();
+
+    await act(async () => {
+      selectValue("shadowsocks", createSelect("节点协议"));
+    });
+    await act(async () => {
+      typeInput("Frankfurt", createField("新建节点名称"));
+      typeInput("edge.example.com", createField("新建节点服务器"));
+      typeInput("8388", createField("新建节点端口"));
+      typeInput("hunter2", createField("节点密码"));
+    });
+    await act(async () => {
+      selectValue("chacha20-ietf-poly1305", createSelect("Shadowsocks 加密方式"));
+    });
+
+    expect(createSelect("传输方式").disabled).toBe(true);
+
+    await act(async () => button("创建节点").click());
+
+    expect(createNodeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credential: {
+          method: "chacha20-ietf-poly1305",
+          password: "hunter2",
+          protocol: "shadowsocks",
+        },
+        tls: null,
+        transport: { type: "tcp" },
+      }),
+    );
+  });
+
+  it("sends Hysteria2 obfuscation when enabled", async () => {
+    createNodeMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([]);
+    await render();
+
+    await act(async () => {
+      selectValue("hysteria2", createSelect("节点协议"));
+    });
+    await act(async () => {
+      typeInput("Frankfurt", createField("新建节点名称"));
+      typeInput("edge.example.com", createField("新建节点服务器"));
+      typeInput("8443", createField("新建节点端口"));
+      createField("启用混淆").click();
+    });
+    await act(async () => {
+      typeInput("obfs-secret", createField("混淆密码"));
+    });
+    await act(async () => {
+      selectValue("Gecko", createSelect("混淆方式"));
+    });
+    await act(async () => button("创建节点").click());
+
+    expect(createNodeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credential: {
+          authentication: null,
+          obfuscation: { method: "Gecko", password: "obfs-secret" },
+          protocol: "hysteria2",
+        },
+      }),
+    );
+  });
+
+  it("clears the manual form on reset", async () => {
+    loadNodesMock.mockResolvedValue([]);
+    await render();
+
+    await act(async () => {
+      typeInput("Frankfurt", createField("新建节点名称"));
+      typeInput("edge.example.com", createField("新建节点服务器"));
+    });
+    expect(createField("新建节点名称").value).toBe("Frankfurt");
+
+    await act(async () => button("重置").click());
+
+    expect(createField("新建节点名称").value).toBe("");
+    expect(createField("新建节点服务器").value).toBe("");
+  });
+
+  it("reports a form error without calling the backend", async () => {
+    loadNodesMock.mockResolvedValue([]);
+    await render();
+
+    await act(async () => {
+      typeInput("Frankfurt", createField("新建节点名称"));
+      typeInput("edge.example.com", createField("新建节点服务器"));
+      typeInput("70000", createField("新建节点端口"));
+    });
+    await act(async () => button("创建节点").click());
+
+    expect(createNodeMock).not.toHaveBeenCalled();
+    expect(container.textContent).toContain(
+      "节点端口必须是 1 到 65535 的整数",
+    );
   });
 
   it("lists persisted nodes and changes the selection", async () => {

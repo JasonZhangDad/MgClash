@@ -32,6 +32,59 @@ export interface NodeEdit {
 
 export type NodeMoveDirection = "down" | "up";
 
+export type VmessSecurity =
+  | "Auto"
+  | "Aes128Gcm"
+  | "Chacha20Poly1305"
+  | "None"
+  | "Zero";
+
+export type ObfuscationMethod = "Salamander" | "Gecko";
+
+export type ManualCredentialDraft =
+  | { flow: string | null; protocol: "vless"; userId: string }
+  | {
+      alterId: number;
+      protocol: "vmess";
+      security: VmessSecurity;
+      userId: string;
+    }
+  | { password: string; protocol: "trojan" }
+  | { method: string; password: string; protocol: "shadowsocks" }
+  | {
+      authentication: string | null;
+      obfuscation: { method: ObfuscationMethod; password: string } | null;
+      protocol: "hysteria2";
+    };
+
+export type TransportDraft =
+  | { type: "tcp" }
+  | { host: string | null; path: string; type: "websocket" }
+  | {
+      authority: string | null;
+      mode: "gun" | "multi" | "guna";
+      serviceName: string;
+      type: "grpc";
+    };
+
+export type TlsDraft = {
+  allowInsecure: boolean;
+  alpn: string[];
+  fingerprint: string | null;
+  serverName: string | null;
+  type: "tls";
+};
+
+export interface ManualNodeDraft {
+  credential: ManualCredentialDraft;
+  name: string;
+  port: number;
+  server: string;
+  tls: TlsDraft | null;
+  transport: TransportDraft | null;
+  udpEnabled: boolean;
+}
+
 export type NodeTestStatus = "failed" | "success" | "timeout";
 
 export interface NodeTestResult {
@@ -141,6 +194,10 @@ export function setDnsSettings(settings: DnsSettings): Promise<SessionStatus> {
 
 export function importNode(uri: string): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_import_node", { uri });
+}
+
+export function createNode(draft: ManualNodeDraft): Promise<SessionStatus> {
+  return invoke<SessionStatus>("session_create_node", { draft });
 }
 
 export function loadNodes(): Promise<NodeSummary[]> {

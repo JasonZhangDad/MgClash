@@ -20,9 +20,9 @@ use magies_desktop_lib::session::{
 use magies_domain::{CredentialRef, ProxyProtocol, Subscription, TimestampMillis};
 use magies_platform::system_proxy::SystemProxyState;
 use magies_profiles::{
-    CredentialCodec, LocalHttpProfile, LocalSocksProfile, ManualNodeStoreError,
-    SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore, SqliteSubscriptionStore,
-    SubscriptionContentParser, SubscriptionUpdate, SubscriptionValidators,
+    CredentialCodec, LocalHttpProfile, LocalSocksProfile, ManualCredentialDraft, ManualNodeDraft,
+    ManualNodeStoreError, SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore,
+    SqliteSubscriptionStore, SubscriptionContentParser, SubscriptionUpdate, SubscriptionValidators,
 };
 use magies_routing::RoutingMode;
 use magies_session::{
@@ -76,6 +76,71 @@ fn importing_a_second_link_keeps_both_nodes_and_replaces_the_selection() {
     assert_eq!(status.node.as_ref().unwrap().name, "Osaka");
     assert_eq!(status.node.as_ref().unwrap().port, 9000);
     assert_eq!(service.nodes().unwrap().len(), 2);
+}
+
+#[test]
+fn creating_a_manual_node_stores_the_credential_and_selects_it() {
+    let (mut service, _runtime, _fail_start) = service();
+
+    let status = service
+        .create_node(trojan_draft("Frankfurt", 8443))
+        .unwrap();
+
+    let node = status.node.as_ref().unwrap();
+    assert_eq!(node.name, "Frankfurt");
+    assert_eq!(node.protocol, ProxyProtocol::Trojan);
+    assert_eq!(node.server, "edge.example.com");
+    assert_eq!(node.port, 8443);
+    assert!(!status.connected);
+
+    // Connecting reads the credential back out of the secret store and feeds it
+    // to the config generator, so a successful start proves it round-tripped.
+    assert!(service.connect().unwrap().connected);
+}
+
+#[test]
+fn a_manually_created_node_joins_the_imported_ones() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+
+    service
+        .create_node(trojan_draft("Frankfurt", 8443))
+        .unwrap();
+
+    let nodes = service.nodes().unwrap();
+    assert_eq!(nodes.len(), 2);
+    assert!(nodes.iter().any(|node| node.name == "Frankfurt"));
+}
+
+#[test]
+fn creating_a_manual_node_rejects_invalid_fields() {
+    let (mut service, _runtime, _fail_start) = service();
+
+    let mut blank_name = trojan_draft("Frankfurt", 8443);
+    blank_name.name = "   ".to_owned();
+    assert_eq!(
+        service.create_node(blank_name).unwrap_err().code(),
+        "invalid_manual_node"
+    );
+
+    let mut bad_port = trojan_draft("Frankfurt", 8443);
+    bad_port.port = 0;
+    assert_eq!(
+        service.create_node(bad_port).unwrap_err().code(),
+        "invalid_manual_node"
+    );
+
+    let mut blank_password = trojan_draft("Frankfurt", 8443);
+    blank_password.credential = ManualCredentialDraft::Trojan {
+        password: String::new(),
+    };
+    assert_eq!(
+        service.create_node(blank_password).unwrap_err().code(),
+        "invalid_manual_node"
+    );
+
+    // A rejected draft must not leave a half-written node behind.
+    assert!(service.nodes().unwrap().is_empty());
 }
 
 #[test]
@@ -362,6 +427,13 @@ fn refuses_to_change_nodes_while_connected() {
         service.import_node(SHADOWSOCKS_LINK).unwrap_err().code(),
         "session_active"
     );
+    assert_eq!(
+        service
+            .create_node(trojan_draft("Frankfurt", 8443))
+            .unwrap_err()
+            .code(),
+        "session_active"
+    );
 }
 
 #[test]
@@ -643,6 +715,20 @@ type TestService = SessionService<MemorySecretStore, FakeCore, FakeProxy>;
 
 fn service() -> (TestService, RuntimeDirectory, Arc<AtomicBool>) {
     service_with_events(&Arc::new(Mutex::new(Vec::new())))
+}
+
+fn trojan_draft(name: &str, port: u32) -> ManualNodeDraft {
+    ManualNodeDraft {
+        name: name.to_owned(),
+        server: "edge.example.com".to_owned(),
+        port,
+        udp_enabled: true,
+        transport: None,
+        tls: None,
+        credential: ManualCredentialDraft::Trojan {
+            password: "runtime-secret".to_owned(),
+        },
+    }
 }
 
 fn service_with_events(
