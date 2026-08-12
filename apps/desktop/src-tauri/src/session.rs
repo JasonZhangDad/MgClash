@@ -15,8 +15,9 @@ use magies_domain::{
 };
 use magies_profiles::{
     CredentialCodec, CredentialCodecError, DnsConfigError, DnsProfile, LocalHttpProfile,
-    LocalSocksProfile, ManualNodeStoreError, ShareLinkParseError, ShareLinkParser,
-    SqliteManualNodeStore, SqliteSubscriptionStore, SubscriptionTransactionError,
+    LocalSocksProfile, ManualNodeStoreError, NodeOrderStoreError, ShareLinkParseError,
+    ShareLinkParser, SqliteManualNodeStore, SqliteNodeOrderStore, SqliteSubscriptionStore,
+    SubscriptionTransactionError,
 };
 use magies_routing::{RouteProfile, RoutingMode};
 use magies_session::{
@@ -25,7 +26,7 @@ use magies_session::{
     SystemProxySessionControl,
 };
 use magies_storage::{SecretStore, SecretStoreError};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -128,6 +129,35 @@ pub struct UrlTestTarget {
     pub http_port: u16,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum NodeMoveDirection {
+    Up,
+    Down,
+}
+
+/// The three stores that together form the desktop's unified node list.
+pub struct NodeStores {
+    manual: SqliteManualNodeStore,
+    subscription: SqliteSubscriptionStore,
+    order: SqliteNodeOrderStore,
+}
+
+impl NodeStores {
+    #[must_use]
+    pub const fn new(
+        manual: SqliteManualNodeStore,
+        subscription: SqliteSubscriptionStore,
+        order: SqliteNodeOrderStore,
+    ) -> Self {
+        Self {
+            manual,
+            subscription,
+            order,
+        }
+    }
+}
+
 /// Owns the selected node and the orchestrated session behind the commands.
 pub struct SessionService<S, C, P> {
     session: DesktopSession<S, C, P>,
@@ -135,6 +165,7 @@ pub struct SessionService<S, C, P> {
     node: Option<ProxyNode>,
     manual_nodes: SqliteManualNodeStore,
     subscription_nodes: SqliteSubscriptionStore,
+    node_order: SqliteNodeOrderStore,
     routing_mode: SqliteRoutingModeStore,
     route_settings: SqliteRouteSettingsStore,
     current_route_settings: RouteSettings,
@@ -158,15 +189,15 @@ where
     pub fn new(
         session: DesktopSession<S, C, P>,
         defaults: SessionDefaults,
-        manual_nodes: SqliteManualNodeStore,
-        subscription_nodes: SqliteSubscriptionStore,
+        node_stores: NodeStores,
         routing_mode: SqliteRoutingModeStore,
         route_settings: SqliteRouteSettingsStore,
         dns_settings: SqliteDnsSettingsStore,
     ) -> Result<Self, SessionInitializationError> {
-        let node = subscription_nodes
+        let node = node_stores
+            .subscription
             .selected_node()?
-            .or(manual_nodes.selected_node()?);
+            .or(node_stores.manual.selected_node()?);
         let mut defaults = defaults;
         let mode = routing_mode.load()?;
         let current_route_settings = route_settings.load()?;
@@ -177,8 +208,9 @@ where
             session,
             defaults,
             node,
-            manual_nodes,
-            subscription_nodes,
+            manual_nodes: node_stores.manual,
+            subscription_nodes: node_stores.subscription,
+            node_order: node_stores.order,
             routing_mode,
             route_settings,
             current_route_settings,
@@ -287,7 +319,46 @@ where
                 .active_nodes()
                 .map_err(SessionCommandError::SubscriptionNodeStore)?,
         );
+        let nodes = self
+            .node_order
+            .order_nodes(nodes)
+            .map_err(SessionCommandError::NodeOrderStore)?;
         Ok(nodes.iter().map(NodeSummary::from).collect())
+    }
+
+    /// Moves a node one position in the unified manual/subscription list.
+    ///
+    /// Moving the first node up or the last node down is an idempotent no-op.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed node-store error when the node is absent or the new
+    /// order cannot be persisted.
+    pub fn move_node(
+        &mut self,
+        id: Uuid,
+        direction: NodeMoveDirection,
+    ) -> Result<Vec<NodeSummary>, SessionCommandError<C::Error, P::Error>> {
+        let mut nodes = self.nodes()?;
+        let index =
+            nodes
+                .iter()
+                .position(|node| node.id == id)
+                .ok_or(SessionCommandError::NodeStore(
+                    ManualNodeStoreError::NodeNotFound { id },
+                ))?;
+        let target = match direction {
+            NodeMoveDirection::Up => index.checked_sub(1),
+            NodeMoveDirection::Down if index + 1 < nodes.len() => Some(index + 1),
+            NodeMoveDirection::Down => None,
+        };
+        if let Some(target) = target {
+            nodes.swap(index, target);
+            self.node_order
+                .save(&nodes.iter().map(|node| node.id).collect::<Vec<_>>())
+                .map_err(SessionCommandError::NodeOrderStore)?;
+        }
+        Ok(nodes)
     }
 
     /// Returns one active persisted node without exposing its credential.
@@ -686,6 +757,8 @@ where
     NodeStore(#[source] ManualNodeStoreError),
     #[error("failed to change the subscription node store")]
     SubscriptionNodeStore(#[source] SubscriptionTransactionError),
+    #[error("failed to save the node order")]
+    NodeOrderStore(#[source] NodeOrderStoreError),
     #[error("failed to save the routing mode")]
     RoutingModeStore(#[source] RoutingModeStoreError),
     #[error("invalid route settings")]
@@ -735,6 +808,7 @@ where
             Self::NodeStore(_)
             | Self::NodeStoreAndSecretRollback { .. }
             | Self::SubscriptionNodeStore(_) => "node_store_failed",
+            Self::NodeOrderStore(_) => "node_order_store_failed",
             Self::SubscriptionNodeReadOnly { .. } => "subscription_node_read_only",
             Self::RoutingModeStore(_) => "routing_mode_store_failed",
             Self::InvalidRouteSettings(_) => "invalid_route_settings",

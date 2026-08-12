@@ -17,6 +17,7 @@ import {
   loadNodes,
   loadSessionStatus,
   loadSystemProxyStartupStatus,
+  moveNode,
   recoverSystemProxy,
   selectNode,
   setDnsSettings,
@@ -80,6 +81,7 @@ describe("session commands", () => {
       port: 443,
       server: "new.example.com",
     });
+    await moveNode("00000000-0000-0000-0000-000000000001", "down");
     await deleteNode("00000000-0000-0000-0000-000000000002");
 
     expect(invokeMock).toHaveBeenNthCalledWith(1, "session_nodes");
@@ -92,7 +94,11 @@ describe("session commands", () => {
       port: 443,
       server: "new.example.com",
     });
-    expect(invokeMock).toHaveBeenNthCalledWith(4, "session_delete_node", {
+    expect(invokeMock).toHaveBeenNthCalledWith(4, "session_move_node", {
+      direction: "down",
+      id: "00000000-0000-0000-0000-000000000001",
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(5, "session_delete_node", {
       id: "00000000-0000-0000-0000-000000000002",
     });
   });
