@@ -224,9 +224,39 @@ fn tls_becomes_tls_settings() {
     let stream = &outbound["streamSettings"];
     assert_eq!(stream["security"], "tls");
     assert_eq!(stream["tlsSettings"]["serverName"], "sni.example.com");
-    assert_eq!(stream["tlsSettings"]["allowInsecure"], false);
     assert_eq!(stream["tlsSettings"]["alpn"], json!(["h2"]));
     assert_eq!(stream["tlsSettings"]["fingerprint"], "chrome");
+}
+
+#[test]
+fn an_insecure_node_is_refused_because_xray_removed_the_option() {
+    let (node, credential) = build_node(
+        vless(),
+        Some(TlsConfig::Tls {
+            server_name: Some("sni.example.com".to_owned()),
+            allow_insecure: true,
+            alpn: Vec::new(),
+            fingerprint: None,
+        }),
+    );
+
+    // Emitting `allowInsecure` makes Xray 26.3.27 refuse to start, and dropping
+    // it would silently turn an insecure node into one that fails its handshake.
+    assert_eq!(
+        XrayOutboundConfigGenerator::generate(&node, credential.as_node_credential()).unwrap_err(),
+        XrayOutboundError::InsecureTlsUnsupported
+    );
+}
+
+#[test]
+fn a_secure_node_carries_no_allow_insecure_field() {
+    let (node, credential) = build_node(vless(), Some(plain_tls()));
+
+    let outbound = generate(&node, &credential);
+
+    // The field is gone from Xray entirely; strict verification is its default.
+    assert!(outbound["streamSettings"]["tlsSettings"]["allowInsecure"].is_null());
+    assert_eq!(outbound["streamSettings"]["security"], "tls");
 }
 
 #[test]
