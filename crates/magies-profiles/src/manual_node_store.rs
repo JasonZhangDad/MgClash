@@ -58,6 +58,30 @@ impl SqliteManualNodeStore {
         Ok(())
     }
 
+    /// Persists a node without touching the current selection.
+    ///
+    /// Bulk import uses this so pasting a list never silently moves the user off
+    /// the node they are connected through.
+    ///
+    /// # Errors
+    ///
+    /// Rejects subscription-owned nodes and returns serialization or database
+    /// errors.
+    pub fn save(&mut self, node: &ProxyNode) -> Result<(), ManualNodeStoreError> {
+        if node.subscription_id.is_some() {
+            return Err(ManualNodeStoreError::SubscriptionNode { id: node.id });
+        }
+        let json = serde_json::to_string(node)
+            .map_err(|source| ManualNodeStoreError::SerializeNode { source })?;
+        self.connection.execute(
+            "INSERT INTO manual_nodes (id, node_json, selected)
+             VALUES (?1, ?2, 0)
+             ON CONFLICT(id) DO UPDATE SET node_json = excluded.node_json",
+            params![node.id.to_string(), json],
+        )?;
+        Ok(())
+    }
+
     /// Loads every manual node in import order.
     ///
     /// # Errors

@@ -651,6 +651,21 @@ fn session_import_node(
     clippy::needless_pass_by_value,
     reason = "Tauri commands receive State and deserialized arguments by value"
 )]
+fn session_import_nodes(
+    content: String,
+    state: State<'_, AppState>,
+) -> Result<crate::session::BulkImportReport, CommandError> {
+    state
+        .service()
+        .import_nodes(content.as_bytes())
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
 fn session_create_node(
     draft: ManualNodeDraft,
     state: State<'_, AppState>,
@@ -1159,6 +1174,7 @@ pub fn run() {
             session_set_route_settings,
             session_set_dns_settings,
             session_import_node,
+            session_import_nodes,
             session_create_node,
             session_nodes,
             session_node_groups,
