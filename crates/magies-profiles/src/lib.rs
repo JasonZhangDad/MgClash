@@ -25,6 +25,7 @@ mod subscription_transaction;
 mod trojan;
 mod tun_config;
 mod vmess;
+mod xray_dns_config;
 mod xray_outbound;
 
 pub use bulk_import::{
@@ -91,6 +92,7 @@ pub use subscription_transaction::{
 pub use trojan::{ParsedTrojanNode, TrojanCredential, TrojanParseError, TrojanParser};
 pub use tun_config::{SingBoxTunConfigGenerator, TunProfile, TunProfileError, TunRouteSettings};
 pub use vmess::{ParsedVmessNode, VmessCredential, VmessParseError, VmessParser, VmessSecurity};
+pub use xray_dns_config::{FAKE_DNS_SERVER, XrayDnsConfigGenerator};
 pub use xray_outbound::{GeneratedXrayOutbound, XrayOutboundConfigGenerator, XrayOutboundError};
 
 use std::collections::BTreeMap;
