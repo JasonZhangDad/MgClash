@@ -10,6 +10,7 @@ import {
   exportDiagnostics,
   importNode,
   isCommandError,
+  loadNodeGroups,
   loadNodes,
   loadSessionStatus,
   loadSystemProxyStartupStatus,
@@ -18,12 +19,14 @@ import {
   recoverSystemProxy,
   selectNode,
   setDnsSettings,
+  setNodeGroup,
   setRouteSettings,
   setRoutingMode,
   testAllNodes,
   testNode,
   testUrl,
   type NodeSummary,
+  type NodeGroupSummary,
   type NodeTestResult,
   type DnsMode,
   type DnsSettings,
@@ -159,6 +162,10 @@ export default function App() {
   const [routeRuleOutbound, setRouteRuleOutbound] =
     useState<RouteOutbound>("proxy");
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
+  const [nodeGroups, setNodeGroups] = useState<NodeGroupSummary[]>([]);
+  const [nodeGroupFilter, setNodeGroupFilter] = useState("all");
+  const [groupingNodeId, setGroupingNodeId] = useState<string | null>(null);
+  const [nodeGroupName, setNodeGroupName] = useState("");
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
   const [nodeName, setNodeName] = useState("");
   const [nodeServer, setNodeServer] = useState("");
@@ -199,6 +206,9 @@ export default function App() {
       setError(describeFailure(failure)),
     );
     loadNodes().then(setNodes, (failure: unknown) =>
+      setError(describeFailure(failure)),
+    );
+    loadNodeGroups().then(setNodeGroups, (failure: unknown) =>
       setError(describeFailure(failure)),
     );
     loadSubscriptions().then(setSubscriptions, (failure: unknown) =>
@@ -518,6 +528,39 @@ export default function App() {
     }
   }, []);
 
+  const resetNodeGroupForm = useCallback(() => {
+    setGroupingNodeId(null);
+    setNodeGroupName("");
+  }, []);
+
+  const onGroupNode = useCallback(
+    (candidate: NodeSummary) => {
+      setGroupingNodeId(candidate.id);
+      setNodeGroupName(
+        nodeGroups.find((group) => group.id === candidate.groupId)?.name ?? "",
+      );
+    },
+    [nodeGroups],
+  );
+
+  const onSaveNodeGroup = useCallback(async () => {
+    if (groupingNodeId === null) {
+      return;
+    }
+    const groupName = nodeGroupName.trim();
+    setBusy(true);
+    setError(null);
+    try {
+      setNodes(await setNodeGroup(groupingNodeId, groupName || null));
+      setNodeGroups(await loadNodeGroups());
+      resetNodeGroupForm();
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, [groupingNodeId, nodeGroupName, resetNodeGroupForm]);
+
   const onTestNode = useCallback(async (id: string) => {
     setError(null);
     setNodeTests((current) => ({ ...current, [id]: { status: "testing" } }));
@@ -741,6 +784,18 @@ export default function App() {
 
   const connected = status?.connected ?? false;
   const node = status?.node ?? null;
+  const nodeGroupNames = new Map(
+    nodeGroups.map((group) => [group.id, group.name]),
+  );
+  const visibleNodes = nodes.filter((candidate) => {
+    if (nodeGroupFilter === "all") {
+      return true;
+    }
+    if (nodeGroupFilter === "ungrouped") {
+      return candidate.groupId === null;
+    }
+    return candidate.groupId === nodeGroupFilter;
+  });
 
   return (
     <main className="app-shell">
@@ -1281,21 +1336,44 @@ export default function App() {
           )}
         </div>
 
+        <div className="node-group-filter">
+          <label>
+            分组
+            <select
+              aria-label="节点分组筛选"
+              value={nodeGroupFilter}
+              onChange={(event) => setNodeGroupFilter(event.target.value)}
+            >
+              <option value="all">全部</option>
+              <option value="ungrouped">未分组</option>
+              {nodeGroups.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
         {nodes.length === 0 ? (
           <p className="hint">尚未导入节点</p>
+        ) : visibleNodes.length === 0 ? (
+          <p className="hint">当前分组没有节点</p>
         ) : (
           <table className="node-list" aria-label="节点列表">
             <thead>
               <tr>
                 <th>名称</th>
                 <th>协议</th>
+                <th>分组</th>
                 <th>服务器</th>
                 <th>延迟</th>
                 <th>操作</th>
               </tr>
             </thead>
             <tbody>
-              {nodes.map((candidate, index) => {
+              {visibleNodes.map((candidate) => {
+                const index = nodes.findIndex((node) => node.id === candidate.id);
                 const selected = candidate.id === node?.id;
                 const testResult = nodeTests[candidate.id];
                 let latency =
@@ -1317,13 +1395,23 @@ export default function App() {
                   <tr key={candidate.id}>
                     <td>{candidate.name}</td>
                     <td>{candidate.protocol}</td>
+                    <td>{
+                      candidate.groupId === null
+                        ? "未分组"
+                        : (nodeGroupNames.get(candidate.groupId) ?? "未知分组")
+                    }</td>
                     <td>{`${candidate.server}:${candidate.port}`}</td>
                     <td>{latency}</td>
                     <td className="node-actions">
                       <button
                         type="button"
                         aria-label={`上移 ${candidate.name}`}
-                        disabled={busy || nodeTestInProgress || index === 0}
+                        disabled={
+                          busy ||
+                          nodeTestInProgress ||
+                          nodeGroupFilter !== "all" ||
+                          index === 0
+                        }
                         onClick={() => void onMoveNode(candidate.id, "up")}
                       >
                         ↑
@@ -1334,6 +1422,7 @@ export default function App() {
                         disabled={
                           busy ||
                           nodeTestInProgress ||
+                          nodeGroupFilter !== "all" ||
                           index === nodes.length - 1
                         }
                         onClick={() => void onMoveNode(candidate.id, "down")}
@@ -1359,6 +1448,14 @@ export default function App() {
                         }
                       >
                         {selected ? "当前" : "选择"}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`分组 ${candidate.name}`}
+                        disabled={busy || nodeTestInProgress}
+                        onClick={() => onGroupNode(candidate)}
+                      >
+                        分组
                       </button>
                       {candidate.deletable && (
                         <button
@@ -1389,6 +1486,34 @@ export default function App() {
               })}
             </tbody>
           </table>
+        )}
+
+        {groupingNodeId !== null && (
+          <div className="settings-form" aria-label="设置节点分组">
+            <label>
+              分组名称
+              <input
+                aria-label="节点分组"
+                disabled={busy}
+                list="node-group-options"
+                value={nodeGroupName}
+                onChange={(event) => setNodeGroupName(event.target.value)}
+              />
+              <datalist id="node-group-options">
+                {nodeGroups.map((group) => (
+                  <option key={group.id} value={group.name} />
+                ))}
+              </datalist>
+            </label>
+            <div className="actions">
+              <button type="button" disabled={busy} onClick={() => void onSaveNodeGroup()}>
+                保存分组
+              </button>
+              <button type="button" disabled={busy} onClick={resetNodeGroupForm}>
+                取消
+              </button>
+            </div>
+          </div>
         )}
 
         {editingNodeId !== null && (

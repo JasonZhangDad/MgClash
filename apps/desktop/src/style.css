@@ -183,6 +183,20 @@ textarea {
   gap: 8px;
 }
 
+.node-group-filter {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 8px;
+}
+
+.node-group-filter label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #64748b;
+  font-size: 13px;
+}
+
 .notice {
   margin: 0 0 24px;
   padding: 12px 16px;

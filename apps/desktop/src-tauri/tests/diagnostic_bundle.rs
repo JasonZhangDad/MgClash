@@ -22,6 +22,7 @@ fn status() -> SessionStatus {
             protocol: ProxyProtocol::Shadowsocks,
             server: "edge.example.com".to_owned(),
             port: 8388,
+            group_id: None,
             latency_ms: None,
             last_tested_at: None,
         }),

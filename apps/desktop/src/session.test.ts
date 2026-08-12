@@ -15,11 +15,13 @@ import {
   deleteNode,
   loadTraffic,
   loadNodes,
+  loadNodeGroups,
   loadSessionStatus,
   loadSystemProxyStartupStatus,
   moveNode,
   recoverSystemProxy,
   selectNode,
+  setNodeGroup,
   setDnsSettings,
   setRouteSettings,
   setRoutingMode,
@@ -75,6 +77,7 @@ describe("session commands", () => {
 
   it("lists, selects, edits, and deletes persisted nodes", async () => {
     await loadNodes();
+    await loadNodeGroups();
     await selectNode("00000000-0000-0000-0000-000000000001");
     await editNode("00000000-0000-0000-0000-000000000001", {
       name: "Tokyo 2",
@@ -82,23 +85,32 @@ describe("session commands", () => {
       server: "new.example.com",
     });
     await moveNode("00000000-0000-0000-0000-000000000001", "down");
+    await setNodeGroup(
+      "00000000-0000-0000-0000-000000000001",
+      " Work ",
+    );
     await deleteNode("00000000-0000-0000-0000-000000000002");
 
     expect(invokeMock).toHaveBeenNthCalledWith(1, "session_nodes");
-    expect(invokeMock).toHaveBeenNthCalledWith(2, "session_select_node", {
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "session_node_groups");
+    expect(invokeMock).toHaveBeenNthCalledWith(3, "session_select_node", {
       id: "00000000-0000-0000-0000-000000000001",
     });
-    expect(invokeMock).toHaveBeenNthCalledWith(3, "session_edit_node", {
+    expect(invokeMock).toHaveBeenNthCalledWith(4, "session_edit_node", {
       id: "00000000-0000-0000-0000-000000000001",
       name: "Tokyo 2",
       port: 443,
       server: "new.example.com",
     });
-    expect(invokeMock).toHaveBeenNthCalledWith(4, "session_move_node", {
+    expect(invokeMock).toHaveBeenNthCalledWith(5, "session_move_node", {
       direction: "down",
       id: "00000000-0000-0000-0000-000000000001",
     });
-    expect(invokeMock).toHaveBeenNthCalledWith(5, "session_delete_node", {
+    expect(invokeMock).toHaveBeenNthCalledWith(6, "session_set_node_group", {
+      groupName: " Work ",
+      id: "00000000-0000-0000-0000-000000000001",
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(7, "session_delete_node", {
       id: "00000000-0000-0000-0000-000000000002",
     });
   });

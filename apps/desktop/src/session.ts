@@ -9,6 +9,7 @@ export type ProxyProtocol =
 
 export interface NodeSummary {
   deletable: boolean;
+  groupId: string | null;
   id: string;
   lastTestedAt: number | null;
   latencyMs: number | null;
@@ -16,6 +17,11 @@ export interface NodeSummary {
   port: number;
   protocol: ProxyProtocol;
   server: string;
+}
+
+export interface NodeGroupSummary {
+  id: string;
+  name: string;
 }
 
 export interface NodeEdit {
@@ -141,6 +147,10 @@ export function loadNodes(): Promise<NodeSummary[]> {
   return invoke<NodeSummary[]>("session_nodes");
 }
 
+export function loadNodeGroups(): Promise<NodeGroupSummary[]> {
+  return invoke<NodeGroupSummary[]>("session_node_groups");
+}
+
 export function testNode(id: string): Promise<NodeTestResult> {
   return invoke<NodeTestResult>("session_test_node", { id });
 }
@@ -200,6 +210,13 @@ export function moveNode(
   direction: NodeMoveDirection,
 ): Promise<NodeSummary[]> {
   return invoke<NodeSummary[]>("session_move_node", { direction, id });
+}
+
+export function setNodeGroup(
+  id: string,
+  groupName: string | null,
+): Promise<NodeSummary[]> {
+  return invoke<NodeSummary[]>("session_set_node_group", { groupName, id });
 }
 
 export function deleteNode(id: string): Promise<SessionStatus> {

@@ -407,6 +407,7 @@ mod tests {
             protocol: ProxyProtocol::Vless,
             server: "example.com".to_owned(),
             port: 443,
+            group_id: None,
             deletable: true,
             latency_ms: None,
             last_tested_at: None,

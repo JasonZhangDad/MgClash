@@ -15,9 +15,9 @@ use magies_domain::{
 };
 use magies_profiles::{
     CredentialCodec, CredentialCodecError, DnsConfigError, DnsProfile, LocalHttpProfile,
-    LocalSocksProfile, ManualNodeStoreError, NodeOrderStoreError, ShareLinkParseError,
-    ShareLinkParser, SqliteManualNodeStore, SqliteNodeOrderStore, SqliteSubscriptionStore,
-    SubscriptionTransactionError,
+    LocalSocksProfile, ManualNodeStoreError, NodeGroup, NodeGroupStoreError, NodeOrderStoreError,
+    ShareLinkParseError, ShareLinkParser, SqliteManualNodeStore, SqliteNodeGroupStore,
+    SqliteNodeOrderStore, SqliteSubscriptionStore, SubscriptionTransactionError,
 };
 use magies_routing::{RouteProfile, RoutingMode};
 use magies_session::{
@@ -88,6 +88,7 @@ pub struct NodeSummary {
     pub protocol: ProxyProtocol,
     pub server: String,
     pub port: u16,
+    pub group_id: Option<Uuid>,
     pub deletable: bool,
     pub latency_ms: Option<u32>,
     pub last_tested_at: Option<i64>,
@@ -101,9 +102,26 @@ impl From<&ProxyNode> for NodeSummary {
             protocol: node.protocol_type,
             server: node.server.as_str().to_owned(),
             port: node.port.get(),
+            group_id: node.group_id,
             deletable: node.subscription_id.is_none(),
             latency_ms: node.latency_ms,
             last_tested_at: node.last_tested_at.map(TimestampMillis::get),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeGroupSummary {
+    pub id: Uuid,
+    pub name: String,
+}
+
+impl From<NodeGroup> for NodeGroupSummary {
+    fn from(group: NodeGroup) -> Self {
+        Self {
+            id: group.id,
+            name: group.name,
         }
     }
 }
@@ -136,11 +154,12 @@ pub enum NodeMoveDirection {
     Down,
 }
 
-/// The three stores that together form the desktop's unified node list.
+/// The stores that together form the desktop's unified node list.
 pub struct NodeStores {
     manual: SqliteManualNodeStore,
     subscription: SqliteSubscriptionStore,
     order: SqliteNodeOrderStore,
+    groups: SqliteNodeGroupStore,
 }
 
 impl NodeStores {
@@ -149,11 +168,13 @@ impl NodeStores {
         manual: SqliteManualNodeStore,
         subscription: SqliteSubscriptionStore,
         order: SqliteNodeOrderStore,
+        groups: SqliteNodeGroupStore,
     ) -> Self {
         Self {
             manual,
             subscription,
             order,
+            groups,
         }
     }
 }
@@ -166,6 +187,7 @@ pub struct SessionService<S, C, P> {
     manual_nodes: SqliteManualNodeStore,
     subscription_nodes: SqliteSubscriptionStore,
     node_order: SqliteNodeOrderStore,
+    node_groups: SqliteNodeGroupStore,
     routing_mode: SqliteRoutingModeStore,
     route_settings: SqliteRouteSettingsStore,
     current_route_settings: RouteSettings,
@@ -194,10 +216,13 @@ where
         route_settings: SqliteRouteSettingsStore,
         dns_settings: SqliteDnsSettingsStore,
     ) -> Result<Self, SessionInitializationError> {
-        let node = node_stores
+        let mut node = node_stores
             .subscription
             .selected_node()?
             .or(node_stores.manual.selected_node()?);
+        if let Some(node) = &mut node {
+            node_stores.groups.apply(std::slice::from_mut(node))?;
+        }
         let mut defaults = defaults;
         let mode = routing_mode.load()?;
         let current_route_settings = route_settings.load()?;
@@ -211,6 +236,7 @@ where
             manual_nodes: node_stores.manual,
             subscription_nodes: node_stores.subscription,
             node_order: node_stores.order,
+            node_groups: node_stores.groups,
             routing_mode,
             route_settings,
             current_route_settings,
@@ -319,11 +345,57 @@ where
                 .active_nodes()
                 .map_err(SessionCommandError::SubscriptionNodeStore)?,
         );
-        let nodes = self
+        let mut nodes = self
             .node_order
             .order_nodes(nodes)
             .map_err(SessionCommandError::NodeOrderStore)?;
+        self.node_groups
+            .apply(&mut nodes)
+            .map_err(SessionCommandError::NodeGroupStore)?;
         Ok(nodes.iter().map(NodeSummary::from).collect())
+    }
+
+    /// Lists all named groups in creation order.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed group-store error when the database is unreadable.
+    pub fn node_groups(
+        &self,
+    ) -> Result<Vec<NodeGroupSummary>, SessionCommandError<C::Error, P::Error>> {
+        self.node_groups
+            .groups()
+            .map(|groups| groups.into_iter().map(NodeGroupSummary::from).collect())
+            .map_err(SessionCommandError::NodeGroupStore)
+    }
+
+    /// Assigns any active manual or subscription node to a named local group.
+    /// Passing `None` clears the node's group.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed not-found or group-store error without changing another
+    /// node's assignment.
+    pub fn set_node_group(
+        &mut self,
+        id: Uuid,
+        group_name: Option<&str>,
+    ) -> Result<Vec<NodeSummary>, SessionCommandError<C::Error, P::Error>> {
+        if !self.nodes()?.iter().any(|node| node.id == id) {
+            return Err(SessionCommandError::NodeStore(
+                ManualNodeStoreError::NodeNotFound { id },
+            ));
+        }
+        let group = self
+            .node_groups
+            .assign(id, group_name)
+            .map_err(SessionCommandError::NodeGroupStore)?;
+        if let Some(selected) = &mut self.node
+            && selected.id == id
+        {
+            selected.group_id = group.map(|group| group.id);
+        }
+        self.nodes()
     }
 
     /// Moves a node one position in the unified manual/subscription list.
@@ -387,7 +459,7 @@ where
         latency_ms: Option<u32>,
         tested_at: TimestampMillis,
     ) -> Result<NodeSummary, SessionCommandError<C::Error, P::Error>> {
-        let node = match self.manual_nodes.update_latency(id, latency_ms, tested_at) {
+        let mut node = match self.manual_nodes.update_latency(id, latency_ms, tested_at) {
             Ok(node) => node,
             Err(ManualNodeStoreError::NodeNotFound { .. }) => self
                 .subscription_nodes
@@ -395,6 +467,9 @@ where
                 .map_err(SessionCommandError::SubscriptionNodeStore)?,
             Err(error) => return Err(SessionCommandError::NodeStore(error)),
         };
+        self.node_groups
+            .apply(std::slice::from_mut(&mut node))
+            .map_err(SessionCommandError::NodeGroupStore)?;
         if self.node.as_ref().is_some_and(|selected| selected.id == id) {
             self.node = Some(node.clone());
         }
@@ -414,7 +489,7 @@ where
         if self.session.is_running() {
             return Err(SessionCommandError::SessionActive);
         }
-        let node = match self.manual_nodes.select(id) {
+        let mut node = match self.manual_nodes.select(id) {
             Ok(node) => {
                 self.subscription_nodes
                     .clear_selected_node()
@@ -427,6 +502,9 @@ where
                 .map_err(SessionCommandError::SubscriptionNodeStore)?,
             Err(error) => return Err(SessionCommandError::NodeStore(error)),
         };
+        self.node_groups
+            .apply(std::slice::from_mut(&mut node))
+            .map_err(SessionCommandError::NodeGroupStore)?;
         self.node = Some(node);
         Ok(self.status())
     }
@@ -475,10 +553,13 @@ where
         node.port = u16::try_from(port).ok().and_then(NonZeroU16::new).ok_or(
             SessionCommandError::InvalidNode(NodeModelError::InvalidPort { port }),
         )?;
-        let node = self
+        let mut node = self
             .manual_nodes
             .update(node)
             .map_err(SessionCommandError::NodeStore)?;
+        self.node_groups
+            .apply(std::slice::from_mut(&mut node))
+            .map_err(SessionCommandError::NodeGroupStore)?;
         if self.node.as_ref().is_some_and(|selected| selected.id == id) {
             self.node = Some(node);
         }
@@ -616,6 +697,11 @@ where
                 .manual_nodes
                 .selected_node()
                 .map_err(SessionCommandError::NodeStore)?);
+        if let Some(node) = &mut self.node {
+            self.node_groups
+                .apply(std::slice::from_mut(node))
+                .map_err(SessionCommandError::NodeGroupStore)?;
+        }
         Ok(self.status())
     }
 
@@ -723,6 +809,8 @@ pub enum SessionInitializationError {
     ManualNodeStore(#[from] ManualNodeStoreError),
     #[error("failed to read the subscription node selection")]
     SubscriptionNodeStore(#[from] SubscriptionTransactionError),
+    #[error("failed to read node groups")]
+    NodeGroupStore(#[from] NodeGroupStoreError),
     #[error("failed to load the routing mode")]
     RoutingModeStore(#[from] RoutingModeStoreError),
     #[error("failed to load the route settings")]
@@ -759,6 +847,8 @@ where
     SubscriptionNodeStore(#[source] SubscriptionTransactionError),
     #[error("failed to save the node order")]
     NodeOrderStore(#[source] NodeOrderStoreError),
+    #[error("failed to change node groups")]
+    NodeGroupStore(#[source] NodeGroupStoreError),
     #[error("failed to save the routing mode")]
     RoutingModeStore(#[source] RoutingModeStoreError),
     #[error("invalid route settings")]
@@ -809,6 +899,8 @@ where
             | Self::NodeStoreAndSecretRollback { .. }
             | Self::SubscriptionNodeStore(_) => "node_store_failed",
             Self::NodeOrderStore(_) => "node_order_store_failed",
+            Self::NodeGroupStore(NodeGroupStoreError::EmptyName) => "invalid_node_group",
+            Self::NodeGroupStore(_) => "node_group_store_failed",
             Self::SubscriptionNodeReadOnly { .. } => "subscription_node_read_only",
             Self::RoutingModeStore(_) => "routing_mode_store_failed",
             Self::InvalidRouteSettings(_) => "invalid_route_settings",

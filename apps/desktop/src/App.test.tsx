@@ -8,11 +8,13 @@ const loadPlatformSummaryMock = vi.hoisted(() => vi.fn());
 const loadSessionStatusMock = vi.hoisted(() => vi.fn());
 const loadTrafficMock = vi.hoisted(() => vi.fn());
 const loadNodesMock = vi.hoisted(() => vi.fn());
+const loadNodeGroupsMock = vi.hoisted(() => vi.fn());
 const importNodeMock = vi.hoisted(() => vi.fn());
 const selectNodeMock = vi.hoisted(() => vi.fn());
 const deleteNodeMock = vi.hoisted(() => vi.fn());
 const editNodeMock = vi.hoisted(() => vi.fn());
 const moveNodeMock = vi.hoisted(() => vi.fn());
+const setNodeGroupMock = vi.hoisted(() => vi.fn());
 const testNodeMock = vi.hoisted(() => vi.fn());
 const testAllNodesMock = vi.hoisted(() => vi.fn());
 const testUrlMock = vi.hoisted(() => vi.fn());
@@ -47,6 +49,7 @@ vi.mock("./session", async () => {
     importNode: importNodeMock,
     isCommandError: actual.isCommandError,
     deleteNode: deleteNodeMock,
+    loadNodeGroups: loadNodeGroupsMock,
     loadNodes: loadNodesMock,
     loadSessionStatus: loadSessionStatusMock,
     loadTraffic: loadTrafficMock,
@@ -55,6 +58,7 @@ vi.mock("./session", async () => {
     recoverSystemProxy: recoverSystemProxyMock,
     selectNode: selectNodeMock,
     setRoutingMode: setRoutingModeMock,
+    setNodeGroup: setNodeGroupMock,
     setDnsSettings: setDnsSettingsMock,
     setRouteSettings: setRouteSettingsMock,
     testAllNodes: testAllNodesMock,
@@ -106,6 +110,7 @@ const SELECTED: SessionStatus = {
   ...IDLE,
   node: {
     deletable: true,
+    groupId: null,
     id: "00000000-0000-0000-0000-000000000001",
     lastTestedAt: null,
     latencyMs: null,
@@ -138,11 +143,13 @@ describe("App", () => {
     loadSessionStatusMock.mockReset();
     loadTrafficMock.mockReset();
     loadNodesMock.mockReset();
+    loadNodeGroupsMock.mockReset();
     importNodeMock.mockReset();
     selectNodeMock.mockReset();
     deleteNodeMock.mockReset();
     editNodeMock.mockReset();
     moveNodeMock.mockReset();
+    setNodeGroupMock.mockReset();
     testNodeMock.mockReset();
     testAllNodesMock.mockReset();
     testUrlMock.mockReset();
@@ -175,6 +182,7 @@ describe("App", () => {
       uploadBytesPerSecond: 0,
     });
     loadNodesMock.mockResolvedValue([]);
+    loadNodeGroupsMock.mockResolvedValue([]);
     loadSystemProxyStartupStatusMock.mockResolvedValue("clean");
     recoverSystemProxyMock.mockResolvedValue("clean");
     dismissSystemProxyRecoveryMock.mockResolvedValue("clean");
@@ -602,6 +610,60 @@ describe("App", () => {
       expect.stringContaining("Osaka"),
       expect.stringContaining("Tokyo Edge"),
     ]);
+  });
+
+  it("assigns and filters named node groups", async () => {
+    const work = {
+      id: "00000000-0000-0000-0000-000000000020",
+      name: "Work",
+    };
+    const osaka = {
+      ...SELECTED.node!,
+      groupId: work.id,
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Osaka",
+    };
+    const groupedTokyo = { ...SELECTED.node!, groupId: work.id };
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadNodeGroupsMock.mockResolvedValue([work]);
+    loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
+    setNodeGroupMock.mockResolvedValue([groupedTokyo, osaka]);
+    await render();
+
+    const filter = container.querySelector<HTMLSelectElement>(
+      "[aria-label='节点分组筛选']",
+    );
+    if (!filter) {
+      throw new Error("node group filter is missing");
+    }
+    await act(async () => selectValue(work.id, filter));
+    expect(
+      [...container.querySelectorAll("[aria-label='节点列表'] tbody tr")].map(
+        (row) => row.textContent,
+      ),
+    ).toEqual([expect.stringContaining("Osaka")]);
+
+    await act(async () => selectValue("all", filter));
+    const groupButton = container.querySelector<HTMLButtonElement>(
+      "[aria-label='分组 Tokyo Edge']",
+    );
+    if (!groupButton) {
+      throw new Error("node group button is missing");
+    }
+    await act(async () => groupButton.click());
+    const groupName = container.querySelector<HTMLInputElement>(
+      "[aria-label='节点分组']",
+    );
+    if (!groupName) {
+      throw new Error("node group field is missing");
+    }
+    await act(async () => typeInput("Work", groupName));
+    await act(async () => button("保存分组").click());
+
+    expect(setNodeGroupMock).toHaveBeenCalledWith(SELECTED.node?.id, "Work");
+    expect(
+      container.querySelector("[aria-label='节点列表']")?.textContent,
+    ).toContain("Work");
   });
 
   it("tests one node and shows its TCP latency", async () => {

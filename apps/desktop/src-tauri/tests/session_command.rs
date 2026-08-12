@@ -20,9 +20,9 @@ use magies_desktop_lib::session::{
 use magies_domain::{CredentialRef, ProxyProtocol, Subscription, TimestampMillis};
 use magies_platform::system_proxy::SystemProxyState;
 use magies_profiles::{
-    CredentialCodec, LocalHttpProfile, LocalSocksProfile, SqliteManualNodeStore,
-    SqliteNodeOrderStore, SqliteSubscriptionStore, SubscriptionContentParser, SubscriptionUpdate,
-    SubscriptionValidators,
+    CredentialCodec, LocalHttpProfile, LocalSocksProfile, ManualNodeStoreError,
+    SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore, SqliteSubscriptionStore,
+    SubscriptionContentParser, SubscriptionUpdate, SubscriptionValidators,
 };
 use magies_routing::RoutingMode;
 use magies_session::{
@@ -165,6 +165,47 @@ fn reorders_manual_and_subscription_nodes_together() {
             .collect::<Vec<_>>(),
         vec![managed_id, manual_id]
     );
+}
+
+#[test]
+fn groups_manual_and_subscription_nodes_with_shared_names() {
+    let (mut service, managed_id, _runtime) = service_with_subscription_node();
+    let manual_id = service
+        .import_node(SHADOWSOCKS_LINK)
+        .unwrap()
+        .node
+        .unwrap()
+        .id;
+
+    let nodes = service.set_node_group(manual_id, Some(" Work ")).unwrap();
+    let group_id = nodes
+        .iter()
+        .find(|node| node.id == manual_id)
+        .unwrap()
+        .group_id
+        .unwrap();
+    assert_eq!(service.status().node.unwrap().group_id, Some(group_id));
+    assert_eq!(service.node_groups().unwrap()[0].name, "Work");
+
+    let nodes = service.set_node_group(managed_id, Some("Work")).unwrap();
+    assert!(nodes.iter().all(|node| node.group_id == Some(group_id)));
+
+    let nodes = service.set_node_group(manual_id, None).unwrap();
+    assert_eq!(
+        nodes
+            .iter()
+            .find(|node| node.id == manual_id)
+            .unwrap()
+            .group_id,
+        None
+    );
+    let missing = Uuid::from_u128(999);
+    assert!(matches!(
+        service.set_node_group(missing, Some("Missing")),
+        Err(SessionCommandError::NodeStore(ManualNodeStoreError::NodeNotFound { id }))
+            if id == missing
+    ));
+    assert_eq!(service.node_groups().unwrap().len(), 1);
 }
 
 #[test]
@@ -571,6 +612,7 @@ fn surfaces_a_failing_core_start_as_a_session_error() {
             SqliteManualNodeStore::open_in_memory().unwrap(),
             SqliteSubscriptionStore::open_in_memory().unwrap(),
             SqliteNodeOrderStore::open_in_memory().unwrap(),
+            SqliteNodeGroupStore::open_in_memory().unwrap(),
         ),
         SqliteRoutingModeStore::open_in_memory().unwrap(),
         SqliteRouteSettingsStore::open_in_memory().unwrap(),
@@ -620,6 +662,7 @@ fn service_with_events(
             SqliteManualNodeStore::open_in_memory().unwrap(),
             SqliteSubscriptionStore::open_in_memory().unwrap(),
             SqliteNodeOrderStore::open_in_memory().unwrap(),
+            SqliteNodeGroupStore::open_in_memory().unwrap(),
         ),
         SqliteRoutingModeStore::open_in_memory().unwrap(),
         SqliteRouteSettingsStore::open_in_memory().unwrap(),
@@ -681,6 +724,7 @@ fn service_with_subscription_node() -> (TestService, Uuid, RuntimeDirectory) {
             SqliteManualNodeStore::open(&database).unwrap(),
             subscriptions,
             SqliteNodeOrderStore::open(&database).unwrap(),
+            SqliteNodeGroupStore::open(&database).unwrap(),
         ),
         SqliteRoutingModeStore::open(&database).unwrap(),
         SqliteRouteSettingsStore::open(&database).unwrap(),
