@@ -152,6 +152,28 @@ impl SqliteManualNodeStore {
         Ok(node)
     }
 
+    /// Replaces an existing manual node without changing its selection or order.
+    ///
+    /// # Errors
+    ///
+    /// Rejects subscription-owned nodes and returns a typed not-found,
+    /// serialization, or database error without changing any other row.
+    pub fn update(&self, node: &ProxyNode) -> Result<ProxyNode, ManualNodeStoreError> {
+        if node.subscription_id.is_some() {
+            return Err(ManualNodeStoreError::SubscriptionNode { id: node.id });
+        }
+        let json = serde_json::to_string(node)
+            .map_err(|source| ManualNodeStoreError::SerializeNode { source })?;
+        let updated = self.connection.execute(
+            "UPDATE manual_nodes SET node_json = ?1 WHERE id = ?2",
+            params![json, node.id.to_string()],
+        )?;
+        if updated == 0 {
+            return Err(ManualNodeStoreError::NodeNotFound { id: node.id });
+        }
+        Ok(node.clone())
+    }
+
     /// Deletes and returns an existing node.
     ///
     /// # Errors

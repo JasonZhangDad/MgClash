@@ -8,6 +8,7 @@ import {
   connectSession,
   dismissSystemProxyRecovery,
   disconnectSession,
+  editNode,
   exportDiagnostics,
   importNode,
   isCommandError,
@@ -71,16 +72,27 @@ describe("session commands", () => {
     });
   });
 
-  it("lists, selects, and deletes persisted nodes", async () => {
+  it("lists, selects, edits, and deletes persisted nodes", async () => {
     await loadNodes();
     await selectNode("00000000-0000-0000-0000-000000000001");
+    await editNode("00000000-0000-0000-0000-000000000001", {
+      name: "Tokyo 2",
+      port: 443,
+      server: "new.example.com",
+    });
     await deleteNode("00000000-0000-0000-0000-000000000002");
 
     expect(invokeMock).toHaveBeenNthCalledWith(1, "session_nodes");
     expect(invokeMock).toHaveBeenNthCalledWith(2, "session_select_node", {
       id: "00000000-0000-0000-0000-000000000001",
     });
-    expect(invokeMock).toHaveBeenNthCalledWith(3, "session_delete_node", {
+    expect(invokeMock).toHaveBeenNthCalledWith(3, "session_edit_node", {
+      id: "00000000-0000-0000-0000-000000000001",
+      name: "Tokyo 2",
+      port: 443,
+      server: "new.example.com",
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(4, "session_delete_node", {
       id: "00000000-0000-0000-0000-000000000002",
     });
   });

@@ -1,9 +1,12 @@
 use std::fs;
+use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::process::id;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use magies_domain::{CredentialRef, ProxyNode, ProxyProtocol, TimestampMillis};
+use magies_domain::{
+    CredentialRef, NodeName, ProxyNode, ProxyProtocol, ServerAddress, TimestampMillis,
+};
 use magies_profiles::{ManualNodeStoreError, SqliteManualNodeStore};
 use uuid::Uuid;
 
@@ -100,6 +103,30 @@ fn records_latency_without_changing_the_selected_node() {
     assert!(matches!(
         store.update_latency(Uuid::nil(), None, TimestampMillis::new(200)),
         Err(ManualNodeStoreError::NodeNotFound { .. })
+    ));
+}
+
+#[test]
+fn updates_an_existing_manual_node_without_changing_the_selection() {
+    let mut store = SqliteManualNodeStore::open_in_memory().unwrap();
+    let tokyo = node("Tokyo", 8_388);
+    let osaka = node("Osaka", 9_000);
+    store.save_and_select(&tokyo).unwrap();
+    store.save_and_select(&osaka).unwrap();
+
+    let mut edited = tokyo.clone();
+    edited.name = NodeName::new("Tokyo 2").unwrap();
+    edited.server = ServerAddress::new("new.example.com").unwrap();
+    edited.port = NonZeroU16::new(443).unwrap();
+
+    assert_eq!(store.update(&edited).unwrap(), edited);
+    assert_eq!(store.nodes().unwrap(), vec![edited, osaka.clone()]);
+    assert_eq!(store.selected_node().unwrap(), Some(osaka));
+
+    let missing = node("Missing", 443);
+    assert!(matches!(
+        store.update(&missing),
+        Err(ManualNodeStoreError::NodeNotFound { id }) if id == missing.id
     ));
 }
 

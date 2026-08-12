@@ -6,6 +6,7 @@ import {
   deleteNode,
   dismissSystemProxyRecovery,
   disconnectSession,
+  editNode,
   exportDiagnostics,
   importNode,
   isCommandError,
@@ -157,6 +158,10 @@ export default function App() {
   const [routeRuleOutbound, setRouteRuleOutbound] =
     useState<RouteOutbound>("proxy");
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
+  const [nodeName, setNodeName] = useState("");
+  const [nodeServer, setNodeServer] = useState("");
+  const [nodePort, setNodePort] = useState("");
   const [subscriptions, setSubscriptions] = useState<SubscriptionSummary[]>([]);
   const [uri, setUri] = useState("");
   const [subscriptionName, setSubscriptionName] = useState("");
@@ -456,6 +461,49 @@ export default function App() {
       setBusy(false);
     }
   }, []);
+
+  const resetNodeForm = useCallback(() => {
+    setEditingNodeId(null);
+    setNodeName("");
+    setNodeServer("");
+    setNodePort("");
+  }, []);
+
+  const onEditNode = useCallback((candidate: NodeSummary) => {
+    setEditingNodeId(candidate.id);
+    setNodeName(candidate.name);
+    setNodeServer(candidate.server);
+    setNodePort(String(candidate.port));
+  }, []);
+
+  const onSaveNode = useCallback(async () => {
+    if (editingNodeId === null) {
+      return;
+    }
+    const name = nodeName.trim();
+    const server = nodeServer.trim();
+    const port = Number(nodePort);
+    if (name === "" || server === "") {
+      setError("请填写节点名称和服务器");
+      return;
+    }
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+      setError("节点端口必须是 1 到 65535 的整数");
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+    try {
+      setStatus(await editNode(editingNodeId, { name, port, server }));
+      setNodes(await loadNodes());
+      resetNodeForm();
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, [editingNodeId, nodeName, nodePort, nodeServer, resetNodeForm]);
 
   const onTestNode = useCallback(async (id: string) => {
     setError(null);
@@ -1279,6 +1327,16 @@ export default function App() {
                       >
                         {selected ? "当前" : "选择"}
                       </button>
+                      {candidate.deletable && (
+                        <button
+                          type="button"
+                          aria-label={`编辑 ${candidate.name}`}
+                          disabled={busy || connected || nodeTestInProgress}
+                          onClick={() => onEditNode(candidate)}
+                        >
+                          编辑
+                        </button>
+                      )}
                       <button
                         type="button"
                         aria-label={`删除 ${candidate.name}`}
@@ -1298,6 +1356,49 @@ export default function App() {
               })}
             </tbody>
           </table>
+        )}
+
+        {editingNodeId !== null && (
+          <div className="settings-form" aria-label="编辑节点">
+            <label>
+              名称
+              <input
+                aria-label="节点名称"
+                disabled={busy || connected}
+                value={nodeName}
+                onChange={(event) => setNodeName(event.target.value)}
+              />
+            </label>
+            <label>
+              服务器
+              <input
+                aria-label="节点服务器"
+                disabled={busy || connected}
+                value={nodeServer}
+                onChange={(event) => setNodeServer(event.target.value)}
+              />
+            </label>
+            <label>
+              端口
+              <input
+                aria-label="节点端口"
+                disabled={busy || connected}
+                min="1"
+                max="65535"
+                type="number"
+                value={nodePort}
+                onChange={(event) => setNodePort(event.target.value)}
+              />
+            </label>
+            <div className="actions">
+              <button type="button" disabled={busy || connected} onClick={() => void onSaveNode()}>
+                保存节点
+              </button>
+              <button type="button" disabled={busy} onClick={resetNodeForm}>
+                取消
+              </button>
+            </div>
+          </div>
         )}
 
         <h2>订阅</h2>

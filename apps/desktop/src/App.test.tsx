@@ -11,6 +11,7 @@ const loadNodesMock = vi.hoisted(() => vi.fn());
 const importNodeMock = vi.hoisted(() => vi.fn());
 const selectNodeMock = vi.hoisted(() => vi.fn());
 const deleteNodeMock = vi.hoisted(() => vi.fn());
+const editNodeMock = vi.hoisted(() => vi.fn());
 const testNodeMock = vi.hoisted(() => vi.fn());
 const testAllNodesMock = vi.hoisted(() => vi.fn());
 const testUrlMock = vi.hoisted(() => vi.fn());
@@ -41,6 +42,7 @@ vi.mock("./session", async () => {
     disconnectSession: disconnectSessionMock,
     dismissSystemProxyRecovery: dismissSystemProxyRecoveryMock,
     exportDiagnostics: exportDiagnosticsMock,
+    editNode: editNodeMock,
     importNode: importNodeMock,
     isCommandError: actual.isCommandError,
     deleteNode: deleteNodeMock,
@@ -137,6 +139,7 @@ describe("App", () => {
     importNodeMock.mockReset();
     selectNodeMock.mockReset();
     deleteNodeMock.mockReset();
+    editNodeMock.mockReset();
     testNodeMock.mockReset();
     testAllNodesMock.mockReset();
     testUrlMock.mockReset();
@@ -510,6 +513,58 @@ describe("App", () => {
 
     expect(selectNodeMock).toHaveBeenCalledWith(osaka.id);
     expect(container.textContent).toContain("osaka.example.com:9000");
+  });
+
+  it("edits a manual node with a compact inline form", async () => {
+    const editedNode = {
+      ...SELECTED.node!,
+      name: "Tokyo 2",
+      port: 443,
+      server: "new.example.com",
+    };
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadNodesMock
+      .mockResolvedValueOnce([SELECTED.node])
+      .mockResolvedValueOnce([editedNode]);
+    editNodeMock.mockResolvedValue({ ...SELECTED, node: editedNode });
+    await render();
+
+    const edit = container.querySelector<HTMLButtonElement>(
+      "[aria-label='编辑 Tokyo Edge']",
+    );
+    if (!edit) {
+      throw new Error("node edit button is missing");
+    }
+    await act(async () => edit.click());
+
+    const name = container.querySelector<HTMLInputElement>(
+      "[aria-label='节点名称']",
+    );
+    const server = container.querySelector<HTMLInputElement>(
+      "[aria-label='节点服务器']",
+    );
+    const port = container.querySelector<HTMLInputElement>(
+      "[aria-label='节点端口']",
+    );
+    if (!name || !server || !port) {
+      throw new Error("node edit fields are missing");
+    }
+    await act(async () => {
+      typeInput(" Tokyo 2 ", name);
+      typeInput(" new.example.com ", server);
+      typeInput("443", port);
+    });
+    await act(async () => button("保存节点").click());
+
+    expect(editNodeMock).toHaveBeenCalledWith(SELECTED.node?.id, {
+      name: "Tokyo 2",
+      port: 443,
+      server: "new.example.com",
+    });
+    expect(
+      container.querySelector("[aria-label='节点列表']")?.textContent,
+    ).toContain("Tokyo 2");
+    expect(container.textContent).toContain("new.example.com:443");
   });
 
   it("tests one node and shows its TCP latency", async () => {
