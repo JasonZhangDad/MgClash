@@ -237,6 +237,49 @@ describe("App", () => {
     await act(async () => root.render(<App />));
   }
 
+  /// Whether a menu item exists but cannot be used.
+  async function nodeMenuItemDisabled(
+    node: string,
+    item: string,
+  ): Promise<boolean> {
+    const opener = container.querySelector<HTMLButtonElement>(
+      `[aria-label='操作 ${node}']`,
+    );
+    await act(async () => opener?.click());
+    const target = Array.from(
+      container
+        .querySelector(`[aria-label='节点操作 ${node}']`)!
+        .querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent === item);
+    return target?.disabled ?? false;
+  }
+
+  /// Opens a node's context menu and clicks one of its items, the way the
+  /// v2rayN-style table exposes every per-node action.
+  async function nodeMenuAction(node: string, item: string): Promise<void> {
+    const opener = container.querySelector<HTMLButtonElement>(
+      `[aria-label='操作 ${node}']`,
+    );
+    if (!opener) {
+      throw new Error(`no context-menu opener for ${node}`);
+    }
+    await act(async () => opener.click());
+    const menu = container.querySelector(`[aria-label='节点操作 ${node}']`);
+    if (!menu) {
+      throw new Error(`the context menu for ${node} did not open`);
+    }
+    const target = Array.from(
+      menu.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent === item);
+    if (!target) {
+      throw new Error(`no ${item} item in the menu for ${node}`);
+    }
+    if (target.disabled) {
+      throw new Error(`${item} is disabled for ${node}`);
+    }
+    await act(async () => target.click());
+  }
+
   function selectValue(value: string, field: HTMLSelectElement): void {
     const setter = Object.getOwnPropertyDescriptor(
       HTMLSelectElement.prototype,
@@ -1150,13 +1193,7 @@ describe("App", () => {
     selectNodeMock.mockResolvedValue({ ...SELECTED, node: osaka });
     await render();
 
-    const select = container.querySelector<HTMLButtonElement>(
-      "[aria-label='选择 Osaka']",
-    );
-    if (!select) {
-      throw new Error("no Osaka selection button");
-    }
-    await act(async () => select.click());
+    await nodeMenuAction("Osaka", "设为活动");
 
     expect(selectNodeMock).toHaveBeenCalledWith(osaka.id);
     expect(container.textContent).toContain("osaka.example.com:9000");
@@ -1176,13 +1213,7 @@ describe("App", () => {
     editNodeMock.mockResolvedValue({ ...SELECTED, node: editedNode });
     await render();
 
-    const edit = container.querySelector<HTMLButtonElement>(
-      "[aria-label='编辑 Tokyo Edge']",
-    );
-    if (!edit) {
-      throw new Error("node edit button is missing");
-    }
-    await act(async () => edit.click());
+    await nodeMenuAction("Tokyo Edge", "编辑");
 
     const name = container.querySelector<HTMLInputElement>(
       "[aria-label='节点名称']",
@@ -1227,18 +1258,8 @@ describe("App", () => {
     moveNodeMock.mockResolvedValue([osaka, SELECTED.node]);
     await render();
 
-    expect(
-      container.querySelector<HTMLButtonElement>(
-        "[aria-label='上移 Tokyo Edge']",
-      )?.disabled,
-    ).toBe(true);
-    const moveDown = container.querySelector<HTMLButtonElement>(
-      "[aria-label='下移 Tokyo Edge']",
-    );
-    if (!moveDown) {
-      throw new Error("node move button is missing");
-    }
-    await act(async () => moveDown.click());
+    expect(await nodeMenuItemDisabled("Tokyo Edge", "上移")).toBe(true);
+    await nodeMenuAction("Tokyo Edge", "下移");
 
     expect(moveNodeMock).toHaveBeenCalledWith(SELECTED.node?.id, "down");
     const rows = [...container.querySelectorAll("[aria-label='节点列表'] tbody tr")];
@@ -1280,13 +1301,7 @@ describe("App", () => {
     ).toEqual([expect.stringContaining("Osaka")]);
 
     await act(async () => selectValue("all", filter));
-    const groupButton = container.querySelector<HTMLButtonElement>(
-      "[aria-label='分组 Tokyo Edge']",
-    );
-    if (!groupButton) {
-      throw new Error("node group button is missing");
-    }
-    await act(async () => groupButton.click());
+    await nodeMenuAction("Tokyo Edge", "设置分组");
     const groupName = container.querySelector<HTMLInputElement>(
       "[aria-label='节点分组']",
     );
@@ -1312,13 +1327,7 @@ describe("App", () => {
     });
     await render();
 
-    const test = container.querySelector<HTMLButtonElement>(
-      "[aria-label='测试 Tokyo Edge']",
-    );
-    if (!test) {
-      throw new Error("node test button is missing");
-    }
-    await act(async () => test.click());
+    await nodeMenuAction("Tokyo Edge", "测试延迟");
 
     expect(testNodeMock).toHaveBeenCalledWith(SELECTED.node?.id);
     expect(
@@ -1335,18 +1344,13 @@ describe("App", () => {
     });
     await render();
 
-    const test = container.querySelector<HTMLButtonElement>(
-      "[aria-label='测试 Tokyo Edge']",
-    );
-    if (!test) {
-      throw new Error("node test button is missing");
-    }
-    await act(async () => test.click());
+    await nodeMenuAction("Tokyo Edge", "测试延迟");
 
     expect(container.querySelector("[role='alert']")?.textContent).toContain(
       "failed to save the node test",
     );
-    expect(test.disabled).toBe(false);
+    // The action has to come back after a failure, not stay stuck in "测试中".
+    expect(await nodeMenuItemDisabled("Tokyo Edge", "测试延迟")).toBe(false);
   });
 
   it("offers batch node tests and cancels queued work", async () => {
@@ -1458,17 +1462,56 @@ describe("App", () => {
     deleteNodeMock.mockResolvedValue(IDLE);
     await render();
 
-    const remove = container.querySelector<HTMLButtonElement>(
-      "[aria-label='删除 Tokyo Edge']",
-    );
-    if (!remove) {
-      throw new Error("no Tokyo deletion button");
-    }
-    await act(async () => remove.click());
+    await nodeMenuAction("Tokyo Edge", "移除所选");
 
     expect(deleteNodeMock).toHaveBeenCalledWith(SELECTED.node?.id);
     expect(container.querySelector("[aria-label='节点列表']")).toBeNull();
     expect(container.textContent).toContain("尚未导入节点");
+  });
+
+  it("opens the node menu on right-click and dismisses it on Escape", async () => {
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    await render();
+    const row = container.querySelector("[aria-label='节点列表'] tbody tr");
+    if (!row) {
+      throw new Error("no node row");
+    }
+
+    await act(async () => {
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+      );
+    });
+
+    expect(
+      container.querySelector("[aria-label='节点操作 Tokyo Edge']"),
+    ).not.toBeNull();
+
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    });
+
+    expect(container.querySelector("[aria-label='节点操作 Tokyo Edge']")).toBeNull();
+  });
+
+  it("activates a node on double-click", async () => {
+    const osaka = {
+      ...SELECTED.node!,
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Osaka",
+    };
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
+    selectNodeMock.mockResolvedValue({ ...SELECTED, node: osaka });
+    await render();
+    const rows = container.querySelectorAll("[aria-label='节点列表'] tbody tr");
+
+    await act(async () => {
+      rows[1].dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    });
+
+    expect(selectNodeMock).toHaveBeenCalledWith(osaka.id);
   });
 
   it("keeps subscription-owned nodes read-only", async () => {
@@ -1480,12 +1523,23 @@ describe("App", () => {
     loadNodesMock.mockResolvedValue([managed]);
     await render();
 
-    const remove = container.querySelector<HTMLButtonElement>(
-      "[aria-label='删除 Managed Tokyo']",
+    const opener = container.querySelector<HTMLButtonElement>(
+      "[aria-label='操作 Managed Tokyo']",
     );
+    await act(async () => opener?.click());
+    const remove = Array.from(
+      container
+        .querySelector("[aria-label='节点操作 Managed Tokyo']")!
+        .querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent?.includes("移除"));
 
     expect(remove?.disabled).toBe(true);
-    expect(remove?.textContent).toBe("订阅管理");
+    expect(remove?.textContent).toBe("订阅节点不可移除");
+    // Editing a node the subscription owns is not offered at all.
+    expect(
+      container.querySelector("[aria-label='节点操作 Managed Tokyo']")
+        ?.textContent,
+    ).not.toContain("编辑");
   });
 
   it("adds a subscription without exposing its URL in the list", async () => {
@@ -1527,13 +1581,13 @@ describe("App", () => {
     });
     await render();
 
-    const edit = container.querySelector<HTMLButtonElement>(
+    const editSubscription = container.querySelector<HTMLButtonElement>(
       "[aria-label='编辑 Airport']",
     );
-    if (!edit) {
-      throw new Error("subscription edit button is missing");
+    if (!editSubscription) {
+      throw new Error("no Airport edit button");
     }
-    await act(async () => edit.click());
+    await act(async () => editSubscription.click());
 
     const name = container.querySelector<HTMLInputElement>(
       "[aria-label='订阅名称']",

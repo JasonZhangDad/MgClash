@@ -169,6 +169,13 @@ const TABS: { id: PanelId; label: string }[] = [
   { id: "logs", label: "诊断" },
 ];
 
+/** Where the node menu opened, so it can be drawn at the pointer. */
+interface NodeMenuPosition {
+  nodeId: string;
+  x: number;
+  y: number;
+}
+
 function formatRate(bytesPerSecond: number): string {
   const units = ["B/s", "KB/s", "MB/s", "GB/s"];
   let value = bytesPerSecond;
@@ -208,6 +215,14 @@ export default function App() {
   const [nodeGroups, setNodeGroups] = useState<NodeGroupSummary[]>([]);
   const [nodeGroupFilter, setNodeGroupFilter] = useState("all");
   const [groupingNodeId, setGroupingNodeId] = useState<string | null>(null);
+  const [nodeMenu, setNodeMenu] = useState<NodeMenuPosition | null>(null);
+  const openNodeMenu = (
+    event: { preventDefault: () => void; clientX: number; clientY: number },
+    nodeId: string,
+  ) => {
+    event.preventDefault();
+    setNodeMenu({ nodeId, x: event.clientX, y: event.clientY });
+  };
   const [nodeGroupName, setNodeGroupName] = useState("");
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
   const [nodeName, setNodeName] = useState("");
@@ -249,6 +264,27 @@ export default function App() {
   const nodeTestInProgress = Object.values(nodeTests).some(
     (result) => result.status === "testing",
   );
+
+  useEffect(() => {
+    if (nodeMenu === null) {
+      return undefined;
+    }
+    const close = () => setNodeMenu(null);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        close();
+      }
+    };
+    // Capture, so a click that also activates something still dismisses first.
+    document.addEventListener("pointerdown", close, true);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("pointerdown", close, true);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", close);
+    };
+  }, [nodeMenu]);
 
   useEffect(() => {
     loadPlatformSummary().then(setPlatform, (failure: unknown) =>
@@ -1218,7 +1254,16 @@ export default function App() {
                   latency = "失败";
                 }
                 return (
-                  <tr key={candidate.id}>
+                  <tr
+                    key={candidate.id}
+                    className={selected ? "active-node" : undefined}
+                    onContextMenu={(event) => openNodeMenu(event, candidate.id)}
+                    onDoubleClick={() => {
+                      if (!busy && !connected && !selected && !nodeTestInProgress) {
+                        void run(() => selectNode(candidate.id));
+                      }
+                    }}
+                  >
                     <td>{candidate.name}</td>
                     <td>{candidate.protocol}</td>
                     <td>{candidate.transport}</td>
@@ -1233,80 +1278,12 @@ export default function App() {
                     <td className="node-actions">
                       <button
                         type="button"
-                        aria-label={`上移 ${candidate.name}`}
-                        disabled={
-                          busy ||
-                          nodeTestInProgress ||
-                          nodeGroupFilter !== "all" ||
-                          index === 0
-                        }
-                        onClick={() => void onMoveNode(candidate.id, "up")}
-                      >
-                        ↑
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`下移 ${candidate.name}`}
-                        disabled={
-                          busy ||
-                          nodeTestInProgress ||
-                          nodeGroupFilter !== "all" ||
-                          index === nodes.length - 1
-                        }
-                        onClick={() => void onMoveNode(candidate.id, "down")}
-                      >
-                        ↓
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`测试 ${candidate.name}`}
+                        aria-label={`操作 ${candidate.name}`}
+                        aria-haspopup="menu"
                         disabled={busy || nodeTestInProgress}
-                        onClick={() => void onTestNode(candidate.id)}
+                        onClick={(event) => openNodeMenu(event, candidate.id)}
                       >
-                        测试
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`选择 ${candidate.name}`}
-                        disabled={
-                          busy || connected || selected || nodeTestInProgress
-                        }
-                        onClick={() =>
-                          void run(() => selectNode(candidate.id))
-                        }
-                      >
-                        {selected ? "当前" : "选择"}
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`分组 ${candidate.name}`}
-                        disabled={busy || nodeTestInProgress}
-                        onClick={() => onGroupNode(candidate)}
-                      >
-                        分组
-                      </button>
-                      {candidate.deletable && (
-                        <button
-                          type="button"
-                          aria-label={`编辑 ${candidate.name}`}
-                          disabled={busy || connected || nodeTestInProgress}
-                          onClick={() => onEditNode(candidate)}
-                        >
-                          编辑
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        aria-label={`删除 ${candidate.name}`}
-                        disabled={
-                          busy ||
-                          connected ||
-                          nodeTestInProgress ||
-                          !candidate.deletable
-                        }
-                        onClick={() => void onDeleteNode(candidate.id)}
-                      >
-                        {candidate.deletable ? "删除" : "订阅管理"}
+                        ⋯
                       </button>
                     </td>
                   </tr>
@@ -1315,6 +1292,104 @@ export default function App() {
             </tbody>
           </table>
         )}
+
+        {nodeMenu !== null &&
+          (() => {
+            const target = nodes.find((item) => item.id === nodeMenu.nodeId);
+            if (target === undefined) {
+              return null;
+            }
+            const index = nodes.findIndex((item) => item.id === target.id);
+            const selected = target.id === node?.id;
+            // Reordering acts on the whole list, so it cannot follow a filtered view.
+            const reorderable = nodeGroupFilter === "all";
+            const act = (run_: () => void) => () => {
+              setNodeMenu(null);
+              run_();
+            };
+            return (
+              <ul
+                className="context-menu"
+                role="menu"
+                aria-label={`节点操作 ${target.name}`}
+                style={{ left: nodeMenu.x, top: nodeMenu.y }}
+              >
+                <li>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={busy || connected || selected}
+                    onClick={act(() => void run(() => selectNode(target.id)))}
+                  >
+                    设为活动
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={busy}
+                    onClick={act(() => void onTestNode(target.id))}
+                  >
+                    测试延迟
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={busy}
+                    onClick={act(() => onGroupNode(target))}
+                  >
+                    设置分组
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={busy || !reorderable || index === 0}
+                    onClick={act(() => void onMoveNode(target.id, "up"))}
+                  >
+                    上移
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={busy || !reorderable || index === nodes.length - 1}
+                    onClick={act(() => void onMoveNode(target.id, "down"))}
+                  >
+                    下移
+                  </button>
+                </li>
+                {target.deletable && (
+                  <li>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={busy || connected}
+                      onClick={act(() => onEditNode(target))}
+                    >
+                      编辑
+                    </button>
+                  </li>
+                )}
+                <li>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="danger"
+                    disabled={busy || connected || !target.deletable}
+                    onClick={act(() => void onDeleteNode(target.id))}
+                  >
+                    {target.deletable ? "移除所选" : "订阅节点不可移除"}
+                  </button>
+                </li>
+              </ul>
+            );
+          })()}
 
         {groupingNodeId !== null && (
           <div className="settings-form" aria-label="设置节点分组">
