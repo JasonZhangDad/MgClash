@@ -34,6 +34,52 @@ fn stores_multiple_manual_nodes_and_restores_the_selection() {
 }
 
 #[test]
+fn saving_without_selecting_leaves_the_current_selection_alone() {
+    let mut store = SqliteManualNodeStore::open_in_memory().unwrap();
+    let tokyo = node("Tokyo", 8_388);
+    let osaka = node("Osaka", 9_000);
+    let frankfurt = node("Frankfurt", 443);
+    store.save_and_select(&tokyo).unwrap();
+
+    store.save(&osaka).unwrap();
+    store.save(&frankfurt).unwrap();
+
+    assert_eq!(
+        store.nodes().unwrap(),
+        vec![tokyo.clone(), osaka, frankfurt]
+    );
+    // This is what keeps a bulk import from moving the user off their node.
+    assert_eq!(store.selected_node().unwrap(), Some(tokyo));
+}
+
+#[test]
+fn saving_over_an_existing_node_keeps_it_selected() {
+    let mut store = SqliteManualNodeStore::open_in_memory().unwrap();
+    let tokyo = node("Tokyo", 8_388);
+    store.save_and_select(&tokyo).unwrap();
+    let mut renamed = tokyo.clone();
+    renamed.name = NodeName::new("Tokyo Edge").unwrap();
+
+    store.save(&renamed).unwrap();
+
+    assert_eq!(store.nodes().unwrap(), vec![renamed.clone()]);
+    assert_eq!(store.selected_node().unwrap(), Some(renamed));
+}
+
+#[test]
+fn saving_without_selecting_rejects_a_subscription_node() {
+    let mut store = SqliteManualNodeStore::open_in_memory().unwrap();
+    let mut managed = node("Managed", 443);
+    managed.subscription_id = Some(Uuid::new_v4());
+
+    assert!(matches!(
+        store.save(&managed).unwrap_err(),
+        ManualNodeStoreError::SubscriptionNode { .. }
+    ));
+    assert!(store.nodes().unwrap().is_empty());
+}
+
+#[test]
 fn selects_and_deletes_existing_nodes_without_losing_the_previous_selection() {
     let mut store = SqliteManualNodeStore::open_in_memory().unwrap();
     let tokyo = node("Tokyo", 8_388);

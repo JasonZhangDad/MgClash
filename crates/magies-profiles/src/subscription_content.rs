@@ -1,11 +1,11 @@
 use std::borrow::Cow;
 use std::str;
 
-use base64::{Engine as _, engine::general_purpose};
 use magies_domain::{CredentialRef, NodeModelError, ProxyNode};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::node_list_text::{NodeListTextError, decode_node_list};
 use crate::{ShareLinkParseError, ShareLinkParser, StoredNodeCredential};
 
 /// One fully parsed subscription node before its credential is persisted.
@@ -77,33 +77,15 @@ impl SubscriptionContentParser {
 }
 
 fn subscription_text(content: &[u8]) -> Result<Cow<'_, str>, SubscriptionContentError> {
-    let text = str::from_utf8(content)
-        .map_err(|source| SubscriptionContentError::InvalidUtf8 { source })?;
-    let trimmed = text.trim().trim_start_matches('\u{feff}');
-    if trimmed.is_empty() {
-        return Err(SubscriptionContentError::Empty);
-    }
-    if trimmed.lines().any(|line| line.trim().contains("://")) {
-        return Ok(Cow::Borrowed(trimmed));
-    }
-
-    let mut encoded: String = trimmed
-        .chars()
-        .filter(|character| !character.is_whitespace())
-        .collect();
-    let missing_padding = (4 - encoded.len() % 4) % 4;
-    encoded.extend(std::iter::repeat_n('=', missing_padding));
-    let decoded = general_purpose::STANDARD
-        .decode(&encoded)
-        .or_else(|_| general_purpose::URL_SAFE.decode(&encoded))
-        .map_err(|source| SubscriptionContentError::InvalidBase64 { source })?;
-    let decoded = str::from_utf8(&decoded)
-        .map_err(|source| SubscriptionContentError::InvalidUtf8 { source })?;
-    let decoded = decoded.trim().trim_start_matches('\u{feff}');
-    if decoded.is_empty() {
-        return Err(SubscriptionContentError::Empty);
-    }
-    Ok(Cow::Owned(decoded.to_owned()))
+    decode_node_list(content).map_err(|error| match error {
+        NodeListTextError::Empty => SubscriptionContentError::Empty,
+        NodeListTextError::InvalidBase64 { source } => {
+            SubscriptionContentError::InvalidBase64 { source }
+        }
+        NodeListTextError::InvalidUtf8 { source } => {
+            SubscriptionContentError::InvalidUtf8 { source }
+        }
+    })
 }
 
 #[derive(Debug, Error)]

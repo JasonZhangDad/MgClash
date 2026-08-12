@@ -229,3 +229,30 @@ textarea {
 .error {
   color: #cf222e;
 }
+
+.file-import {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.file-import input {
+  max-width: 180px;
+  font-size: 12px;
+}
+
+.bulk-report {
+  margin: 0 0 24px;
+  font-size: 13px;
+}
+
+.bulk-report ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  color: #cf222e;
+}

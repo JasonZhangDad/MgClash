@@ -11,6 +11,7 @@ const loadNodesMock = vi.hoisted(() => vi.fn());
 const loadNodeGroupsMock = vi.hoisted(() => vi.fn());
 const importNodeMock = vi.hoisted(() => vi.fn());
 const createNodeMock = vi.hoisted(() => vi.fn());
+const importNodesMock = vi.hoisted(() => vi.fn());
 const selectNodeMock = vi.hoisted(() => vi.fn());
 const deleteNodeMock = vi.hoisted(() => vi.fn());
 const editNodeMock = vi.hoisted(() => vi.fn());
@@ -49,6 +50,7 @@ vi.mock("./session", async () => {
     exportDiagnostics: exportDiagnosticsMock,
     editNode: editNodeMock,
     importNode: importNodeMock,
+    importNodes: importNodesMock,
     isCommandError: actual.isCommandError,
     deleteNode: deleteNodeMock,
     loadNodeGroups: loadNodeGroupsMock,
@@ -148,6 +150,7 @@ describe("App", () => {
     loadNodeGroupsMock.mockReset();
     importNodeMock.mockReset();
     createNodeMock.mockReset();
+    importNodesMock.mockReset();
     selectNodeMock.mockReset();
     deleteNodeMock.mockReset();
     editNodeMock.mockReset();
@@ -520,6 +523,153 @@ describe("App", () => {
     }
     return field;
   }
+
+  function bulkField(): HTMLTextAreaElement {
+    const field = container.querySelector<HTMLTextAreaElement>(
+      "textarea[aria-label='批量节点列表']",
+    );
+    if (!field) {
+      throw new Error("no bulk import field");
+    }
+    return field;
+  }
+
+  const TWO_LINKS =
+    "ss://aes-128-gcm:secret@edge.example.com:8388#Tokyo\nss://aes-128-gcm:secret@osaka.example.com:9000#Osaka";
+
+  it("bulk imports pasted links and reports the count", async () => {
+    importNodesMock.mockResolvedValue({
+      duplicates: 0,
+      failures: [],
+      imported: 2,
+      status: SELECTED,
+    });
+    loadNodesMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([SELECTED.node]);
+    await render();
+
+    await act(async () => {
+      type(TWO_LINKS, bulkField());
+    });
+    await act(async () => button("批量导入").click());
+
+    expect(importNodesMock).toHaveBeenCalledWith(TWO_LINKS);
+    expect(
+      container.querySelector("[aria-label='批量导入结果']")?.textContent,
+    ).toContain("成功导入 2 个");
+    // A successful import clears the box so the list is not imported twice.
+    expect(bulkField().value).toBe("");
+  });
+
+  it("reports duplicates and per-line failures", async () => {
+    importNodesMock.mockResolvedValue({
+      duplicates: 1,
+      failures: [
+        { line: 2, message: "not a supported sharing link" },
+        { line: null, message: "keyring is locked" },
+      ],
+      imported: 1,
+      status: SELECTED,
+    });
+    loadNodesMock.mockResolvedValue([]);
+    await render();
+
+    await act(async () => {
+      type(TWO_LINKS, bulkField());
+    });
+    await act(async () => button("批量导入").click());
+
+    const report = container.querySelector("[aria-label='批量导入结果']");
+    expect(report?.textContent).toContain("成功导入 1 个");
+    expect(report?.textContent).toContain("跳过 1 个重复");
+    expect(report?.textContent).toContain("2 行失败");
+    expect(report?.textContent).toContain(
+      "第 2 行：not a supported sharing link",
+    );
+    // A failure with no line renders without a line prefix.
+    expect(report?.textContent).toContain("keyring is locked");
+    expect(report?.textContent).not.toContain("第 null 行");
+  });
+
+  it("keeps the pasted text when nothing was imported", async () => {
+    importNodesMock.mockResolvedValue({
+      duplicates: 0,
+      failures: [{ line: 1, message: "not a supported sharing link" }],
+      imported: 0,
+      status: IDLE,
+    });
+    loadNodesMock.mockResolvedValue([]);
+    await render();
+
+    await act(async () => {
+      type("not a link", bulkField());
+    });
+    await act(async () => button("批量导入").click());
+
+    expect(bulkField().value).toBe("not a link");
+  });
+
+  it("refuses to bulk import an empty box", async () => {
+    loadNodesMock.mockResolvedValue([]);
+    await render();
+
+    await act(async () => {
+      type("   ", bulkField());
+    });
+    await act(async () => button("批量导入").click());
+
+    expect(importNodesMock).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("请先粘贴节点链接或选择文件");
+  });
+
+  it("imports a chosen file through the same command", async () => {
+    importNodesMock.mockResolvedValue({
+      duplicates: 0,
+      failures: [],
+      imported: 2,
+      status: SELECTED,
+    });
+    loadNodesMock.mockResolvedValue([]);
+    await render();
+
+    const picker = container.querySelector<HTMLInputElement>(
+      "input[aria-label='从文件导入节点']",
+    );
+    if (!picker) {
+      throw new Error("no file picker");
+    }
+    const file = new File([TWO_LINKS], "nodes.txt", { type: "text/plain" });
+    Object.defineProperty(picker, "files", { value: [file] });
+
+    await act(async () => {
+      picker.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(importNodesMock).toHaveBeenCalledWith(TWO_LINKS);
+    expect(
+      container.querySelector("[aria-label='批量导入结果']")?.textContent,
+    ).toContain("成功导入 2 个");
+  });
+
+  it("surfaces a backend error from a bulk import", async () => {
+    importNodesMock.mockRejectedValue({
+      code: "invalid_node_list",
+      message: "the text is neither sharing links nor a Base64 node list",
+    });
+    loadNodesMock.mockResolvedValue([]);
+    await render();
+
+    await act(async () => {
+      type("!!!garbage!!!", bulkField());
+    });
+    await act(async () => button("批量导入").click());
+
+    expect(container.textContent).toContain(
+      "the text is neither sharing links nor a Base64 node list",
+    );
+    expect(container.querySelector("[aria-label='批量导入结果']")).toBeNull();
+  });
 
   it("creates a node from the manual form", async () => {
     createNodeMock.mockResolvedValue(SELECTED);

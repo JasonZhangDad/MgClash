@@ -1,5 +1,6 @@
 //! Node import and profile services for `MgClash`.
 
+mod bulk_import;
 mod credential_codec;
 mod diagnostics;
 mod dns_config;
@@ -9,6 +10,7 @@ mod manual_node_draft;
 mod manual_node_store;
 mod node_dedup;
 mod node_group_store;
+mod node_list_text;
 mod node_order_store;
 mod shadowsocks;
 mod share_link;
@@ -23,6 +25,10 @@ mod trojan;
 mod tun_config;
 mod vmess;
 
+pub use bulk_import::{
+    BulkImportError, BulkImportFailure, BulkImportLineError, BulkImportOutcome,
+    BulkNodeImportParser, ParsedBulkNode,
+};
 pub use credential_codec::{CredentialCodec, CredentialCodecError, StoredNodeCredential};
 pub use diagnostics::{DiagnosticRedactor, REDACTED};
 pub use dns_config::{

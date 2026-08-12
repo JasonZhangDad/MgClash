@@ -78,6 +78,101 @@ fn importing_a_second_link_keeps_both_nodes_and_replaces_the_selection() {
     assert_eq!(service.nodes().unwrap().len(), 2);
 }
 
+const OSAKA_LINK: &str = "ss://aes-128-gcm:runtime-secret@osaka.example.com:9000#Osaka";
+
+#[test]
+fn importing_a_list_stores_every_node_and_selects_the_first() {
+    let (mut service, _runtime, _fail_start) = service();
+
+    let report = service
+        .import_nodes(format!("{SHADOWSOCKS_LINK}\n{OSAKA_LINK}").as_bytes())
+        .unwrap();
+
+    assert_eq!(report.imported, 2);
+    assert_eq!(report.duplicates, 0);
+    assert!(report.failures.is_empty());
+    assert_eq!(service.nodes().unwrap().len(), 2);
+    // Nothing was selected before, so the first import fills the gap.
+    assert_eq!(report.status.node.as_ref().unwrap().name, "Tokyo Edge");
+    assert!(service.connect().unwrap().connected);
+}
+
+#[test]
+fn importing_a_list_keeps_an_existing_selection() {
+    let (mut service, _runtime, _fail_start) = service();
+    let chosen = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
+
+    let report = service
+        .import_nodes(format!("{OSAKA_LINK}\ntrojan://hunter2@fra.example.com:443#Fra").as_bytes())
+        .unwrap();
+
+    assert_eq!(report.imported, 2);
+    // Pasting a list must not move the user off the node they chose.
+    assert_eq!(report.status.node.as_ref().unwrap().id, chosen.id);
+    assert_eq!(service.nodes().unwrap().len(), 3);
+}
+
+#[test]
+fn importing_a_list_reports_bad_lines_and_keeps_the_good_ones() {
+    let (mut service, _runtime, _fail_start) = service();
+
+    let report = service
+        .import_nodes(format!("{SHADOWSOCKS_LINK}\nnot a link\n{OSAKA_LINK}").as_bytes())
+        .unwrap();
+
+    assert_eq!(report.imported, 2);
+    assert_eq!(report.failures.len(), 1);
+    assert_eq!(report.failures[0].line, Some(2));
+    assert!(!report.failures[0].message.is_empty());
+    assert_eq!(service.nodes().unwrap().len(), 2);
+}
+
+#[test]
+fn importing_a_list_drops_repeats_inside_the_body() {
+    let (mut service, _runtime, _fail_start) = service();
+
+    let report = service
+        .import_nodes(format!("{SHADOWSOCKS_LINK}\n{OSAKA_LINK}\n{SHADOWSOCKS_LINK}").as_bytes())
+        .unwrap();
+
+    assert_eq!(report.imported, 2);
+    assert_eq!(report.duplicates, 1);
+    assert_eq!(service.nodes().unwrap().len(), 2);
+}
+
+#[test]
+fn importing_an_unreadable_list_is_a_typed_error() {
+    let (mut service, _runtime, _fail_start) = service();
+
+    assert_eq!(
+        service.import_nodes(b"   ").unwrap_err().code(),
+        "invalid_node_list"
+    );
+    assert_eq!(
+        service
+            .import_nodes(b"!!!not base64!!!")
+            .unwrap_err()
+            .code(),
+        "invalid_node_list"
+    );
+    assert!(service.nodes().unwrap().is_empty());
+}
+
+#[test]
+fn refuses_to_import_a_list_while_connected() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    service.connect().unwrap();
+
+    assert_eq!(
+        service
+            .import_nodes(OSAKA_LINK.as_bytes())
+            .unwrap_err()
+            .code(),
+        "session_active"
+    );
+}
+
 #[test]
 fn creating_a_manual_node_stores_the_credential_and_selects_it() {
     let (mut service, _runtime, _fail_start) = service();

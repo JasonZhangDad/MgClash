@@ -32,6 +32,19 @@ export interface NodeEdit {
 
 export type NodeMoveDirection = "down" | "up";
 
+export interface BulkImportLineReport {
+  /** Absent when the failure belongs to no single line. */
+  line: number | null;
+  message: string;
+}
+
+export interface BulkImportReport {
+  duplicates: number;
+  failures: BulkImportLineReport[];
+  imported: number;
+  status: SessionStatus;
+}
+
 export type VmessSecurity =
   | "Auto"
   | "Aes128Gcm"
@@ -194,6 +207,10 @@ export function setDnsSettings(settings: DnsSettings): Promise<SessionStatus> {
 
 export function importNode(uri: string): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_import_node", { uri });
+}
+
+export function importNodes(content: string): Promise<BulkImportReport> {
+  return invoke<BulkImportReport>("session_import_nodes", { content });
 }
 
 export function createNode(draft: ManualNodeDraft): Promise<SessionStatus> {

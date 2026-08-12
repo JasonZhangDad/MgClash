@@ -14,11 +14,11 @@ use magies_domain::{
     TimestampMillis,
 };
 use magies_profiles::{
-    CredentialCodec, CredentialCodecError, DnsConfigError, DnsProfile, LocalHttpProfile,
-    LocalSocksProfile, ManualNodeDraft, ManualNodeDraftError, ManualNodeStoreError, NodeGroup,
-    NodeGroupStoreError, NodeOrderStoreError, ShareLinkParseError, ShareLinkParser,
-    SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore, SqliteSubscriptionStore,
-    StoredNodeCredential, SubscriptionTransactionError,
+    BulkImportError, BulkNodeImportParser, CredentialCodec, CredentialCodecError, DnsConfigError,
+    DnsProfile, LocalHttpProfile, LocalSocksProfile, ManualNodeDraft, ManualNodeDraftError,
+    ManualNodeStoreError, NodeGroup, NodeGroupStoreError, NodeOrderStoreError, ShareLinkParseError,
+    ShareLinkParser, SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore,
+    SqliteSubscriptionStore, StoredNodeCredential, SubscriptionTransactionError,
 };
 use magies_routing::{RouteProfile, RoutingMode};
 use magies_session::{
@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::core_control::describe;
 use crate::dns_settings::{DnsSettings, DnsSettingsStoreError, SqliteDnsSettingsStore};
 use crate::route_settings::{
     RouteSettings, RouteSettingsError, RouteSettingsStoreError, SqliteRouteSettingsStore,
@@ -78,6 +79,27 @@ impl SessionDefaults {
     fn mode(&self) -> &'static str {
         routing_mode_name(self.route.mode())
     }
+}
+
+/// What one bulk import produced, as the UI reports it back to the user.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkImportReport {
+    pub imported: usize,
+    /// Lines dropped because the same node appeared earlier in the same body.
+    pub duplicates: usize,
+    pub failures: Vec<BulkImportLineReport>,
+    pub status: SessionStatus,
+}
+
+/// One line the import could not use, with the reason already flattened.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkImportLineReport {
+    /// Absent when the failure belongs to no single line, such as a node that
+    /// parsed but could not be persisted.
+    pub line: Option<usize>,
+    pub message: String,
 }
 
 /// The selected node as the dashboard renders it. Credentials never appear here.
@@ -330,6 +352,96 @@ where
             .build(id, credential_ref)
             .map_err(SessionCommandError::ManualNodeDraft)?;
         self.store_new_node(node, &credential)
+    }
+
+    /// Imports every sharing link in a pasted or opened body.
+    ///
+    /// Unlike [`Self::import_node`], a line that fails to parse or persist is
+    /// reported rather than aborting the batch, and an existing selection is
+    /// preserved: pasting a list never moves the user off the node they chose.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error only when the body as a whole is unreadable.
+    pub fn import_nodes(
+        &mut self,
+        content: &[u8],
+    ) -> Result<BulkImportReport, SessionCommandError<C::Error, P::Error>> {
+        if self.session.is_running() {
+            return Err(SessionCommandError::SessionActive);
+        }
+        let outcome = BulkNodeImportParser
+            .parse(content)
+            .map_err(SessionCommandError::BulkImport)?;
+
+        // Parse failures already arrive in line order; persistence failures are
+        // appended after them because they belong to no particular line.
+        let mut failures: Vec<BulkImportLineReport> = outcome
+            .failures
+            .iter()
+            .map(|failure| BulkImportLineReport {
+                line: Some(failure.line),
+                message: describe(&failure.reason),
+            })
+            .collect();
+        let mut imported = Vec::new();
+        for parsed in outcome.nodes {
+            let (node, credential) = parsed.into_parts();
+            match self.store_imported_node(&node, &credential) {
+                Ok(()) => imported.push(node),
+                Err(message) => failures.push(BulkImportLineReport {
+                    line: None,
+                    message,
+                }),
+            }
+        }
+
+        // Leave an existing choice alone, but do not strand the user with a
+        // full list and nothing selected.
+        if self.node.is_none()
+            && let Some(first) = imported.first()
+        {
+            self.manual_nodes
+                .save_and_select(first)
+                .map_err(SessionCommandError::NodeStore)?;
+            self.subscription_nodes
+                .clear_selected_node()
+                .map_err(SessionCommandError::SubscriptionNodeStore)?;
+            self.node = Some(first.clone());
+        }
+
+        Ok(BulkImportReport {
+            imported: imported.len(),
+            duplicates: outcome.duplicates,
+            failures,
+            status: self.status(),
+        })
+    }
+
+    /// Persists one node of a batch, rolling its secret back on failure.
+    ///
+    /// Returns the message to report against the line instead of aborting the
+    /// whole import.
+    fn store_imported_node(
+        &mut self,
+        node: &ProxyNode,
+        credential: &StoredNodeCredential,
+    ) -> Result<(), String> {
+        let secret = CredentialCodec::encode(credential).map_err(|error| describe(&error))?;
+        self.session
+            .secret_store()
+            .put(&node.credential_ref, &secret)
+            .map_err(|error| describe(&error))?;
+        if let Err(store) = self.manual_nodes.save(node) {
+            let message = describe(&store);
+            return Err(
+                match self.session.secret_store().delete(&node.credential_ref) {
+                    Ok(()) => message,
+                    Err(secret) => format!("{message}; {}", describe(&secret)),
+                },
+            );
+        }
+        Ok(())
     }
 
     /// Persists a freshly built node and its credential, rolling the secret back
@@ -872,6 +984,8 @@ where
     ShareLink(#[source] ShareLinkParseError),
     #[error("invalid manual node settings")]
     ManualNodeDraft(#[source] ManualNodeDraftError),
+    #[error("the imported node list could not be read")]
+    BulkImport(#[source] BulkImportError),
     #[error("failed to encode the node credential")]
     Credential(#[source] CredentialCodecError),
     #[error("failed to save the node credential")]
@@ -925,6 +1039,7 @@ where
             Self::InvalidNode(_) => "invalid_node",
             Self::ShareLink(_) => "invalid_share_link",
             Self::ManualNodeDraft(_) => "invalid_manual_node",
+            Self::BulkImport(_) => "invalid_node_list",
             Self::Credential(_) => "credential_encode_failed",
             Self::Secret(_) | Self::DeleteSecret(_) => "secret_store_failed",
             Self::NodeStore(ManualNodeStoreError::NodeNotFound { .. })

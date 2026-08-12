@@ -19,6 +19,7 @@ import {
   editNode,
   exportDiagnostics,
   importNode,
+  importNodes,
   isCommandError,
   loadNodeGroups,
   loadNodes,
@@ -35,6 +36,7 @@ import {
   testAllNodes,
   testNode,
   testUrl,
+  type BulkImportReport,
   type NodeSummary,
   type NodeGroupSummary,
   type NodeTestResult,
@@ -187,6 +189,8 @@ export default function App() {
   const [uri, setUri] = useState("");
   const [createForm, setCreateForm] =
     useState<ManualNodeForm>(emptyManualNodeForm);
+  const [bulkText, setBulkText] = useState("");
+  const [bulkReport, setBulkReport] = useState<BulkImportReport | null>(null);
   const [subscriptionName, setSubscriptionName] = useState("");
   const [subscriptionUrl, setSubscriptionUrl] = useState("");
   const [subscriptionInterval, setSubscriptionInterval] = useState("60");
@@ -473,6 +477,47 @@ export default function App() {
       setBusy(false);
     }
   }, [uri]);
+
+  const runBulkImport = useCallback(async (content: string) => {
+    if (content.trim() === "") {
+      setError("请先粘贴节点链接或选择文件");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setExportedTo(null);
+    setBulkReport(null);
+    try {
+      const report = await importNodes(content);
+      setStatus(report.status);
+      setNodes(await loadNodes());
+      setBulkReport(report);
+      if (report.imported > 0) {
+        setBulkText("");
+      }
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const onImportFile = useCallback(
+    async (file: File | undefined) => {
+      if (!file) {
+        return;
+      }
+      let content: string;
+      try {
+        content = await file.text();
+      } catch {
+        setError("无法读取所选文件");
+        return;
+      }
+      await runBulkImport(content);
+    },
+    [runBulkImport],
+  );
 
   const updateCreateForm = useCallback(
     (changes: Partial<ManualNodeForm>) => {
@@ -1770,6 +1815,69 @@ export default function App() {
             导入
           </button>
         </div>
+
+        <h2>批量导入</h2>
+
+        <p className="hint">
+          可粘贴多行分享链接，或整体 Base64 的订阅正文。批量导入不会改变当前选中的节点。
+        </p>
+
+        <textarea
+          aria-label="批量节点列表"
+          rows={4}
+          value={bulkText}
+          disabled={busy || connected}
+          placeholder="每行一个链接，或粘贴 Base64 订阅正文"
+          onChange={(event) => setBulkText(event.target.value)}
+        />
+
+        <div className="actions">
+          <button
+            type="button"
+            disabled={busy || connected}
+            onClick={() => void runBulkImport(bulkText)}
+          >
+            批量导入
+          </button>
+          <label className="file-import">
+            从文件导入
+            <input
+              aria-label="从文件导入节点"
+              type="file"
+              accept=".txt,.text,text/plain"
+              disabled={busy || connected}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                // Clear the value so picking the same file twice still fires.
+                event.target.value = "";
+                void onImportFile(file);
+              }}
+            />
+          </label>
+        </div>
+
+        {bulkReport !== null && (
+          <div className="bulk-report" role="status" aria-label="批量导入结果">
+            <p>
+              成功导入 {bulkReport.imported} 个
+              {bulkReport.duplicates > 0 &&
+                `，跳过 ${bulkReport.duplicates} 个重复`}
+              {bulkReport.failures.length > 0 &&
+                `，${bulkReport.failures.length} 行失败`}
+            </p>
+            {bulkReport.failures.length > 0 && (
+              <ul>
+                {bulkReport.failures.map((failure, index) => (
+                  <li key={`${failure.line ?? "none"}-${index}`}>
+                    {failure.line === null
+                      ? failure.message
+                      : `第 ${failure.line} 行：${failure.message}`}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
 
         <h2>手动创建节点</h2>
 
