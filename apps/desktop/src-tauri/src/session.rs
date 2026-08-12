@@ -21,10 +21,10 @@ use magies_profiles::{
     CoreSelectionError, CredentialCodec, CredentialCodecError, DnsConfigError, DnsProfile,
     LocalHttpProfile, LocalSocksProfile, ManualNodeDraft, ManualNodeDraftError,
     ManualNodeStoreError, NodeFingerprint, NodeGroup, NodeGroupStoreError, NodeOrderStoreError,
-    ShareLinkParseError, ShareLinkParser, ShareLinkSerializer, ShareLinkSerializerError,
-    SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore, SqliteSubscriptionStore,
-    StoredNodeCredential, SubscriptionTransactionError, TunProfile, TunProfileError, core_name,
-    node_fingerprint,
+    ShareLinkParseError, ShareLinkParser, ShareLinkQrCode, ShareLinkQrError, ShareLinkSerializer,
+    ShareLinkSerializerError, SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore,
+    SqliteSubscriptionStore, StoredNodeCredential, SubscriptionTransactionError, TunProfile,
+    TunProfileError, core_name, node_fingerprint,
 };
 use magies_routing::{RouteProfile, RoutingMode};
 use magies_session::{
@@ -772,6 +772,24 @@ where
             .map_err(SessionCommandError::ShareLinkExport)
     }
 
+    /// One node's sharing link rendered as a scannable QR code.
+    ///
+    /// The code *is* the credential, in the same way the link is: anyone who
+    /// photographs it has the node. It is only ever shown on the user's own
+    /// screen, at their request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the export error for a node with no representable link, and the
+    /// renderer's error when the link cannot be encoded.
+    pub fn node_qr_code(
+        &self,
+        id: Uuid,
+    ) -> Result<String, SessionCommandError<C::Error, P::Error>> {
+        let link = self.export_node_link(id)?;
+        ShareLinkQrCode::svg(&link).map_err(SessionCommandError::ShareLinkQr)
+    }
+
     /// Every stored node as the shared model, manual and subscription alike.
     fn stored_nodes(&self) -> Result<Vec<ProxyNode>, SessionCommandError<C::Error, P::Error>> {
         let mut nodes = self
@@ -1362,6 +1380,8 @@ where
     LocalProxyPort(#[source] LocalProxyPortError),
     #[error("this node has no sharing link")]
     ShareLinkExport(#[source] ShareLinkSerializerError),
+    #[error("the sharing link could not be drawn as a QR code")]
+    ShareLinkQr(#[source] ShareLinkQrError),
     #[error("invalid manual node settings")]
     ManualNodeDraft(#[source] ManualNodeDraftError),
     #[error("the imported node list could not be read")]
@@ -1422,6 +1442,7 @@ where
             Self::CoreSelection(_) => "core_unavailable",
             Self::LocalProxyPort(_) => "local_proxy_port_unavailable",
             Self::ShareLinkExport(_) => "share_link_unavailable",
+            Self::ShareLinkQr(_) => "qr_code_unavailable",
             Self::TunUnavailable | Self::TunProfile(_) => "tun_unavailable",
             Self::BulkImport(_) => "invalid_node_list",
             Self::Credential(_) => "credential_encode_failed",

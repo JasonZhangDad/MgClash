@@ -1581,3 +1581,29 @@ fn removing_duplicates_leaves_a_list_without_repeats_untouched() {
     assert_eq!(service.remove_duplicate_nodes().unwrap(), 0);
     assert_eq!(service.nodes().unwrap().len(), 2);
 }
+
+#[test]
+fn a_node_is_drawn_as_a_qr_code_of_its_own_link() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    let id = service.nodes().unwrap()[0].id;
+
+    let svg = service.node_qr_code(id).unwrap();
+
+    assert!(svg.contains("</svg>"), "{svg}");
+    // The code encodes the same link the export produces, so a scan and a paste
+    // import the same node.
+    assert!(service.export_node_link(id).is_ok());
+}
+
+#[test]
+fn drawing_a_code_for_an_unknown_node_is_a_typed_not_found() {
+    let (service, _runtime, _fail_start) = service();
+
+    assert!(matches!(
+        service.node_qr_code(Uuid::new_v4()),
+        Err(SessionCommandError::NodeStore(
+            ManualNodeStoreError::NodeNotFound { .. }
+        ))
+    ));
+}

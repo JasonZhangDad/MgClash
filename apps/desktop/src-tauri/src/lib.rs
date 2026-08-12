@@ -28,8 +28,8 @@ use magies_domain::TimestampMillis;
 use magies_platform::network_path::NetworkPathReader;
 use magies_platform::{TargetPlatform, TunAvailability};
 use magies_profiles::{
-    ManualNodeDraft, SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore,
-    SqliteSubscriptionStore,
+    ManualNodeDraft, ShareLinkQrScanError, ShareLinkQrScanner, SqliteManualNodeStore,
+    SqliteNodeGroupStore, SqliteNodeOrderStore, SqliteSubscriptionStore,
 };
 use magies_session::{DesktopSession, NetworkWatcher, RecoveryOutcome, TcpHealthProbe};
 use magies_storage::PlatformSecretStore;
@@ -912,6 +912,34 @@ fn session_node_traffic(state: State<'_, AppState>) -> HashMap<String, NodeTraff
         .collect()
 }
 
+/// Reads a sharing link out of a QR code image the user picked.
+///
+/// Takes the bytes rather than a path: the webview reads the file the user chose
+/// through the picker, and handing the shell a path would let it read anything.
+#[tauri::command]
+fn session_read_qr_code(image: &[u8]) -> Result<String, CommandError> {
+    ShareLinkQrScanner::read(image).map_err(|error| CommandError {
+        code: match error {
+            ShareLinkQrScanError::UnreadableImage { .. } => "qr_image_unreadable",
+            ShareLinkQrScanError::NoCodeFound => "qr_code_not_found",
+        },
+        message: describe(&error),
+    })
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State by value"
+)]
+fn session_node_qr_code(id: String, state: State<'_, AppState>) -> Result<String, CommandError> {
+    let id = parse_node_id(&id)?;
+    state
+        .service()
+        .node_qr_code(id)
+        .map_err(|error| command_error(&error))
+}
+
 #[tauri::command]
 #[expect(
     clippy::needless_pass_by_value,
@@ -1509,6 +1537,8 @@ pub fn run() {
             session_delete_node,
             session_export_node_link,
             session_clone_node,
+            session_node_qr_code,
+            session_read_qr_code,
             session_node_traffic,
             session_remove_duplicate_nodes,
             session_connect,

@@ -360,6 +360,17 @@ export function loadNodeTraffic(): Promise<Record<string, NodeTraffic>> {
   return invoke<Record<string, NodeTraffic>>("session_node_traffic");
 }
 
+/** Reads a sharing link out of a QR code image the user picked. */
+export function readQrCode(image: Uint8Array): Promise<string> {
+  return invoke<string>("session_read_qr_code", { image: [...image] });
+}
+
+/** The node's sharing link as an SVG QR code. The code carries the credential,
+ * so it is only ever drawn on the user's own screen. */
+export function nodeQrCode(id: string): Promise<string> {
+  return invoke<string>("session_node_qr_code", { id });
+}
+
 /** Duplicates a manual node, credential and all. Returns the new list. */
 export function cloneNode(id: string): Promise<NodeSummary[]> {
   return invoke<NodeSummary[]>("session_clone_node", { id });
