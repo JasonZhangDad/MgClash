@@ -1,5 +1,6 @@
 //! `MgClash` Tauri desktop shell.
 
+pub mod app_settings;
 pub mod core_control;
 pub mod diagnostics;
 pub mod dns_settings;
@@ -35,6 +36,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
+use crate::app_settings::{AppSettings, SqliteAppSettingsStore};
 use crate::core_control::{LazySingBoxControl, describe};
 use crate::diagnostics::DiagnosticBundle;
 use crate::dns_settings::{DnsSettings, SqliteDnsSettingsStore};
@@ -225,6 +227,10 @@ struct AppState {
     traffic: Arc<Mutex<SqliteTrafficCounter>>,
     system_proxy: PlatformProxyControl,
     logs: Arc<LogBuffer>,
+    settings_store: Mutex<SqliteAppSettingsStore>,
+    /// Cached so the window and exit handlers can read the settings without
+    /// touching `SQLite` on every event.
+    settings: Mutex<AppSettings>,
     /// Where an exported diagnostic bundle is written.
     export_directory: PathBuf,
     tray: TrayUi,
@@ -501,11 +507,19 @@ fn toggle_from_tray(app: &AppHandle) -> Result<(), CommandError> {
         .startup_status()
         .map_err(|error| system_proxy_error(&error))?;
     ensure_system_proxy_ready(startup_status)?;
-    state
-        .service()
-        .connect()
-        .map(|_| ())
-        .map_err(|error| command_error(&error))
+    let mut service = state.service();
+    let status = service.connect().map_err(|error| command_error(&error))?;
+    // The tray is a second way in; without this the Core's output would be
+    // dropped for every session started from the menu.
+    if let Some(output) = service.take_core_output() {
+        spawn_core_log_reader(output, state.logs.clone());
+    }
+    drop(service);
+    tracing::info!(
+        node = status.node.as_ref().map_or("", |node| &node.name),
+        "session connected from the tray"
+    );
+    Ok(())
 }
 
 fn disconnect_for_quit(app: &AppHandle) -> Result<(), CommandError> {
@@ -895,6 +909,55 @@ fn session_connect(state: State<'_, AppState>) -> Result<SessionStatus, CommandE
 #[tauri::command]
 #[expect(
     clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State by value"
+)]
+fn app_settings(state: State<'_, AppState>) -> AppSettings {
+    *lock(&state.settings)
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
+fn set_app_settings(
+    app: AppHandle,
+    settings: AppSettings,
+    state: State<'_, AppState>,
+) -> Result<AppSettings, CommandError> {
+    // Applied before saving: a login item the OS refused must not be recorded
+    // as enabled, or the switch would lie after the next launch.
+    apply_launch_at_login(&app, settings.launch_at_login)?;
+    lock(&state.settings_store)
+        .save(settings)
+        .map_err(|error| CommandError {
+            code: "app_settings_store_failed",
+            message: describe(&error),
+        })?;
+    *lock(&state.settings) = settings;
+    tracing::info!("application settings updated");
+    Ok(settings)
+}
+
+/// Registers or removes the OS login item.
+fn apply_launch_at_login(app: &AppHandle, enabled: bool) -> Result<(), CommandError> {
+    use tauri_plugin_autostart::ManagerExt;
+
+    let manager = app.autolaunch();
+    let result = if enabled {
+        manager.enable()
+    } else {
+        manager.disable()
+    };
+    result.map_err(|error| CommandError {
+        code: "launch_at_login_failed",
+        message: describe(&error),
+    })
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
     reason = "Tauri commands receive State and deserialized arguments by value"
 )]
 fn session_logs(
@@ -1174,6 +1237,8 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         SqliteRouteSettingsStore::open(&node_database)?,
         SqliteDnsSettingsStore::open(&node_database)?,
     )?));
+    let settings_store = SqliteAppSettingsStore::open(&node_database)?;
+    let settings = settings_store.load()?;
     let initial_tray_model = {
         let (service, traffic) = (lock(&service), lock(&traffic).snapshot());
         menu_model(&service.status(), &service.nodes()?, traffic)
@@ -1185,17 +1250,63 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         traffic: traffic.clone(),
         system_proxy,
         logs: logs.clone(),
+        settings_store: Mutex::new(settings_store),
+        settings: Mutex::new(settings),
         export_directory: data_directory,
         tray,
         allow_exit: AtomicBool::new(false),
         exit_in_progress: AtomicBool::new(false),
     });
+    if settings.connect_on_launch {
+        connect_on_launch(app.handle());
+    }
     let probe = TcpHealthProbe::new(health_address, PROBE_TIMEOUT);
     spawn_recovery_loop(service.clone(), probe);
     spawn_subscription_update_loop(subscriptions.clone(), service.clone());
     spawn_traffic_loop(service.clone(), traffic);
     spawn_tray_refresh_loop(app.handle().clone());
     Ok(())
+}
+
+/// Starts a session on launch without blocking the setup hook.
+///
+/// A failure here is logged rather than surfaced: the user did not press
+/// anything, so an error dialog on startup would be noise. The panel and the
+/// tray both show the session stayed down.
+fn connect_on_launch(app: &AppHandle) {
+    let app = app.clone();
+    thread::spawn(move || {
+        let state = app.state::<AppState>();
+        let startup_status = match state.system_proxy.startup_status() {
+            Ok(status) => status,
+            Err(error) => {
+                tracing::warn!("connect on launch skipped: {}", describe(&error));
+                return;
+            }
+        };
+        if !matches!(startup_status, SystemProxyStartupStatus::Clean) {
+            tracing::warn!("connect on launch skipped: System Proxy needs recovery first");
+            return;
+        }
+
+        let mut service = state.service();
+        match service.connect() {
+            Ok(status) => {
+                if let Some(output) = service.take_core_output() {
+                    spawn_core_log_reader(output, state.logs.clone());
+                }
+                drop(service);
+                tracing::info!(
+                    node = status.node.as_ref().map_or("", |node| &node.name),
+                    "connected on launch"
+                );
+            }
+            Err(error) => {
+                drop(service);
+                tracing::warn!("connect on launch failed: {}", describe(&error));
+            }
+        }
+    });
 }
 
 /// Routes `tracing` events into the buffer the log panel reads.
@@ -1223,13 +1334,22 @@ fn install_log_subscriber(logs: Arc<LogBuffer>) {
 /// Panics when Tauri cannot initialize or run the desktop shell.
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(setup_app)
         .on_window_event(|window, event| {
             if window.label() == "main" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    if let Err(error) = window.hide() {
-                        tracing::warn!("main window could not be hidden: {error}");
+                    // With close-to-tray off, the close button really quits, so
+                    // the default handling is left alone and the app exits
+                    // through the same cleanup path as the tray's Quit item.
+                    if lock(&window.state::<AppState>().settings).close_to_tray {
+                        api.prevent_close();
+                        if let Err(error) = window.hide() {
+                            tracing::warn!("main window could not be hidden: {error}");
+                        }
                     }
                 }
             }
@@ -1257,6 +1377,8 @@ pub fn run() {
             session_disconnect,
             session_logs,
             session_clear_logs,
+            app_settings,
+            set_app_settings,
             system_proxy_startup_status,
             system_proxy_recover,
             system_proxy_dismiss,

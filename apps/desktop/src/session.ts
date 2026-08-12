@@ -36,6 +36,13 @@ export type LogLevel = "error" | "warn" | "info" | "debug" | "trace";
 
 export type LogSource = "app" | "core";
 
+export interface AppSettings {
+  closeToTray: boolean;
+  connectOnLaunch: boolean;
+  launchAtLogin: boolean;
+  logLevel: LogLevel;
+}
+
 export interface LogEntry {
   level: LogLevel;
   message: string;
@@ -218,6 +225,14 @@ export function setDnsSettings(settings: DnsSettings): Promise<SessionStatus> {
 
 export function importNode(uri: string): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_import_node", { uri });
+}
+
+export function loadAppSettings(): Promise<AppSettings> {
+  return invoke<AppSettings>("app_settings");
+}
+
+export function saveAppSettings(settings: AppSettings): Promise<AppSettings> {
+  return invoke<AppSettings>("set_app_settings", { settings });
 }
 
 export function loadLogs(
