@@ -201,18 +201,24 @@ mod macos {
     use super::{PlatformProxySetupError, describe};
 
     pub const NETWORK_SERVICE_VARIABLE: &str = "MAGIES_MACOS_NETWORK_SERVICE";
-    const DEFAULT_NETWORK_SERVICE: &str = "Wi-Fi";
 
-    /// Builds the macOS adapter for the configured network service.
+    /// Builds the macOS adapter.
+    ///
+    /// Without an explicit override the adapter follows the default route, so a
+    /// host on Ethernet or a tethered connection is configured correctly instead
+    /// of the app writing proxy settings to an idle Wi-Fi service. Resolution
+    /// happens per operation, not here, so this cannot fail for a host that is
+    /// merely offline right now.
     ///
     /// # Errors
     ///
-    /// Returns a setup error when the configured service name is empty.
+    /// Returns a setup error when the override is set but empty.
     pub fn adapter() -> Result<MacOsSystemProxyAdapter, PlatformProxySetupError> {
-        let network_service = std::env::var(NETWORK_SERVICE_VARIABLE)
-            .unwrap_or_else(|_| DEFAULT_NETWORK_SERVICE.to_owned());
-        MacOsSystemProxyAdapter::new(&network_service)
-            .map_err(|source| PlatformProxySetupError::new(describe(&source)))
+        match std::env::var(NETWORK_SERVICE_VARIABLE) {
+            Ok(network_service) => MacOsSystemProxyAdapter::new(&network_service)
+                .map_err(|source| PlatformProxySetupError::new(describe(&source))),
+            Err(_) => Ok(MacOsSystemProxyAdapter::for_default_route()),
+        }
     }
 }
 

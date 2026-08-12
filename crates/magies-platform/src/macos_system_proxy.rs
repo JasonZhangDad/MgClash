@@ -9,10 +9,19 @@ use serde::{Deserialize, Serialize};
 use crate::system_proxy::{PacSetting, ProxyEndpoint, ProxySetting, SystemProxyState};
 
 const NETWORK_SETUP: &str = "networksetup";
+const ROUTE: &str = "route";
 
 pub struct MacOsSystemProxyAdapter {
-    network_service: String,
+    service: NetworkServiceSource,
     executor: Arc<dyn CommandExecutor>,
+}
+
+/// Which macOS network service an adapter acts on.
+enum NetworkServiceSource {
+    /// A name chosen by the caller, used verbatim.
+    Fixed(String),
+    /// Whichever service owns the default route at the time of the operation.
+    DefaultRoute,
 }
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
@@ -44,13 +53,29 @@ impl std::fmt::Debug for MacOsSystemProxySnapshot {
 }
 
 impl MacOsSystemProxyAdapter {
-    /// Creates an adapter for one macOS network service, such as `Wi-Fi`.
+    /// Creates an adapter pinned to one macOS network service, such as `Wi-Fi`.
     ///
     /// # Errors
     ///
     /// Returns an error when the network service name is empty.
     pub fn new(network_service: &str) -> Result<Self, MacOsSystemProxyError> {
         Self::with_executor(network_service, Arc::new(ProcessCommandExecutor))
+    }
+
+    /// Creates an adapter that targets whichever network service currently owns
+    /// the default route.
+    ///
+    /// The service is resolved on each operation rather than here, so a host
+    /// that is offline at startup still works once it has a network, and moving
+    /// from Wi-Fi to Ethernet mid-session configures the service actually in
+    /// use. Recovery is unaffected: a snapshot records the service it captured
+    /// and [`Self::apply_snapshot`] restores that one.
+    #[must_use]
+    pub fn for_default_route() -> Self {
+        Self {
+            service: NetworkServiceSource::DefaultRoute,
+            executor: Arc::new(ProcessCommandExecutor),
+        }
     }
 
     fn with_executor(
@@ -63,8 +88,54 @@ impl MacOsSystemProxyAdapter {
         }
 
         Ok(Self {
-            network_service: network_service.to_owned(),
+            service: NetworkServiceSource::Fixed(network_service.to_owned()),
             executor,
+        })
+    }
+
+    /// Returns the network service this adapter should act on right now.
+    fn resolve_service(&self) -> Result<String, MacOsSystemProxyError> {
+        match &self.service {
+            NetworkServiceSource::Fixed(name) => Ok(name.clone()),
+            NetworkServiceSource::DefaultRoute => {
+                let interface = self.default_route_interface()?;
+                self.service_for_interface(&interface)
+            }
+        }
+    }
+
+    /// Reads the interface backing the default route, such as `en0`.
+    fn default_route_interface(&self) -> Result<String, MacOsSystemProxyError> {
+        let output = self
+            .executor
+            .execute(ROUTE, &["-n", "get", "default"])
+            .map_err(|source| MacOsSystemProxyError::DefaultRouteCommandStartFailed { source })?;
+        if output.status != Some(0) {
+            return Err(MacOsSystemProxyError::DefaultRouteCommandFailed {
+                status: output.status,
+            });
+        }
+        parse_default_route_interface(&output.stdout)
+            .ok_or(MacOsSystemProxyError::NoDefaultRouteInterface)
+    }
+
+    /// Maps a BSD interface name back to the network service that owns it.
+    fn service_for_interface(&self, interface: &str) -> Result<String, MacOsSystemProxyError> {
+        let output = self
+            .executor
+            .execute(NETWORK_SETUP, &["-listnetworkserviceorder"])
+            .map_err(
+                |source| MacOsSystemProxyError::NetworkServicesCommandStartFailed { source },
+            )?;
+        if output.status != Some(0) {
+            return Err(MacOsSystemProxyError::NetworkServicesCommandFailed {
+                status: output.status,
+            });
+        }
+        parse_service_for_interface(&output.stdout, interface).ok_or_else(|| {
+            MacOsSystemProxyError::NoServiceForInterface {
+                interface: interface.to_owned(),
+            }
         })
     }
 
@@ -74,27 +145,41 @@ impl MacOsSystemProxyAdapter {
     ///
     /// Returns a typed command or parse error without including command output.
     pub fn read(&self) -> Result<SystemProxyState, MacOsSystemProxyError> {
-        let http = self.read_proxy("-getwebproxy", MacOsProxyOperation::ReadHttp)?;
-        let https = self.read_proxy("-getsecurewebproxy", MacOsProxyOperation::ReadHttps)?;
-        let socks = self.read_proxy("-getsocksfirewallproxy", MacOsProxyOperation::ReadSocks)?;
-        let pac_output = self.run(
-            MacOsProxyOperation::ReadPac,
-            &["-getautoproxyurl", &self.network_service],
+        self.read_service(&self.resolve_service()?)
+    }
+
+    fn read_service(&self, service: &str) -> Result<SystemProxyState, MacOsSystemProxyError> {
+        let http = self.read_proxy(service, "-getwebproxy", MacOsProxyOperation::ReadHttp)?;
+        let https = self.read_proxy(
+            service,
+            "-getsecurewebproxy",
+            MacOsProxyOperation::ReadHttps,
         )?;
+        let socks = self.read_proxy(
+            service,
+            "-getsocksfirewallproxy",
+            MacOsProxyOperation::ReadSocks,
+        )?;
+        let pac_output = self.run(MacOsProxyOperation::ReadPac, &["-getautoproxyurl", service])?;
         let pac = parse_pac_setting(&pac_output, MacOsProxyOperation::ReadPac)?;
 
         Ok(SystemProxyState::new(http, https, socks, pac))
     }
 
-    /// Captures the configured network service and all managed proxy values.
+    /// Captures the service in use right now and all its managed proxy values.
+    ///
+    /// The captured name is what recovery later restores, so it must be the
+    /// service actually read here rather than whichever one is active later.
     ///
     /// # Errors
     ///
     /// Returns a typed command or parse error.
     pub fn read_snapshot(&self) -> Result<MacOsSystemProxySnapshot, MacOsSystemProxyError> {
+        let service = self.resolve_service()?;
+        let state = self.read_service(&service)?;
         Ok(MacOsSystemProxySnapshot {
-            network_service: self.network_service.clone(),
-            state: self.read()?,
+            network_service: service,
+            state,
         })
     }
 
@@ -107,25 +192,36 @@ impl MacOsSystemProxyAdapter {
     ///
     /// Returns immediately when a `networksetup` command fails.
     pub fn apply(&self, state: &SystemProxyState) -> Result<(), MacOsSystemProxyError> {
+        self.apply_service(&self.resolve_service()?, state)
+    }
+
+    fn apply_service(
+        &self,
+        service: &str,
+        state: &SystemProxyState,
+    ) -> Result<(), MacOsSystemProxyError> {
         self.apply_proxy(
+            service,
             state.http(),
             "-setwebproxy",
             "-setwebproxystate",
             MacOsProxyOperation::WriteHttp,
         )?;
         self.apply_proxy(
+            service,
             state.https(),
             "-setsecurewebproxy",
             "-setsecurewebproxystate",
             MacOsProxyOperation::WriteHttps,
         )?;
         self.apply_proxy(
+            service,
             state.socks(),
             "-setsocksfirewallproxy",
             "-setsocksfirewallproxystate",
             MacOsProxyOperation::WriteSocks,
         )?;
-        self.apply_pac(state.pac())
+        self.apply_pac(service, state.pac())
     }
 
     /// Restores the proxy values on the service captured in the snapshot.
@@ -137,21 +233,24 @@ impl MacOsSystemProxyAdapter {
         &self,
         snapshot: &MacOsSystemProxySnapshot,
     ) -> Result<(), MacOsSystemProxyError> {
-        Self::with_executor(&snapshot.network_service, self.executor.clone())?
-            .apply(&snapshot.state)
+        // Deliberately not resolved: recovery must undo the service that was
+        // actually modified, even if the host has since moved to another one.
+        self.apply_service(&snapshot.network_service, &snapshot.state)
     }
 
     fn read_proxy(
         &self,
+        service: &str,
         command: &str,
         operation: MacOsProxyOperation,
     ) -> Result<ProxySetting, MacOsSystemProxyError> {
-        let output = self.run(operation, &[command, &self.network_service])?;
+        let output = self.run(operation, &[command, service])?;
         parse_proxy_setting(&output, operation)
     }
 
     fn apply_proxy(
         &self,
+        service: &str,
         setting: &ProxySetting,
         configure_command: &str,
         state_command: &str,
@@ -161,42 +260,28 @@ impl MacOsSystemProxyAdapter {
             let port = endpoint.port().to_string();
             self.run(
                 operation,
-                &[
-                    configure_command,
-                    &self.network_service,
-                    endpoint.host(),
-                    &port,
-                    "off",
-                ],
+                &[configure_command, service, endpoint.host(), &port, "off"],
             )?;
         }
 
         self.run(
             operation,
-            &[
-                state_command,
-                &self.network_service,
-                on_or_off(setting.enabled()),
-            ],
+            &[state_command, service, on_or_off(setting.enabled())],
         )?;
         Ok(())
     }
 
-    fn apply_pac(&self, setting: &PacSetting) -> Result<(), MacOsSystemProxyError> {
+    fn apply_pac(&self, service: &str, setting: &PacSetting) -> Result<(), MacOsSystemProxyError> {
         if let Some(url) = setting.url() {
             self.run(
                 MacOsProxyOperation::WritePac,
-                &["-setautoproxyurl", &self.network_service, url],
+                &["-setautoproxyurl", service, url],
             )?;
         }
 
         self.run(
             MacOsProxyOperation::WritePac,
-            &[
-                "-setautoproxystate",
-                &self.network_service,
-                on_or_off(setting.enabled()),
-            ],
+            &["-setautoproxystate", service, on_or_off(setting.enabled())],
         )?;
         Ok(())
     }
@@ -300,6 +385,61 @@ fn configured_value(value: &str) -> Option<&str> {
     (!value.is_empty() && value != "(null)").then_some(value)
 }
 
+/// Pulls the interface out of `route -n get default`, whose body is a list of
+/// `  key: value` lines.
+fn parse_default_route_interface(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        (key.trim() == "interface").then(|| value.trim().to_owned())
+    })
+}
+
+/// Finds the service owning `interface` in `networksetup
+/// -listnetworkserviceorder`, whose entries look like:
+///
+/// ```text
+/// (1) Wi-Fi
+/// (Hardware Port: Wi-Fi, Device: en0)
+/// ```
+///
+/// A leading `(*)` marks a disabled service; those are skipped, because a
+/// disabled service cannot be the one carrying the default route.
+fn parse_service_for_interface(output: &str, interface: &str) -> Option<String> {
+    let mut pending: Option<String> = None;
+    for line in output.lines() {
+        let line = line.trim();
+        if let Some(device) = parse_service_device(line) {
+            if device == interface
+                && let Some(service) = pending.take()
+            {
+                return Some(service);
+            }
+            pending = None;
+        } else {
+            pending = parse_service_heading(line);
+        }
+    }
+    None
+}
+
+/// Reads `(1) Wi-Fi` as `Wi-Fi`, rejecting entries marked disabled by `(*)`.
+fn parse_service_heading(line: &str) -> Option<String> {
+    let rest = line.strip_prefix('(')?;
+    let (marker, name) = rest.split_once(')')?;
+    if marker == "*" || !marker.chars().all(|character| character.is_ascii_digit()) {
+        return None;
+    }
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
+/// Reads the `Device:` field out of `(Hardware Port: Wi-Fi, Device: en0)`.
+fn parse_service_device(line: &str) -> Option<&str> {
+    let body = line.strip_prefix('(')?.strip_suffix(')')?;
+    let device = body.split("Device:").nth(1)?.trim();
+    (!device.is_empty()).then_some(device)
+}
+
 fn parse_enabled(value: &str) -> Option<bool> {
     match value {
         "Yes" => Some(true),
@@ -371,6 +511,22 @@ pub enum MacOsSystemProxyError {
     MalformedOutput {
         operation: MacOsProxyOperation,
     },
+    DefaultRouteCommandStartFailed {
+        source: io::Error,
+    },
+    DefaultRouteCommandFailed {
+        status: Option<i32>,
+    },
+    NoDefaultRouteInterface,
+    NetworkServicesCommandStartFailed {
+        source: io::Error,
+    },
+    NetworkServicesCommandFailed {
+        status: Option<i32>,
+    },
+    NoServiceForInterface {
+        interface: String,
+    },
 }
 
 impl Display for MacOsSystemProxyError {
@@ -397,6 +553,38 @@ impl Display for MacOsSystemProxyError {
                     "networksetup returned malformed output while trying to {operation}"
                 )
             }
+            Self::DefaultRouteCommandStartFailed { source } => {
+                write!(
+                    formatter,
+                    "failed to start route to read the default route: {source}"
+                )
+            }
+            Self::DefaultRouteCommandFailed { status } => {
+                write!(
+                    formatter,
+                    "route failed to read the default route with status {status:?}"
+                )
+            }
+            Self::NoDefaultRouteInterface => formatter
+                .write_str("the host has no default route to derive a network service from"),
+            Self::NetworkServicesCommandStartFailed { source } => {
+                write!(
+                    formatter,
+                    "failed to start networksetup to list network services: {source}"
+                )
+            }
+            Self::NetworkServicesCommandFailed { status } => {
+                write!(
+                    formatter,
+                    "networksetup failed to list network services with status {status:?}"
+                )
+            }
+            Self::NoServiceForInterface { interface } => {
+                write!(
+                    formatter,
+                    "no macOS network service uses interface {interface}"
+                )
+            }
         }
     }
 }
@@ -404,10 +592,16 @@ impl Display for MacOsSystemProxyError {
 impl Error for MacOsSystemProxyError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::CommandStartFailed { source, .. } => Some(source),
+            Self::CommandStartFailed { source, .. }
+            | Self::DefaultRouteCommandStartFailed { source }
+            | Self::NetworkServicesCommandStartFailed { source } => Some(source),
             Self::EmptyNetworkService
             | Self::CommandFailed { .. }
-            | Self::MalformedOutput { .. } => None,
+            | Self::MalformedOutput { .. }
+            | Self::DefaultRouteCommandFailed { .. }
+            | Self::NoDefaultRouteInterface
+            | Self::NetworkServicesCommandFailed { .. }
+            | Self::NoServiceForInterface { .. } => None,
         }
     }
 }
@@ -461,6 +655,192 @@ mod tests {
             arguments.iter().any(|argument| argument == "Wi-Fi")
                 && arguments.iter().all(|argument| argument != "Ethernet")
         }));
+    }
+
+    const SERVICE_ORDER: &str = "An asterisk (*) denotes that a network service is disabled.\n\
+        (1) Wi-Fi\n\
+        (Hardware Port: Wi-Fi, Device: en0)\n\
+        \n\
+        (2) Thunderbolt Ethernet\n\
+        (Hardware Port: Thunderbolt Ethernet, Device: en5)\n\
+        \n\
+        (*) Bridge\n\
+        (Hardware Port: Thunderbolt Bridge, Device: bridge0)\n";
+
+    fn default_route(interface: &str) -> CommandOutput {
+        successful(&format!(
+            "   route to: default\ndestination: default\n    gateway: 192.168.1.1\n  interface: {interface}\n      flags: <UP,GATEWAY>\n"
+        ))
+    }
+
+    /// The adapter resolves the service on every operation, so each test drives
+    /// it with a route reply followed by the service list.
+    fn detecting_adapter(
+        outputs: impl IntoIterator<Item = CommandOutput>,
+    ) -> MacOsSystemProxyAdapter {
+        MacOsSystemProxyAdapter {
+            service: NetworkServiceSource::DefaultRoute,
+            executor: RecordingExecutor::returning(outputs),
+        }
+    }
+
+    #[test]
+    fn reads_the_service_that_owns_the_default_route() {
+        let executor = RecordingExecutor::returning([
+            default_route("en5"),
+            successful(SERVICE_ORDER),
+            successful("Enabled: No\nServer:\nPort: 0\n"),
+            successful("Enabled: No\nServer:\nPort: 0\n"),
+            successful("Enabled: No\nServer:\nPort: 0\n"),
+            successful("Enabled: No\nURL: (null)\n"),
+        ]);
+        let adapter = MacOsSystemProxyAdapter {
+            service: NetworkServiceSource::DefaultRoute,
+            executor: executor.clone(),
+        };
+
+        adapter.read().unwrap();
+
+        let calls = executor.calls();
+        assert_eq!(calls[0].0, "route");
+        assert_eq!(calls[1].1, vec!["-listnetworkserviceorder"]);
+        // Every networksetup read targets the detected service, not Wi-Fi.
+        assert!(
+            calls[2..]
+                .iter()
+                .all(|(_, arguments)| arguments.contains(&"Thunderbolt Ethernet".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_snapshot_records_the_service_it_actually_captured() {
+        let adapter = detecting_adapter([
+            default_route("en5"),
+            successful(SERVICE_ORDER),
+            successful("Enabled: No\nServer:\nPort: 0\n"),
+            successful("Enabled: No\nServer:\nPort: 0\n"),
+            successful("Enabled: No\nServer:\nPort: 0\n"),
+            successful("Enabled: No\nURL: (null)\n"),
+        ]);
+
+        let snapshot = adapter.read_snapshot().unwrap();
+
+        assert_eq!(snapshot.network_service(), "Thunderbolt Ethernet");
+    }
+
+    #[test]
+    fn restoring_a_snapshot_never_re_detects_the_service() {
+        // Only four outputs: if restore tried to detect, it would run out.
+        let executor = RecordingExecutor::returning([
+            successful(""),
+            successful(""),
+            successful(""),
+            successful(""),
+        ]);
+        let adapter = MacOsSystemProxyAdapter {
+            service: NetworkServiceSource::DefaultRoute,
+            executor: executor.clone(),
+        };
+        let snapshot = MacOsSystemProxySnapshot {
+            network_service: "Wi-Fi".to_owned(),
+            state: SystemProxyState::new(
+                ProxySetting::disabled(),
+                ProxySetting::disabled(),
+                ProxySetting::disabled(),
+                PacSetting::disabled(),
+            ),
+        };
+
+        SystemProxyControl::restore(&adapter, &snapshot).unwrap();
+
+        let calls = executor.calls();
+        assert!(calls.iter().all(|(program, _)| program == NETWORK_SETUP));
+        assert!(
+            calls
+                .iter()
+                .all(|(_, arguments)| arguments.contains(&"Wi-Fi".to_owned()))
+        );
+    }
+
+    #[test]
+    fn an_explicit_service_is_used_without_reading_the_route() {
+        let executor = RecordingExecutor::returning([
+            successful("Enabled: No\nServer:\nPort: 0\n"),
+            successful("Enabled: No\nServer:\nPort: 0\n"),
+            successful("Enabled: No\nServer:\nPort: 0\n"),
+            successful("Enabled: No\nURL: (null)\n"),
+        ]);
+        let adapter = MacOsSystemProxyAdapter::with_executor("Wi-Fi", executor.clone()).unwrap();
+
+        adapter.read().unwrap();
+
+        assert!(
+            executor
+                .calls()
+                .iter()
+                .all(|(program, _)| program == NETWORK_SETUP)
+        );
+    }
+
+    #[test]
+    fn reports_a_host_with_no_default_route() {
+        let adapter = detecting_adapter([successful("   route to: default\n")]);
+
+        assert!(matches!(
+            adapter.read().unwrap_err(),
+            MacOsSystemProxyError::NoDefaultRouteInterface
+        ));
+    }
+
+    #[test]
+    fn reports_an_interface_no_service_claims() {
+        let adapter = detecting_adapter([default_route("utun7"), successful(SERVICE_ORDER)]);
+
+        let error = adapter.read().unwrap_err();
+
+        assert!(matches!(
+            &error,
+            MacOsSystemProxyError::NoServiceForInterface { interface } if interface == "utun7"
+        ));
+        assert_eq!(
+            error.to_string(),
+            "no macOS network service uses interface utun7"
+        );
+    }
+
+    #[test]
+    fn reports_a_failing_route_command() {
+        let adapter = detecting_adapter([CommandOutput {
+            status: Some(1),
+            stdout: String::new(),
+        }]);
+
+        assert!(matches!(
+            adapter.read().unwrap_err(),
+            MacOsSystemProxyError::DefaultRouteCommandFailed { status: Some(1) }
+        ));
+    }
+
+    #[test]
+    fn skips_a_disabled_service_when_matching_an_interface() {
+        // bridge0 belongs only to the disabled "(*) Bridge" entry.
+        assert_eq!(parse_service_for_interface(SERVICE_ORDER, "bridge0"), None);
+        assert_eq!(
+            parse_service_for_interface(SERVICE_ORDER, "en0"),
+            Some("Wi-Fi".to_owned())
+        );
+    }
+
+    #[test]
+    fn parses_the_interface_out_of_a_route_reply() {
+        assert_eq!(
+            parse_default_route_interface("  interface: en0\n  flags: <UP>\n"),
+            Some("en0".to_owned())
+        );
+        assert_eq!(
+            parse_default_route_interface("destination: default\n"),
+            None
+        );
     }
 
     struct RecordingExecutor {
