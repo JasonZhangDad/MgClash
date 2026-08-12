@@ -22,7 +22,9 @@ import {
   importNode,
   importNodes,
   isCommandError,
+  loadAppSettings,
   loadLogs,
+  saveAppSettings,
   loadNodeGroups,
   loadNodes,
   loadSessionStatus,
@@ -38,6 +40,7 @@ import {
   testAllNodes,
   testNode,
   testUrl,
+  type AppSettings,
   type BulkImportReport,
   type LogEntry,
   type LogLevel,
@@ -196,6 +199,7 @@ export default function App() {
     useState<ManualNodeForm>(emptyManualNodeForm);
   const [bulkText, setBulkText] = useState("");
   const [bulkReport, setBulkReport] = useState<BulkImportReport | null>(null);
+  const [settings, setSettings] = useState<AppSettings | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [logLevel, setLogLevel] = useState<LogLevel>("info");
   const [logSource, setLogSource] = useState<LogSource | "all">("all");
@@ -499,6 +503,40 @@ export default function App() {
       setError(describeFailure(failure));
     }
   }, [logLevel, logSource]);
+
+  // The saved level seeds the panel filter, so the log view opens where the
+  // user left it rather than always at info.
+  useEffect(() => {
+    loadAppSettings().then(
+      (loaded) => {
+        setSettings(loaded);
+        setLogLevel(loaded.logLevel);
+      },
+      (failure: unknown) => setError(describeFailure(failure)),
+    );
+  }, []);
+
+  const onChangeSettings = useCallback(
+    async (changes: Partial<AppSettings>) => {
+      if (settings === null) {
+        return;
+      }
+      const next = { ...settings, ...changes };
+      setSettings(next);
+      try {
+        setSettings(await saveAppSettings(next));
+        if (changes.logLevel !== undefined) {
+          setLogLevel(changes.logLevel);
+        }
+      } catch (failure: unknown) {
+        // Put the stored values back so the switches never claim a state the
+        // app did not persist.
+        setSettings(settings);
+        setError(describeFailure(failure));
+      }
+    },
+    [settings],
+  );
 
   // Populate immediately on mount and whenever a filter changes; the shared
   // refresh interval only keeps an already-populated panel current.
@@ -2338,6 +2376,72 @@ export default function App() {
             </button>
           </div>
         </div>
+
+        <h2>设置</h2>
+
+        {settings === null ? (
+          <p className="hint">正在读取设置…</p>
+        ) : (
+          <div className="settings-form" aria-label="应用设置">
+            <label className="checkbox-label">
+              <input
+                aria-label="开机启动"
+                type="checkbox"
+                checked={settings.launchAtLogin}
+                disabled={busy}
+                onChange={(event) =>
+                  void onChangeSettings({ launchAtLogin: event.target.checked })
+                }
+              />
+              登录系统时自动启动 MgClash
+            </label>
+            <label className="checkbox-label">
+              <input
+                aria-label="启动时自动连接"
+                type="checkbox"
+                checked={settings.connectOnLaunch}
+                disabled={busy}
+                onChange={(event) =>
+                  void onChangeSettings({
+                    connectOnLaunch: event.target.checked,
+                  })
+                }
+              />
+              启动时自动连接上次选中的节点
+            </label>
+            <label className="checkbox-label">
+              <input
+                aria-label="关闭时最小化到托盘"
+                type="checkbox"
+                checked={settings.closeToTray}
+                disabled={busy}
+                onChange={(event) =>
+                  void onChangeSettings({ closeToTray: event.target.checked })
+                }
+              />
+              关闭窗口时最小化到托盘，而不是退出
+            </label>
+            <label>
+              默认日志级别
+              <select
+                aria-label="默认日志级别"
+                value={settings.logLevel}
+                disabled={busy}
+                onChange={(event) =>
+                  void onChangeSettings({
+                    logLevel: event.target.value as LogLevel,
+                  })
+                }
+              >
+                <option value="error">error</option>
+                <option value="warn">warn</option>
+                <option value="info">info</option>
+                <option value="debug">debug</option>
+                <option value="trace">trace</option>
+              </select>
+            </label>
+          </div>
+        )}
 
         <h2>日志</h2>
 

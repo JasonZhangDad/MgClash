@@ -13,6 +13,8 @@ const importNodeMock = vi.hoisted(() => vi.fn());
 const createNodeMock = vi.hoisted(() => vi.fn());
 const importNodesMock = vi.hoisted(() => vi.fn());
 const loadLogsMock = vi.hoisted(() => vi.fn());
+const loadAppSettingsMock = vi.hoisted(() => vi.fn());
+const saveAppSettingsMock = vi.hoisted(() => vi.fn());
 const clearLogsMock = vi.hoisted(() => vi.fn());
 const selectNodeMock = vi.hoisted(() => vi.fn());
 const deleteNodeMock = vi.hoisted(() => vi.fn());
@@ -48,7 +50,9 @@ vi.mock("./session", async () => {
     clearLogs: clearLogsMock,
     connectSession: connectSessionMock,
     createNode: createNodeMock,
+    loadAppSettings: loadAppSettingsMock,
     loadLogs: loadLogsMock,
+    saveAppSettings: saveAppSettingsMock,
     disconnectSession: disconnectSessionMock,
     dismissSystemProxyRecovery: dismissSystemProxyRecoveryMock,
     exportDiagnostics: exportDiagnosticsMock,
@@ -131,6 +135,13 @@ const SELECTED: SessionStatus = {
 
 const CONNECTED: SessionStatus = { ...SELECTED, connected: true };
 
+const DEFAULT_SETTINGS = {
+  closeToTray: true,
+  connectOnLaunch: false,
+  launchAtLogin: false,
+  logLevel: "info" as const,
+};
+
 const SUBSCRIPTION = {
   autoUpdate: true,
   enabled: true,
@@ -173,6 +184,8 @@ describe("App", () => {
     recoverSystemProxyMock.mockReset();
     dismissSystemProxyRecoveryMock.mockReset();
     loadLogsMock.mockReset();
+    loadAppSettingsMock.mockReset();
+    saveAppSettingsMock.mockReset();
     clearLogsMock.mockReset();
     loadSubscriptionsMock.mockReset();
     createSubscriptionMock.mockReset();
@@ -196,6 +209,8 @@ describe("App", () => {
     loadNodesMock.mockResolvedValue([]);
     loadNodeGroupsMock.mockResolvedValue([]);
     loadLogsMock.mockResolvedValue([]);
+    loadAppSettingsMock.mockResolvedValue(DEFAULT_SETTINGS);
+    saveAppSettingsMock.mockImplementation((value) => Promise.resolve(value));
     clearLogsMock.mockResolvedValue(undefined);
     loadSystemProxyStartupStatusMock.mockResolvedValue("clean");
     recoverSystemProxyMock.mockResolvedValue("clean");
@@ -693,6 +708,58 @@ describe("App", () => {
       timestampMs: 1_760_000_001_000,
     },
   ];
+
+  it("saves a settings toggle and keeps the new value", async () => {
+    await render();
+
+    await act(async () => createField("启动时自动连接").click());
+
+    expect(saveAppSettingsMock).toHaveBeenCalledWith({
+      ...DEFAULT_SETTINGS,
+      connectOnLaunch: true,
+    });
+    expect(createField("启动时自动连接").checked).toBe(true);
+  });
+
+  it("seeds the log filter from the saved level", async () => {
+    loadAppSettingsMock.mockResolvedValue({
+      ...DEFAULT_SETTINGS,
+      logLevel: "debug",
+    });
+    await render();
+
+    expect(createSelect("日志级别").value).toBe("debug");
+    expect(loadLogsMock).toHaveBeenCalledWith("debug", null);
+  });
+
+  it("changing the default level also changes what the panel shows", async () => {
+    await render();
+    loadLogsMock.mockClear();
+
+    await act(async () => {
+      selectValue("warn", createSelect("默认日志级别"));
+    });
+
+    expect(saveAppSettingsMock).toHaveBeenCalledWith({
+      ...DEFAULT_SETTINGS,
+      logLevel: "warn",
+    });
+    expect(loadLogsMock).toHaveBeenLastCalledWith("warn", null);
+  });
+
+  it("restores the previous value when saving settings fails", async () => {
+    saveAppSettingsMock.mockRejectedValue({
+      code: "app_settings_store_failed",
+      message: "database is locked",
+    });
+    await render();
+
+    await act(async () => createField("关闭时最小化到托盘").click());
+
+    // The switch must not claim a state the app failed to persist.
+    expect(createField("关闭时最小化到托盘").checked).toBe(true);
+    expect(container.textContent).toContain("database is locked");
+  });
 
   it("shows log entries with their source and level", async () => {
     loadLogsMock.mockResolvedValue(LOG_ENTRIES);
