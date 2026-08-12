@@ -72,9 +72,24 @@ else
   xray_digest="$(sha256sum "${xray}" | awk '{print $1}')"
 fi
 
-"${stage_script}" "${xray}" "${xray_digest}" "${xray_license}" "${destination}" "xray"
+geoip="${sandbox}/geoip.dat"
+geosite="${sandbox}/geosite.dat"
+printf 'geoip fixture' > "${geoip}"
+printf 'geosite fixture' > "${geosite}"
+
+"${stage_script}" "${xray}" "${xray_digest}" "${xray_license}" "${destination}" "xray" \
+  "${geoip}" "${geosite}"
 cmp "${xray}" "${destination}/xray"
 cmp "${xray_license}" "${destination}/LICENSE-xray"
+# Xray will not start without these when a geo routing rule is present.
+cmp "${geoip}" "${destination}/geoip.dat"
+cmp "${geosite}" "${destination}/geosite.dat"
+
+if "${stage_script}" "${xray}" "${xray_digest}" "${xray_license}" \
+  "${sandbox}/missing-geo" "xray" "${sandbox}/absent.dat" 2>/dev/null; then
+  echo "a missing Core data file must be refused" >&2
+  exit 1
+fi
 # The sing-box files staged earlier are still intact.
 cmp "${core}" "${destination}/sing-box"
 cmp "${license}" "${destination}/LICENSE-sing-box"
