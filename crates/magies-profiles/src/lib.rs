@@ -31,7 +31,7 @@ mod xray_runtime_config;
 
 pub use bulk_import::{
     BulkImportError, BulkImportFailure, BulkImportLineError, BulkImportOutcome,
-    BulkNodeImportParser, ParsedBulkNode,
+    BulkNodeImportParser, ParsedBulkNode, node_fingerprint,
 };
 pub use core_capability::{
     CoreCapability, CoreCapabilityMatrix, CorePreference, CoreRejection, CoreRequirements,

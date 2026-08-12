@@ -4,6 +4,7 @@
 //! shared node model, saves the credential in the OS store, and drives
 //! [`DesktopSession`] for connect and disconnect.
 
+use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::num::NonZeroU16;
 use std::path::Path;
@@ -18,9 +19,10 @@ use magies_profiles::{
     BulkImportError, BulkNodeImportParser, CoreCapabilityMatrix, CorePreference, CoreRequirements,
     CoreSelectionError, CredentialCodec, CredentialCodecError, DnsConfigError, DnsProfile,
     LocalHttpProfile, LocalSocksProfile, ManualNodeDraft, ManualNodeDraftError,
-    ManualNodeStoreError, NodeGroup, NodeGroupStoreError, NodeOrderStoreError, ShareLinkParseError,
-    ShareLinkParser, SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore,
-    SqliteSubscriptionStore, StoredNodeCredential, SubscriptionTransactionError, core_name,
+    ManualNodeStoreError, NodeFingerprint, NodeGroup, NodeGroupStoreError, NodeOrderStoreError,
+    ShareLinkParseError, ShareLinkParser, SqliteManualNodeStore, SqliteNodeGroupStore,
+    SqliteNodeOrderStore, SqliteSubscriptionStore, StoredNodeCredential,
+    SubscriptionTransactionError, core_name, node_fingerprint,
 };
 use magies_routing::{RouteProfile, RoutingMode};
 use magies_session::{
@@ -402,9 +404,17 @@ where
                 message: describe(&failure.reason),
             })
             .collect();
+        let stored = self.stored_fingerprints();
+        let mut duplicates = outcome.duplicates;
         let mut imported = Vec::new();
         for parsed in outcome.nodes {
             let (node, credential) = parsed.into_parts();
+            // Skipping a node already stored is what makes re-importing the same
+            // list idempotent rather than doubling it.
+            if node_fingerprint(&node, &credential).is_some_and(|print| stored.contains(&print)) {
+                duplicates += 1;
+                continue;
+            }
             match self.store_imported_node(&node, &credential) {
                 Ok(()) => imported.push(node),
                 Err(message) => failures.push(BulkImportLineReport {
@@ -430,10 +440,31 @@ where
 
         Ok(BulkImportReport {
             imported: imported.len(),
-            duplicates: outcome.duplicates,
+            duplicates,
             failures,
             status: self.status(),
         })
+    }
+
+    /// Fingerprints every node already stored, so an import can skip repeats.
+    ///
+    /// A node whose secret cannot be read is left out rather than failing the
+    /// import: the worst outcome is a duplicate row, whereas refusing would
+    /// block the user over one unrelated broken entry. The skip is logged so it
+    /// stays visible instead of silently changing behaviour.
+    fn stored_fingerprints(&self) -> HashSet<NodeFingerprint> {
+        let Ok(nodes) = self.manual_nodes.nodes() else {
+            tracing::warn!("could not read stored nodes; this import will not skip repeats");
+            return HashSet::new();
+        };
+        nodes
+            .into_iter()
+            .filter_map(|node| {
+                let secret = self.session.secret_store().get(&node.credential_ref).ok()?;
+                let credential = CredentialCodec::decode(&secret).ok()?;
+                node_fingerprint(&node, &credential)
+            })
+            .collect()
     }
 
     /// Persists one node of a batch, rolling its secret back on failure.

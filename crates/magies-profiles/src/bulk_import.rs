@@ -99,6 +99,19 @@ fn parse_line(
 }
 
 /// Derives the dedup fingerprint from the node and its encoded credential.
+///
+/// Public so callers can fingerprint nodes they already store and drop an
+/// import that would only repeat them. Returns `None` when the credential
+/// cannot be encoded, which is also the case where the node could not be
+/// persisted at all.
+#[must_use]
+pub fn node_fingerprint(
+    node: &ProxyNode,
+    credential: &StoredNodeCredential,
+) -> Option<NodeFingerprint> {
+    fingerprint(node, credential)
+}
+
 fn fingerprint(node: &ProxyNode, credential: &StoredNodeCredential) -> Option<NodeFingerprint> {
     let secret = CredentialCodec::encode(credential).ok()?;
     let identity = CredentialIdentity::from_bytes(secret.expose_secret());
