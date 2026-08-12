@@ -879,11 +879,17 @@ where
             .node
             .clone()
             .ok_or(SessionCommandError::NoSelectedNode)?;
+        // Resolved before anything starts: a preference the node cannot satisfy
+        // is an error the user sees, not a silent fallback to the other Core.
+        let core = self
+            .selected_core()
+            .map_err(SessionCommandError::CoreSelection)?;
         let profile = DesktopSessionProfile::new(
             node,
             self.defaults.dns.clone(),
             self.defaults.route.clone(),
         )
+        .with_core(core)
         .with_local_proxies(self.defaults.socks, self.defaults.http)
         .with_clash_api_port(self.defaults.clash_api_port)
         .with_system_proxy(self.defaults.system_proxy);
@@ -1043,6 +1049,8 @@ where
     InvalidNode(#[source] NodeModelError),
     #[error("failed to parse the sharing URI")]
     ShareLink(#[source] ShareLinkParseError),
+    #[error("no usable Core for this node")]
+    CoreSelection(#[source] CoreSelectionError),
     #[error("invalid manual node settings")]
     ManualNodeDraft(#[source] ManualNodeDraftError),
     #[error("the imported node list could not be read")]
@@ -1100,6 +1108,7 @@ where
             Self::InvalidNode(_) => "invalid_node",
             Self::ShareLink(_) => "invalid_share_link",
             Self::ManualNodeDraft(_) => "invalid_manual_node",
+            Self::CoreSelection(_) => "core_unavailable",
             Self::BulkImport(_) => "invalid_node_list",
             Self::Credential(_) => "credential_encode_failed",
             Self::Secret(_) | Self::DeleteSecret(_) => "secret_store_failed",

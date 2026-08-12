@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use magies_domain::{CredentialRef, ProxyProtocol};
+use magies_domain::{CoreType, CredentialRef, ProxyProtocol};
 use magies_platform::{OperatingSystem, system_proxy::SystemProxyState};
 use magies_profiles::{
     CredentialCodec, DnsProfile, DnsServer, DnsStrategy, LocalHttpProfile, LocalSocksProfile,
@@ -218,6 +218,86 @@ fn custom_local_ports_work_without_enabling_system_proxy() {
         events.lock().unwrap().as_slice(),
         ["core_start", "core_stop"]
     );
+}
+
+#[test]
+fn the_core_choice_decides_which_document_is_written() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let store = MemorySecretStore::default();
+    let profile = profile_with_stored_credential(&store).with_core(CoreType::Xray);
+    let runtime = RuntimeDirectory::new("xray-core-choice");
+    let mut session = DesktopSession::new(
+        store,
+        FakeCore::new(events.clone()),
+        FakeProxy::new(events.clone()),
+        runtime.path(),
+    );
+
+    session.start(&profile).unwrap();
+
+    let config = fs::read_to_string(session.config_path().unwrap()).unwrap();
+    // Xray names its sections differently, so these are unambiguous markers.
+    assert!(
+        config.contains("\"routing\""),
+        "expected an Xray document: {config}"
+    );
+    assert!(config.contains("freedom"));
+    assert!(!config.contains("\"route\""));
+    session.stop().unwrap();
+}
+
+#[test]
+fn sing_box_remains_the_default_core() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let store = MemorySecretStore::default();
+    let profile = profile_with_stored_credential(&store);
+    let runtime = RuntimeDirectory::new("default-core");
+    let mut session = DesktopSession::new(
+        store,
+        FakeCore::new(events.clone()),
+        FakeProxy::new(events.clone()),
+        runtime.path(),
+    );
+
+    session.start(&profile).unwrap();
+
+    let config = fs::read_to_string(session.config_path().unwrap()).unwrap();
+    assert!(
+        config.contains("\"route\""),
+        "expected a sing-box document: {config}"
+    );
+    assert!(!config.contains("freedom"));
+    session.stop().unwrap();
+}
+
+#[test]
+fn xray_refuses_a_tun_session_instead_of_dropping_the_setting() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let store = MemorySecretStore::default();
+    let profile = profile_with_stored_credential(&store)
+        .with_core(CoreType::Xray)
+        .with_system_proxy(false)
+        .with_tun(
+            TunProfile::new(OperatingSystem::Windows, false, 1_500, true, true).unwrap(),
+            false,
+        );
+    let runtime = RuntimeDirectory::new("xray-tun-refused");
+    let mut session = DesktopSession::new(
+        store,
+        FakeCore::new(events.clone()),
+        FakeProxy::new(events.clone()),
+        runtime.path(),
+    );
+
+    let error = session.start(&profile).unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "Xray cannot provide TUN mode",
+        "a dropped TUN setting would look like a working session"
+    );
+    // Nothing started, so nothing has to be rolled back.
+    assert!(events.lock().unwrap().is_empty());
 }
 
 #[test]
