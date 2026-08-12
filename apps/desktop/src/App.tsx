@@ -18,9 +18,11 @@ import {
   disconnectSession,
   editNode,
   exportDiagnostics,
+  clearLogs,
   importNode,
   importNodes,
   isCommandError,
+  loadLogs,
   loadNodeGroups,
   loadNodes,
   loadSessionStatus,
@@ -37,6 +39,9 @@ import {
   testNode,
   testUrl,
   type BulkImportReport,
+  type LogEntry,
+  type LogLevel,
+  type LogSource,
   type NodeSummary,
   type NodeGroupSummary,
   type NodeTestResult,
@@ -191,6 +196,9 @@ export default function App() {
     useState<ManualNodeForm>(emptyManualNodeForm);
   const [bulkText, setBulkText] = useState("");
   const [bulkReport, setBulkReport] = useState<BulkImportReport | null>(null);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [logLevel, setLogLevel] = useState<LogLevel>("info");
+  const [logSource, setLogSource] = useState<LogSource | "all">("all");
   const [subscriptionName, setSubscriptionName] = useState("");
   const [subscriptionUrl, setSubscriptionUrl] = useState("");
   const [subscriptionInterval, setSubscriptionInterval] = useState("60");
@@ -257,6 +265,12 @@ export default function App() {
       return undefined;
     }
     const timer = setInterval(() => {
+      loadLogs(logLevel, logSource === "all" ? null : logSource).then(
+        setLogs,
+        (failure: unknown) => {
+          console.warn("log refresh failed", failure);
+        },
+      );
       loadSessionStatus().then(setStatus, (failure: unknown) => {
         // A background refresh must not replace an error the user is reading.
         console.warn("session status refresh failed", failure);
@@ -266,7 +280,7 @@ export default function App() {
       });
     }, REFRESH_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [busy]);
+  }, [busy, logLevel, logSource]);
 
   useEffect(() => {
     let active = true;
@@ -477,6 +491,34 @@ export default function App() {
       setBusy(false);
     }
   }, [uri]);
+
+  const refreshLogs = useCallback(async () => {
+    try {
+      setLogs(await loadLogs(logLevel, logSource === "all" ? null : logSource));
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    }
+  }, [logLevel, logSource]);
+
+  // Populate immediately on mount and whenever a filter changes; the shared
+  // refresh interval only keeps an already-populated panel current.
+  useEffect(() => {
+    loadLogs(logLevel, logSource === "all" ? null : logSource).then(
+      setLogs,
+      (failure: unknown) => {
+        console.warn("log load failed", failure);
+      },
+    );
+  }, [logLevel, logSource]);
+
+  const onClearLogs = useCallback(async () => {
+    try {
+      await clearLogs();
+      setLogs([]);
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    }
+  }, []);
 
   const runBulkImport = useCallback(async (content: string) => {
     if (content.trim() === "") {
@@ -2296,6 +2338,71 @@ export default function App() {
             </button>
           </div>
         </div>
+
+        <h2>日志</h2>
+
+        <p className="hint">
+          Core 输出在写入前已脱敏，凭据字段一律替换为 [REDACTED]。最多保留最近 2000 条。
+        </p>
+
+        <div className="log-controls">
+          <label>
+            级别
+            <select
+              aria-label="日志级别"
+              value={logLevel}
+              onChange={(event) => setLogLevel(event.target.value as LogLevel)}
+            >
+              <option value="error">error</option>
+              <option value="warn">warn</option>
+              <option value="info">info</option>
+              <option value="debug">debug</option>
+              <option value="trace">trace</option>
+            </select>
+          </label>
+          <label>
+            来源
+            <select
+              aria-label="日志来源"
+              value={logSource}
+              onChange={(event) =>
+                setLogSource(event.target.value as LogSource | "all")
+              }
+            >
+              <option value="all">全部</option>
+              <option value="app">应用</option>
+              <option value="core">Core</option>
+            </select>
+          </label>
+          <button type="button" onClick={() => void refreshLogs()}>
+            刷新日志
+          </button>
+          <button type="button" onClick={() => void onClearLogs()}>
+            清空日志
+          </button>
+        </div>
+
+        {logs.length === 0 ? (
+          <p className="hint">暂无日志</p>
+        ) : (
+          <ul className="log-list" aria-label="日志列表">
+            {logs.map((entry, index) => (
+              <li
+                key={`${entry.timestampMs}-${index}`}
+                className={`log-entry log-${entry.level}`}
+              >
+                <span className="log-time">
+                  {new Date(entry.timestampMs).toLocaleTimeString()}
+                </span>
+                <span className="log-source">
+                  {entry.source === "core" ? "Core" : "应用"}
+                </span>
+                <span className="log-level">{entry.level}</span>
+                <span className="log-message">{entry.message}</span>
+              </li>
+            ))}
+          </ul>
+        )}
 
         <h2>诊断</h2>
 

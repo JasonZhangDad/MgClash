@@ -203,7 +203,10 @@ impl NodeStores {
 }
 
 /// Owns the selected node and the orchestrated session behind the commands.
-pub struct SessionService<S, C, P> {
+pub struct SessionService<S, C, P>
+where
+    C: CoreSessionControl,
+{
     session: DesktopSession<S, C, P>,
     defaults: SessionDefaults,
     node: Option<ProxyNode>,
@@ -217,6 +220,10 @@ pub struct SessionService<S, C, P> {
     dns_settings: SqliteDnsSettingsStore,
     current_dns_settings: DnsSettings,
     recovery: NetworkRecoveryPolicy,
+    /// The running Core's output, held until the shell claims it with
+    /// [`SessionService::take_core_output`]. Dropping it would discard every
+    /// line the Core prints, which is what happened before the log panel.
+    core_output: Option<C::Output>,
 }
 
 impl<S, C, P> SessionService<S, C, P>
@@ -266,6 +273,7 @@ where
             dns_settings,
             current_dns_settings,
             recovery: NetworkRecoveryPolicy::default(),
+            core_output: None,
         })
     }
 
@@ -870,10 +878,17 @@ where
         .with_clash_api_port(self.defaults.clash_api_port)
         .with_system_proxy(self.defaults.system_proxy);
 
-        self.session
+        let output = self
+            .session
             .start(&profile)
             .map_err(SessionCommandError::Session)?;
+        self.core_output = Some(output);
         Ok(self.status())
+    }
+
+    /// Hands the running Core's output stream to the caller, once.
+    pub fn take_core_output(&mut self) -> Option<C::Output> {
+        self.core_output.take()
     }
 
     /// Restores System Proxy and stops the Core, keeping the selected node.
