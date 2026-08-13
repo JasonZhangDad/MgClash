@@ -18,11 +18,14 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::http_proxy::HttpCredential;
 use crate::hysteria2::{Hysteria2Credential, Hysteria2Obfuscation, Hysteria2ObfuscationMethod};
 use crate::shadowsocks::{SUPPORTED_METHODS, ShadowsocksCredential};
+use crate::socks::SocksCredential;
 use crate::trojan::TrojanCredential;
 use crate::tuic::{TuicCongestionControl, TuicCredential, TuicUdpRelayMode};
 use crate::vmess::{VmessCredential, VmessSecurity};
+use crate::wireguard::WireGuardCredential;
 use crate::{StoredNodeCredential, VlessCredential};
 
 /// VLESS negotiates encryption at the TLS layer; the outbound generator accepts
@@ -123,9 +126,23 @@ fn resolve_transport(
             }
             Ok(None)
         }
+        StoredNodeCredential::WireGuard(_) => {
+            if transport.is_some() {
+                return Err(ManualNodeDraftError::WireGuardRejectsTransport);
+            }
+            Ok(None)
+        }
         StoredNodeCredential::Shadowsocks(_) => match transport {
             None | Some(TransportConfig::Tcp) => Ok(Some(TransportConfig::Tcp)),
             Some(_) => Err(ManualNodeDraftError::ShadowsocksRequiresTcpTransport),
+        },
+        StoredNodeCredential::Socks(_) => match transport {
+            None | Some(TransportConfig::Tcp) => Ok(Some(TransportConfig::Tcp)),
+            Some(_) => Err(ManualNodeDraftError::SocksRequiresTcpTransport),
+        },
+        StoredNodeCredential::Http(_) => match transport {
+            None | Some(TransportConfig::Tcp) => Ok(Some(TransportConfig::Tcp)),
+            Some(_) => Err(ManualNodeDraftError::HttpRequiresTcpTransport),
         },
         _ => Ok(Some(transport.unwrap_or(TransportConfig::Tcp))),
     }
@@ -143,6 +160,19 @@ fn resolve_tls(
         }
         StoredNodeCredential::Tuic(_) if !matches!(tls, Some(TlsConfig::Tls { .. })) => {
             Err(ManualNodeDraftError::TuicRequiresTls)
+        }
+        // SOCKS has no TLS layer of its own in this model.
+        StoredNodeCredential::Socks(_) if tls.is_some() => {
+            Err(ManualNodeDraftError::SocksRejectsTls)
+        }
+        // WireGuard authenticates peers by key, not by certificate.
+        StoredNodeCredential::WireGuard(_) if tls.is_some() => {
+            Err(ManualNodeDraftError::WireGuardRejectsTls)
+        }
+        // HTTP may run plain or wrapped in standard TLS, but Reality is a
+        // stream-protocol feature the HTTP outbound cannot use.
+        StoredNodeCredential::Http(_) if matches!(tls, Some(TlsConfig::Reality { .. })) => {
+            Err(ManualNodeDraftError::HttpRejectsReality)
         }
         _ => Ok(tls),
     }
@@ -190,6 +220,32 @@ pub enum ManualCredentialDraft {
         #[serde(default)]
         zero_rtt_handshake: bool,
     },
+    #[serde(rename_all = "camelCase")]
+    Socks {
+        #[serde(default)]
+        username: Option<String>,
+        #[serde(default)]
+        password: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Http {
+        #[serde(default)]
+        username: Option<String>,
+        #[serde(default)]
+        password: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    WireGuard {
+        private_key: String,
+        peer_public_key: String,
+        #[serde(default)]
+        pre_shared_key: Option<String>,
+        local_address: Vec<String>,
+        #[serde(default)]
+        mtu: Option<u32>,
+        #[serde(default)]
+        reserved: Option<[u8; 3]>,
+    },
 }
 
 impl ManualCredentialDraft {
@@ -225,6 +281,22 @@ impl ManualCredentialDraft {
                 udp_relay_mode: value.udp_relay_mode(),
                 udp_over_stream: value.udp_over_stream(),
                 zero_rtt_handshake: value.zero_rtt_handshake(),
+            },
+            StoredNodeCredential::Socks(value) => Self::Socks {
+                username: value.username().map(str::to_owned),
+                password: value.password().map(str::to_owned),
+            },
+            StoredNodeCredential::Http(value) => Self::Http {
+                username: value.username().map(str::to_owned),
+                password: value.password().map(str::to_owned),
+            },
+            StoredNodeCredential::WireGuard(value) => Self::WireGuard {
+                private_key: value.private_key().to_owned(),
+                peer_public_key: value.peer_public_key().to_owned(),
+                pre_shared_key: value.pre_shared_key().map(str::to_owned),
+                local_address: value.local_address().to_vec(),
+                mtu: value.mtu(),
+                reserved: value.reserved(),
             },
         }
     }
@@ -295,8 +367,79 @@ impl ManualCredentialDraft {
                     zero_rtt_handshake,
                 }))
             }
+            Self::Socks { username, password } => {
+                let (username, password) = build_user_pass_credential(
+                    username,
+                    password,
+                    ManualNodeDraftError::SocksPasswordRequiresUsername,
+                )?;
+                Ok(StoredNodeCredential::Socks(SocksCredential {
+                    username,
+                    password,
+                }))
+            }
+            Self::Http { username, password } => {
+                let (username, password) = build_user_pass_credential(
+                    username,
+                    password,
+                    ManualNodeDraftError::HttpPasswordRequiresUsername,
+                )?;
+                Ok(StoredNodeCredential::Http(HttpCredential {
+                    username,
+                    password,
+                }))
+            }
+            Self::WireGuard {
+                private_key,
+                peer_public_key,
+                pre_shared_key,
+                local_address,
+                mtu,
+                reserved,
+            } => {
+                let private_key = required(
+                    &private_key,
+                    ManualNodeDraftError::MissingWireGuardPrivateKey,
+                )?;
+                let peer_public_key = required(
+                    &peer_public_key,
+                    ManualNodeDraftError::MissingWireGuardPeerPublicKey,
+                )?;
+                let local_address: Vec<String> = local_address
+                    .into_iter()
+                    .map(|address| address.trim().to_owned())
+                    .filter(|address| !address.is_empty())
+                    .collect();
+                if local_address.is_empty() {
+                    return Err(ManualNodeDraftError::MissingWireGuardLocalAddress);
+                }
+                Ok(StoredNodeCredential::WireGuard(WireGuardCredential {
+                    private_key,
+                    peer_public_key,
+                    pre_shared_key: optional(pre_shared_key),
+                    local_address,
+                    mtu,
+                    reserved,
+                }))
+            }
         }
     }
+}
+
+/// Validates the optional username/password pair SOCKS and HTTP share: a
+/// username alone is fine, but a password with no username has nothing to
+/// authenticate.
+fn build_user_pass_credential(
+    username: Option<String>,
+    password: Option<String>,
+    password_requires_username: ManualNodeDraftError,
+) -> Result<(Option<String>, Option<String>), ManualNodeDraftError> {
+    let username = optional(username);
+    let password = optional(password);
+    if username.is_none() && password.is_some() {
+        return Err(password_requires_username);
+    }
+    Ok((username, password))
 }
 
 /// Optional Hysteria2 traffic obfuscation entered in the manual creation form.
@@ -357,6 +500,28 @@ pub enum ManualNodeDraftError {
     TuicRequiresTls,
     #[error("TUIC cannot set both udp_relay_mode and udp_over_stream")]
     ConflictingTuicUdpRelay,
+    #[error("SOCKS only supports the TCP transport")]
+    SocksRequiresTcpTransport,
+    #[error("SOCKS has no TLS layer")]
+    SocksRejectsTls,
+    #[error("SOCKS password requires a username")]
+    SocksPasswordRequiresUsername,
+    #[error("HTTP proxy only supports the TCP transport")]
+    HttpRequiresTcpTransport,
+    #[error("HTTP proxy does not support Reality")]
+    HttpRejectsReality,
+    #[error("HTTP proxy password requires a username")]
+    HttpPasswordRequiresUsername,
+    #[error("WireGuard carries its own tunnel and accepts no transport setting")]
+    WireGuardRejectsTransport,
+    #[error("WireGuard authenticates peers by key and accepts no TLS setting")]
+    WireGuardRejectsTls,
+    #[error("WireGuard private key is required")]
+    MissingWireGuardPrivateKey,
+    #[error("WireGuard peer public key is required")]
+    MissingWireGuardPeerPublicKey,
+    #[error("WireGuard requires at least one local address")]
+    MissingWireGuardLocalAddress,
 }
 
 const fn enabled_by_default() -> bool {

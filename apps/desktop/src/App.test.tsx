@@ -1160,6 +1160,117 @@ describe("App", () => {
     );
   });
 
+  it("creates a SOCKS5 node with optional username and password", async () => {
+    createNodeMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([]);
+    await render();
+
+    await act(async () => {
+      selectValue("socks", createSelect("节点协议"));
+    });
+
+    expect(container.querySelector("input[aria-label='启用 TLS']")).toBeNull();
+
+    await act(async () => {
+      typeInput("SocksNode", createField("新建节点名称"));
+      typeInput("proxy.example.com", createField("新建节点服务器"));
+      typeInput("1080", createField("新建节点端口"));
+      typeInput("alice", createField("代理用户名"));
+      typeInput("secret", createField("节点密码"));
+    });
+    await act(async () => button("创建节点").click());
+
+    expect(createNodeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credential: {
+          password: "secret",
+          protocol: "socks",
+          username: "alice",
+        },
+        transport: { type: "tcp" },
+        tls: null,
+      }),
+    );
+  });
+
+  it("creates an HTTP proxy node with TLS and no Reality toggle", async () => {
+    createNodeMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([]);
+    await render();
+
+    await act(async () => {
+      selectValue("http", createSelect("节点协议"));
+    });
+
+    expect(
+      container.querySelector("input[aria-label='启用 Reality']"),
+    ).toBeNull();
+
+    await act(async () => {
+      typeInput("HttpNode", createField("新建节点名称"));
+      typeInput("proxy.example.com", createField("新建节点服务器"));
+      typeInput("443", createField("新建节点端口"));
+      createField("启用 TLS").click();
+    });
+    await act(async () => button("创建节点").click());
+
+    expect(createNodeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credential: {
+          password: null,
+          protocol: "http",
+          username: null,
+        },
+        transport: { type: "tcp" },
+        tls: expect.objectContaining({ type: "tls" }),
+      }),
+    );
+  });
+
+  it("creates a WireGuard node with no transport or TLS toggle", async () => {
+    createNodeMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([]);
+    await render();
+
+    await act(async () => {
+      selectValue("wireguard", createSelect("节点协议"));
+    });
+
+    expect(
+      container.querySelector("select[aria-label='传输方式']"),
+    ).toBeNull();
+    expect(container.querySelector("input[aria-label='启用 TLS']")).toBeNull();
+    expect(
+      container.querySelector("input[aria-label='启用 Reality']"),
+    ).toBeNull();
+
+    await act(async () => {
+      typeInput("WgNode", createField("新建节点名称"));
+      typeInput("edge.example.com", createField("新建节点服务器"));
+      typeInput("51820", createField("新建节点端口"));
+      typeInput("priv", createField("WireGuard 私钥"));
+      typeInput("peer-pub", createField("WireGuard 对端公钥"));
+      typeInput("10.0.0.2/32", createField("WireGuard 本地地址"));
+    });
+    await act(async () => button("创建节点").click());
+
+    expect(createNodeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credential: {
+          localAddress: ["10.0.0.2/32"],
+          mtu: null,
+          peerPublicKey: "peer-pub",
+          preSharedKey: null,
+          privateKey: "priv",
+          protocol: "wireguard",
+          reserved: null,
+        },
+        transport: null,
+        tls: null,
+      }),
+    );
+  });
+
   it("disables the TUIC UDP relay mode picker once UDP over stream is checked", async () => {
     createNodeMock.mockResolvedValue(SELECTED);
     loadNodesMock.mockResolvedValue([]);
@@ -3073,6 +3184,9 @@ describe("App", () => {
       "添加 Shadowsocks 服务器",
       "添加 Hysteria2 服务器",
       "添加 TUIC 服务器",
+      "添加 SOCKS5 服务器",
+      "添加 HTTP 服务器",
+      "添加 WireGuard 服务器",
       "手动创建",
     ]) {
       await act(async () => button(label).click());

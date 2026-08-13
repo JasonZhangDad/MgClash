@@ -113,6 +113,127 @@ describe("buildManualNodeDraft", () => {
     });
   });
 
+  it("builds SOCKS and HTTP drafts with optional auth", () => {
+    expect(
+      draftOf({
+        password: "secret",
+        protocol: "socks",
+        username: "alice",
+      }).credential,
+    ).toEqual({
+      password: "secret",
+      protocol: "socks",
+      username: "alice",
+    });
+    expect(
+      draftOf({
+        protocol: "http",
+        tlsEnabled: true,
+        username: "",
+      }),
+    ).toMatchObject({
+      credential: { password: null, protocol: "http", username: null },
+      tls: expect.objectContaining({ type: "tls" }),
+      transport: { type: "tcp" },
+    });
+  });
+
+  it("rejects a proxy password without a username", () => {
+    expect(errorOf({ password: "secret", protocol: "socks" })).toBe(
+      "填写密码时必须同时填写用户名",
+    );
+    expect(errorOf({ password: "secret", protocol: "http" })).toBe(
+      "填写密码时必须同时填写用户名",
+    );
+  });
+
+  it("builds a WireGuard draft with optional fields", () => {
+    const draft = draftOf({
+      localAddress: "10.0.0.2/32, fd00::1/128",
+      mtu: "1420",
+      peerPublicKey: "peer-pub",
+      preSharedKey: "psk",
+      privateKey: "priv",
+      protocol: "wireguard",
+      reserved: "1,2,3",
+    });
+
+    expect(draft.transport).toBeNull();
+    expect(draft.tls).toBeNull();
+    expect(draft.credential).toEqual({
+      localAddress: ["10.0.0.2/32", "fd00::1/128"],
+      mtu: 1420,
+      peerPublicKey: "peer-pub",
+      preSharedKey: "psk",
+      privateKey: "priv",
+      protocol: "wireguard",
+      reserved: [1, 2, 3],
+    });
+  });
+
+  it("builds a minimal WireGuard draft without optional fields", () => {
+    const draft = draftOf({
+      localAddress: "10.0.0.2/32",
+      peerPublicKey: "peer-pub",
+      privateKey: "priv",
+      protocol: "wireguard",
+    });
+
+    expect(draft.credential).toEqual({
+      localAddress: ["10.0.0.2/32"],
+      mtu: null,
+      peerPublicKey: "peer-pub",
+      preSharedKey: null,
+      privateKey: "priv",
+      protocol: "wireguard",
+      reserved: null,
+    });
+  });
+
+  it("rejects incomplete or invalid WireGuard fields", () => {
+    expect(
+      errorOf({ peerPublicKey: "pub", privateKey: "", protocol: "wireguard" }),
+    ).toBe("请填写 WireGuard 私钥");
+    expect(
+      errorOf({ peerPublicKey: "", privateKey: "priv", protocol: "wireguard" }),
+    ).toBe("请填写 WireGuard 对端公钥");
+    expect(
+      errorOf({
+        localAddress: " , ",
+        peerPublicKey: "pub",
+        privateKey: "priv",
+        protocol: "wireguard",
+      }),
+    ).toBe("请填写至少一个本地地址");
+    expect(
+      errorOf({
+        localAddress: "10.0.0.2/32",
+        mtu: "-1",
+        peerPublicKey: "pub",
+        privateKey: "priv",
+        protocol: "wireguard",
+      }),
+    ).toBe("MTU 必须是不小于 0 的整数");
+    expect(
+      errorOf({
+        localAddress: "10.0.0.2/32",
+        peerPublicKey: "pub",
+        privateKey: "priv",
+        protocol: "wireguard",
+        reserved: "1,2",
+      }),
+    ).toBe("reserved 必须是 3 个 0-255 的整数，以逗号分隔");
+    expect(
+      errorOf({
+        localAddress: "10.0.0.2/32",
+        peerPublicKey: "pub",
+        privateKey: "priv",
+        protocol: "wireguard",
+        reserved: "1,2,300",
+      }),
+    ).toBe("reserved 必须是 3 个 0-255 的整数，以逗号分隔");
+  });
+
   it("always sends TLS and no transport for Hysteria2", () => {
     const draft = draftOf({
       authentication: "token",
@@ -295,13 +416,14 @@ describe("buildManualNodeDraft", () => {
 });
 
 describe("usesStreamTransport", () => {
-  it("is false for Hysteria2 and TUIC", () => {
+  it("is false for Hysteria2, TUIC, and WireGuard", () => {
     expect(usesStreamTransport("vless")).toBe(true);
     expect(usesStreamTransport("vmess")).toBe(true);
     expect(usesStreamTransport("trojan")).toBe(true);
     expect(usesStreamTransport("shadowsocks")).toBe(true);
     expect(usesStreamTransport("hysteria2")).toBe(false);
     expect(usesStreamTransport("tuic")).toBe(false);
+    expect(usesStreamTransport("wireguard")).toBe(false);
   });
 });
 
@@ -382,6 +504,34 @@ describe("formFromManualNodeDraft", () => {
     expect(hy2.obfsEnabled).toBe(true);
     expect(hy2.obfsPassword).toBe("obfs");
     expect(hy2.authentication).toBe("token");
+  });
+
+  it("round-trips a WireGuard credential", () => {
+    const form = formFromManualNodeDraft({
+      credential: {
+        localAddress: ["10.0.0.2/32"],
+        mtu: 1420,
+        peerPublicKey: "peer-pub",
+        preSharedKey: "psk",
+        privateKey: "priv",
+        protocol: "wireguard",
+        reserved: [1, 2, 3],
+      },
+      name: "WG",
+      port: 51820,
+      server: "edge.example.com",
+      tls: null,
+      transport: null,
+      udpEnabled: true,
+    });
+
+    expect(form.protocol).toBe("wireguard");
+    expect(form.privateKey).toBe("priv");
+    expect(form.peerPublicKey).toBe("peer-pub");
+    expect(form.preSharedKey).toBe("psk");
+    expect(form.localAddress).toBe("10.0.0.2/32");
+    expect(form.mtu).toBe("1420");
+    expect(form.reserved).toBe("1,2,3");
   });
 });
 

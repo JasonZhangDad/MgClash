@@ -81,11 +81,7 @@ impl<'a, S: SecretStore + ?Sized> SubscriptionRefreshService<'a, S> {
 
         match self
             .fetcher
-            .fetch(
-                url,
-                Some(&validators),
-                subscription.user_agent.as_deref(),
-            )
+            .fetch(url, Some(&validators), subscription.user_agent.as_deref())
             .await?
         {
             SubscriptionFetchResult::NotModified { validators } => {
@@ -96,12 +92,7 @@ impl<'a, S: SecretStore + ?Sized> SubscriptionRefreshService<'a, S> {
             SubscriptionFetchResult::Updated {
                 content,
                 validators,
-            } => self.commit_updated(
-                &subscription,
-                &content,
-                validators,
-                updated_at,
-            ),
+            } => self.commit_updated(&subscription, &content, validators, updated_at),
         }
     }
 

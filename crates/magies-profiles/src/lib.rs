@@ -5,6 +5,7 @@ mod core_capability;
 mod credential_codec;
 mod diagnostics;
 mod dns_config;
+mod http_proxy;
 mod hysteria2;
 mod local_proxy_config;
 mod manual_node_draft;
@@ -19,6 +20,7 @@ mod share_link_qr;
 mod share_link_serializer;
 mod sing_box_outbound;
 mod sing_box_runtime_config;
+mod socks;
 mod subscription;
 mod subscription_content;
 mod subscription_management;
@@ -28,6 +30,7 @@ mod trojan;
 mod tuic;
 mod tun_config;
 mod vmess;
+mod wireguard;
 mod xray_dns_config;
 mod xray_outbound;
 mod xray_runtime_config;
@@ -46,6 +49,7 @@ pub use dns_config::{
     DnsConfigError, DnsProfile, DnsRule, DnsServer, DnsStrategy, GeneratedDnsConfig,
     PlainDnsTransport, SingBoxDnsConfigGenerator,
 };
+pub use http_proxy::{HttpCredential, HttpProxyParseError, HttpProxyParser, ParsedHttpProxyNode};
 pub use hysteria2::{
     Hysteria2Credential, Hysteria2Obfuscation, Hysteria2ObfuscationMethod, Hysteria2ParseError,
     Hysteria2Parser, ParsedHysteria2Node,
@@ -79,6 +83,7 @@ pub use sing_box_outbound::{
 pub use sing_box_runtime_config::{
     RuntimeConfigError, SingBoxRuntimeConfigGenerator, SingBoxRuntimeProfile,
 };
+pub use socks::{ParsedSocksNode, SocksCredential, SocksParseError, SocksParser};
 pub use subscription::{
     SubscriptionFetchError, SubscriptionFetchOptions, SubscriptionFetchResult, SubscriptionFetcher,
     SubscriptionValidators, ensure_rustls_crypto_provider,
@@ -105,6 +110,7 @@ pub use tuic::{
 };
 pub use tun_config::{SingBoxTunConfigGenerator, TunProfile, TunProfileError, TunRouteSettings};
 pub use vmess::{ParsedVmessNode, VmessCredential, VmessParseError, VmessParser, VmessSecurity};
+pub use wireguard::{ParsedWireGuardNode, WireGuardCredential, WireGuardParseError, WireGuardParser};
 pub use xray_dns_config::{FAKE_DNS_SERVER, XrayDnsConfigGenerator};
 pub use xray_outbound::{
     GeneratedXrayOutbound, XrayOutboundConfigGenerator, XrayOutboundError, apply_xray_mux,
@@ -419,6 +425,19 @@ fn parse_server(url: &Url) -> Result<ServerAddress, VlessParseError> {
 
 fn parse_port(url: &Url) -> Result<NonZeroU16, VlessParseError> {
     let port = url.port().ok_or(VlessParseError::MissingPort)?;
+    NonZeroU16::new(port).ok_or(VlessParseError::InvalidPort { port })
+}
+
+/// Reads the URI port, falling back to `default` when the link omits it.
+///
+/// `Url::port_or_known_default` already resolves `http`/`https` to 80/443;
+/// `socks`/`socks5`/`socks5h` are not URL-crate "special" schemes, so their
+/// default of 1080 is supplied by the caller instead.
+pub(crate) fn parse_port_with_default(
+    url: &Url,
+    default: u16,
+) -> Result<NonZeroU16, VlessParseError> {
+    let port = url.port_or_known_default().unwrap_or(default);
     NonZeroU16::new(port).ok_or(VlessParseError::InvalidPort { port })
 }
 

@@ -91,6 +91,22 @@ impl XrayOutboundConfigGenerator {
                     protocol: ProxyProtocol::Tuic,
                 });
             }
+            NodeCredential::WireGuard(_) => {
+                // Xray does ship a `wireguard` outbound, but nothing in this
+                // codebase's Xray patterns pins a verified field-for-field
+                // shape for it, so the capability matrix keeps WireGuard
+                // sing-box-only. Unreachable through the matrix, but the
+                // generator is public.
+                return Err(XrayOutboundError::ProtocolUnsupported {
+                    protocol: ProxyProtocol::WireGuard,
+                });
+            }
+            NodeCredential::Socks(credential) => {
+                user_pass_settings(node, credential.username(), credential.password())
+            }
+            NodeCredential::Http(credential) => {
+                user_pass_settings(node, credential.username(), credential.password())
+            }
         };
         outbound["streamSettings"] = stream_settings(node)?;
 
@@ -109,7 +125,7 @@ pub fn apply_xray_mux(outbound: &mut Value, credential: NodeCredential<'_>) {
     }
     if matches!(
         credential.protocol(),
-        ProxyProtocol::Hysteria2 | ProxyProtocol::Tuic
+        ProxyProtocol::Hysteria2 | ProxyProtocol::Tuic | ProxyProtocol::WireGuard
     ) {
         return;
     }
@@ -148,6 +164,24 @@ fn vmess_settings(node: &ProxyNode, credential: &VmessCredential) -> Value {
             }],
         }]
     })
+}
+
+/// Builds the `servers` settings SOCKS and HTTP outbounds share: one endpoint,
+/// with a single `users` entry only when a username was supplied. Xray
+/// requires `pass` whenever `user` is present, so an absent password becomes
+/// an empty string rather than an omitted field.
+fn user_pass_settings(node: &ProxyNode, username: Option<&str>, password: Option<&str>) -> Value {
+    let mut server = json!({
+        "address": node.server.as_str(),
+        "port": node.port.get(),
+    });
+    if let Some(username) = username {
+        server["users"] = json!([{
+            "user": username,
+            "pass": password.unwrap_or(""),
+        }]);
+    }
+    json!({ "servers": [server] })
 }
 
 /// Builds `streamSettings` from the node's transport and TLS.
@@ -278,7 +312,9 @@ fn protocol_name(protocol: ProxyProtocol) -> Result<&'static str, XrayOutboundEr
         ProxyProtocol::Vmess => Ok("vmess"),
         ProxyProtocol::Trojan => Ok("trojan"),
         ProxyProtocol::Shadowsocks => Ok("shadowsocks"),
-        ProxyProtocol::Hysteria2 | ProxyProtocol::Tuic => {
+        ProxyProtocol::Socks => Ok("socks"),
+        ProxyProtocol::Http => Ok("http"),
+        ProxyProtocol::Hysteria2 | ProxyProtocol::Tuic | ProxyProtocol::WireGuard => {
             Err(XrayOutboundError::ProtocolUnsupported { protocol })
         }
     }

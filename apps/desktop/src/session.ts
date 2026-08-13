@@ -2,17 +2,21 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type ProxyProtocol =
   | "hysteria2"
+  | "http"
   | "shadowsocks"
+  | "socks"
   | "trojan"
   | "tuic"
   | "vless"
-  | "vmess";
+  | "vmess"
+  | "wireguard";
 
 export interface NodeSummary {
   deletable: boolean;
   enabled: boolean;
   groupId: string | null;
-  /// The stream transport; Hysteria2 reports its own QUIC transport.
+  /// The stream transport; Hysteria2/TUIC report their own QUIC transport and
+  /// WireGuard reports its own tunnel.
   transport: string;
   /// The TLS layer, or null for plaintext.
   tls: string | null;
@@ -142,6 +146,25 @@ export type ManualCredentialDraft =
       udpRelayMode: TuicUdpRelayMode | null;
       uuid: string;
       zeroRttHandshake: boolean;
+    }
+  | {
+      password: string | null;
+      protocol: "socks";
+      username: string | null;
+    }
+  | {
+      password: string | null;
+      protocol: "http";
+      username: string | null;
+    }
+  | {
+      localAddress: string[];
+      mtu: number | null;
+      peerPublicKey: string;
+      preSharedKey: string | null;
+      privateKey: string;
+      protocol: "wireguard";
+      reserved: [number, number, number] | null;
     };
 
 export type TransportDraft =

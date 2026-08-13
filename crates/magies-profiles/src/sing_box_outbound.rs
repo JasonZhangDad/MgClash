@@ -4,9 +4,9 @@ use magies_domain::{GrpcMode, ProxyNode, ProxyProtocol, TlsConfig, TransportConf
 use serde_json::{Value, json};
 
 use crate::{
-    Hysteria2Credential, Hysteria2ObfuscationMethod, ShadowsocksCredential, TrojanCredential,
-    TuicCongestionControl, TuicCredential, TuicUdpRelayMode, VlessCredential, VmessCredential,
-    VmessSecurity,
+    HttpCredential, Hysteria2Credential, Hysteria2ObfuscationMethod, ShadowsocksCredential,
+    SocksCredential, TrojanCredential, TuicCongestionControl, TuicCredential, TuicUdpRelayMode,
+    VlessCredential, VmessCredential, VmessSecurity, WireGuardCredential,
 };
 
 #[derive(Clone, Copy)]
@@ -17,6 +17,9 @@ pub enum NodeCredential<'a> {
     Shadowsocks(&'a ShadowsocksCredential),
     Hysteria2(&'a Hysteria2Credential),
     Tuic(&'a TuicCredential),
+    Socks(&'a SocksCredential),
+    Http(&'a HttpCredential),
+    WireGuard(&'a WireGuardCredential),
 }
 
 impl NodeCredential<'_> {
@@ -29,6 +32,9 @@ impl NodeCredential<'_> {
             Self::Shadowsocks(_) => ProxyProtocol::Shadowsocks,
             Self::Hysteria2(_) => ProxyProtocol::Hysteria2,
             Self::Tuic(_) => ProxyProtocol::Tuic,
+            Self::Socks(_) => ProxyProtocol::Socks,
+            Self::Http(_) => ProxyProtocol::Http,
+            Self::WireGuard(_) => ProxyProtocol::WireGuard,
         }
     }
 }
@@ -72,6 +78,24 @@ impl<'a> From<&'a Hysteria2Credential> for NodeCredential<'a> {
 impl<'a> From<&'a TuicCredential> for NodeCredential<'a> {
     fn from(value: &'a TuicCredential) -> Self {
         Self::Tuic(value)
+    }
+}
+
+impl<'a> From<&'a SocksCredential> for NodeCredential<'a> {
+    fn from(value: &'a SocksCredential) -> Self {
+        Self::Socks(value)
+    }
+}
+
+impl<'a> From<&'a HttpCredential> for NodeCredential<'a> {
+    fn from(value: &'a HttpCredential) -> Self {
+        Self::Http(value)
+    }
+}
+
+impl<'a> From<&'a WireGuardCredential> for NodeCredential<'a> {
+    fn from(value: &'a WireGuardCredential) -> Self {
+        Self::WireGuard(value)
     }
 }
 
@@ -137,6 +161,15 @@ impl SingBoxOutboundConfigGenerator {
             NodeCredential::Tuic(credential) => {
                 generate_tuic(node, credential, &mut outbound)?;
             }
+            NodeCredential::Socks(credential) => {
+                generate_socks(node, credential, &mut outbound)?;
+            }
+            NodeCredential::Http(credential) => {
+                generate_http(node, credential, &mut outbound)?;
+            }
+            NodeCredential::WireGuard(credential) => {
+                generate_wireguard(node, credential, &mut outbound)?;
+            }
         }
         Ok(GeneratedSingBoxOutbound { json: outbound })
     }
@@ -145,8 +178,12 @@ impl SingBoxOutboundConfigGenerator {
 /// Enables sing-box multiplex on a generated outbound when the user asked for it.
 ///
 /// Hysteria2 and TUIC already multiplex over QUIC, so mux is skipped there.
+/// WireGuard is its own tunnel with no stream layer to multiplex over.
 pub fn apply_sing_box_multiplex(outbound: &mut Value, protocol: ProxyProtocol) {
-    if matches!(protocol, ProxyProtocol::Hysteria2 | ProxyProtocol::Tuic) {
+    if matches!(
+        protocol,
+        ProxyProtocol::Hysteria2 | ProxyProtocol::Tuic | ProxyProtocol::WireGuard
+    ) {
         return;
     }
     outbound["multiplex"] = json!({
@@ -172,6 +209,9 @@ const fn protocol_name(protocol: ProxyProtocol) -> &'static str {
         ProxyProtocol::Shadowsocks => "shadowsocks",
         ProxyProtocol::Hysteria2 => "hysteria2",
         ProxyProtocol::Tuic => "tuic",
+        ProxyProtocol::Socks => "socks",
+        ProxyProtocol::Http => "http",
+        ProxyProtocol::WireGuard => "wireguard",
     }
 }
 
@@ -254,6 +294,71 @@ fn generate_shadowsocks(
     Ok(())
 }
 
+fn generate_socks(
+    node: &ProxyNode,
+    credential: &SocksCredential,
+    outbound: &mut Value,
+) -> Result<(), OutboundConfigError> {
+    match node.transport.as_ref() {
+        Some(TransportConfig::Tcp) => {}
+        Some(_) => {
+            return Err(OutboundConfigError::UnsupportedTransport {
+                protocol: node.protocol_type,
+            });
+        }
+        None => {
+            return Err(OutboundConfigError::MissingTransport {
+                protocol: node.protocol_type,
+            });
+        }
+    }
+    if node.tls.is_some() {
+        return Err(OutboundConfigError::UnsupportedTls {
+            protocol: node.protocol_type,
+        });
+    }
+    outbound["version"] = Value::String("5".to_owned());
+    if let Some(username) = credential.username() {
+        outbound["username"] = Value::String(username.to_owned());
+    }
+    if let Some(password) = credential.password() {
+        outbound["password"] = Value::String(password.to_owned());
+    }
+    apply_network(node, outbound);
+    Ok(())
+}
+
+fn generate_http(
+    node: &ProxyNode,
+    credential: &HttpCredential,
+    outbound: &mut Value,
+) -> Result<(), OutboundConfigError> {
+    match node.transport.as_ref() {
+        Some(TransportConfig::Tcp) => {}
+        Some(_) => {
+            return Err(OutboundConfigError::UnsupportedTransport {
+                protocol: node.protocol_type,
+            });
+        }
+        None => {
+            return Err(OutboundConfigError::MissingTransport {
+                protocol: node.protocol_type,
+            });
+        }
+    }
+    if let Some(username) = credential.username() {
+        outbound["username"] = Value::String(username.to_owned());
+    }
+    if let Some(password) = credential.password() {
+        outbound["password"] = Value::String(password.to_owned());
+    }
+    if let Some(tls) = node.tls.as_ref() {
+        outbound["tls"] = generated_tls(tls)?;
+    }
+    apply_network(node, outbound);
+    Ok(())
+}
+
 fn generate_hysteria2(
     node: &ProxyNode,
     credential: &Hysteria2Credential,
@@ -331,6 +436,38 @@ fn generate_tuic(
     }
     outbound["tls"] = generated_tls(tls)?;
     apply_network(node, outbound);
+    Ok(())
+}
+
+/// WireGuard is its own tunnel: no stream transport, no TLS, and no `network`
+/// restriction sing-box's `wireguard` outbound has no field for.
+fn generate_wireguard(
+    node: &ProxyNode,
+    credential: &WireGuardCredential,
+    outbound: &mut Value,
+) -> Result<(), OutboundConfigError> {
+    if node.transport.is_some() {
+        return Err(OutboundConfigError::UnsupportedTransport {
+            protocol: node.protocol_type,
+        });
+    }
+    if node.tls.is_some() {
+        return Err(OutboundConfigError::UnsupportedTls {
+            protocol: node.protocol_type,
+        });
+    }
+    outbound["local_address"] = json!(credential.local_address());
+    outbound["private_key"] = Value::String(credential.private_key().to_owned());
+    outbound["peer_public_key"] = Value::String(credential.peer_public_key().to_owned());
+    if let Some(pre_shared_key) = credential.pre_shared_key() {
+        outbound["pre_shared_key"] = Value::String(pre_shared_key.to_owned());
+    }
+    if let Some(mtu) = credential.mtu() {
+        outbound["mtu"] = json!(mtu);
+    }
+    if let Some(reserved) = credential.reserved() {
+        outbound["reserved"] = json!(reserved);
+    }
     Ok(())
 }
 

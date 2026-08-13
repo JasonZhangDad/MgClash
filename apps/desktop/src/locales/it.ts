@@ -272,6 +272,8 @@ const DICTIONARY: Dictionary = {
   "用 | 分隔": "Separate da |",
   "XHTTP 路径": "Percorso XHTTP",
   "XHTTP 模式": "Modalità XHTTP",
+  "用户名": "Nome utente",
+  "代理用户名": "Nome utente proxy",
   "HTTPUpgrade 路径": "Percorso HTTPUpgrade",
   "禁用节点": "Disattiva nodo",
   "启用节点": "Attiva nodo",
@@ -293,6 +295,16 @@ const DICTIONARY: Dictionary = {
   "热键：上一节点": "Scorciatoia: server precedente",
   "热键：下一节点": "Scorciatoia: server successivo",
   "窗口内生效；留空表示禁用。输入框获得焦点时不触发。": "Attivo nella finestra; vuoto = disattivo. Ignorato nei campi di testo.",
+  "私钥": "Chiave privata",
+  "WireGuard 私钥": "Chiave privata WireGuard",
+  "对端公钥": "Chiave pubblica del peer",
+  "WireGuard 对端公钥": "Chiave pubblica del peer WireGuard",
+  "预共享密钥": "Chiave precondivisa",
+  "WireGuard 预共享密钥": "Chiave precondivisa WireGuard",
+  "本地地址": "Indirizzo locale",
+  "WireGuard 本地地址": "Indirizzo locale WireGuard",
+  "逗号分隔，如 10.0.0.2/32": "Separati da virgola, es. 10.0.0.2/32",
+  "留空表示不使用，如 1,2,3": "Lascia vuoto per disabilitare, es. 1,2,3",
 };
 
 export default DICTIONARY;

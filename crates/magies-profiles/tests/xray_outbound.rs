@@ -379,6 +379,52 @@ fn a_node_without_a_transport_is_refused() {
 }
 
 #[test]
+fn socks_and_http_use_the_servers_array_with_optional_users() {
+    let (socks_node, socks_credential) = build_node(
+        ManualCredentialDraft::Socks {
+            username: Some("alice".to_owned()),
+            password: Some("hunter2".to_owned()),
+        },
+        None,
+    );
+    let socks = generate(&socks_node, &socks_credential);
+    assert_eq!(socks["protocol"], "socks");
+    assert_eq!(
+        socks["settings"]["servers"][0]["address"],
+        "edge.example.com"
+    );
+    assert_eq!(socks["settings"]["servers"][0]["port"], 443);
+    assert_eq!(socks["settings"]["servers"][0]["users"][0]["user"], "alice");
+    assert_eq!(
+        socks["settings"]["servers"][0]["users"][0]["pass"],
+        "hunter2"
+    );
+    assert_eq!(socks["streamSettings"]["network"], "tcp");
+
+    let (anonymous_node, anonymous_credential) = build_node(
+        ManualCredentialDraft::Socks {
+            username: None,
+            password: None,
+        },
+        None,
+    );
+    let anonymous = generate(&anonymous_node, &anonymous_credential);
+    assert!(anonymous["settings"]["servers"][0]["users"].is_null());
+
+    let (http_node, http_credential) = build_node(
+        ManualCredentialDraft::Http {
+            username: Some("alice".to_owned()),
+            password: Some("hunter2".to_owned()),
+        },
+        Some(plain_tls()),
+    );
+    let http = generate(&http_node, &http_credential);
+    assert_eq!(http["protocol"], "http");
+    assert_eq!(http["settings"]["servers"][0]["users"][0]["user"], "alice");
+    assert_eq!(http["streamSettings"]["security"], "tls");
+}
+
+#[test]
 fn hysteria2_is_refused_the_same_way_the_matrix_refuses_it() {
     // The manual draft never produces a Hysteria2 node with a transport, so the
     // node is assembled directly to reach the generator's own guard.
@@ -438,6 +484,20 @@ fn the_generator_agrees_with_the_capability_matrix() {
             ManualCredentialDraft::Shadowsocks {
                 method: "aes-256-gcm".to_owned(),
                 password: "hunter2".to_owned(),
+            },
+        ),
+        (
+            ProxyProtocol::Socks,
+            ManualCredentialDraft::Socks {
+                username: None,
+                password: None,
+            },
+        ),
+        (
+            ProxyProtocol::Http,
+            ManualCredentialDraft::Http {
+                username: None,
+                password: None,
             },
         ),
     ];
