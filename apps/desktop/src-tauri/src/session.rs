@@ -18,12 +18,12 @@ use magies_domain::{
 use magies_platform::{CpuArchitecture, OperatingSystem};
 use magies_profiles::{
     BulkImportError, BulkNodeImportParser, CoreCapabilityMatrix, CorePreference, CoreRejection,
-    CoreRequirements, CoreSelectionError, CredentialCodec, CredentialCodecError, DnsConfigError, DnsProfile,
-    LocalHttpProfile, LocalProxyConfigError, LocalSocksProfile, ManualNodeDraft,
+    CoreRequirements, CoreSelectionError, CredentialCodec, CredentialCodecError, DnsConfigError,
+    DnsProfile, LocalHttpProfile, LocalProxyConfigError, LocalSocksProfile, ManualNodeDraft,
     ManualNodeDraftError, ManualNodeStoreError, NodeFingerprint, NodeGroup, NodeGroupStoreError,
-    NodeGroupStrategy, NodeOrderStoreError, ShareLinkParseError, ShareLinkParser, ShareLinkQrCode, ShareLinkQrError,
-    ShareLinkSerializer, ShareLinkSerializerError, SqliteManualNodeStore, SqliteNodeGroupStore,
-    SqliteNodeOrderStore, SqliteSubscriptionStore, StoredNodeCredential,
+    NodeGroupStrategy, NodeOrderStoreError, ShareLinkParseError, ShareLinkParser, ShareLinkQrCode,
+    ShareLinkQrError, ShareLinkSerializer, ShareLinkSerializerError, SqliteManualNodeStore,
+    SqliteNodeGroupStore, SqliteNodeOrderStore, SqliteSubscriptionStore, StoredNodeCredential,
     SubscriptionTransactionError, TunProfile, TunProfileError, core_name, node_fingerprint,
 };
 use magies_routing::{RouteProfile, RoutingMode};
@@ -40,11 +40,11 @@ use uuid::Uuid;
 use crate::app_settings::DEFAULT_URL_TEST_ADDRESS;
 use crate::core_control::describe;
 use crate::dns_settings::{DnsSettings, DnsSettingsStoreError, SqliteDnsSettingsStore};
+use crate::profile_backup::{ManualNodeBackupEntry, ProfileNodesData};
 use crate::route_settings::{
-    RouteSettings, RouteSettingsError, RouteSettingsStoreError, RouteSchemeBundle,
+    RouteSchemeBundle, RouteSettings, RouteSettingsError, RouteSettingsStoreError,
     SqliteRouteSettingsStore,
 };
-use crate::profile_backup::{ManualNodeBackupEntry, ProfileNodesData};
 use crate::routing_mode::{
     RoutingModeStoreError, SqliteRoutingModeStore, route_profile_for, routing_mode_name,
 };
@@ -202,7 +202,10 @@ const fn system_proxy_mode_name(mode: &SystemProxyMode) -> &'static str {
 /// tunnel, `AnyTLS` is TLS from the first byte, and `Naive` tunnels over HTTP/2
 /// or QUIC; the model stores `None` for all of them, so the protocol decides
 /// which label a missing transport gets.
-const fn transport_name(protocol: ProxyProtocol, transport: Option<&TransportConfig>) -> &'static str {
+const fn transport_name(
+    protocol: ProxyProtocol,
+    transport: Option<&TransportConfig>,
+) -> &'static str {
     match transport {
         Some(TransportConfig::Tcp) => "tcp",
         Some(TransportConfig::WebSocket { .. }) => "ws",
@@ -709,11 +712,7 @@ where
                 CredentialCodec::decode(&secret).map_err(SessionCommandError::Credential)?;
             manual_nodes.push(ManualNodeBackupEntry { node, credential });
         }
-        let node_order = self
-            .nodes()?
-            .into_iter()
-            .map(|node| node.id)
-            .collect();
+        let node_order = self.nodes()?.into_iter().map(|node| node.id).collect();
         Ok(ProfileNodesData {
             manual_nodes,
             groups: self
@@ -765,13 +764,11 @@ where
         for entry in data.manual_nodes {
             if entry.node.subscription_id.is_some() {
                 return Err(SessionCommandError::NodeStore(
-                    ManualNodeStoreError::SubscriptionNode {
-                        id: entry.node.id,
-                    },
+                    ManualNodeStoreError::SubscriptionNode { id: entry.node.id },
                 ));
             }
-            let secret =
-                CredentialCodec::encode(&entry.credential).map_err(SessionCommandError::Credential)?;
+            let secret = CredentialCodec::encode(&entry.credential)
+                .map_err(SessionCommandError::Credential)?;
             self.session
                 .secret_store()
                 .put(&entry.node.credential_ref, &secret)
@@ -1302,6 +1299,26 @@ where
         Ok(self.status())
     }
 
+    /// Applies a change the Core only reads at startup, restarting it around
+    /// the change so the user does not have to disconnect by hand.
+    ///
+    /// The caller validates first: a change that is rejected must leave the
+    /// session running, not drop it for a setting that was never applied.
+    fn restarting(
+        &mut self,
+        change: impl FnOnce(&mut Self) -> Result<(), SessionCommandError<C::Error, P::Error>>,
+    ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
+        let was_running = self.session.is_running();
+        if was_running {
+            self.session.stop().map_err(SessionCommandError::Session)?;
+        }
+        change(self)?;
+        if was_running {
+            self.connect()?;
+        }
+        Ok(self.status())
+    }
+
     fn select_node_while_stopped(
         &mut self,
         id: Uuid,
@@ -1437,69 +1454,69 @@ where
         Ok(self.status())
     }
 
-    /// Saves the routing mode used by the next connection.
+    /// Saves the routing mode, restarting a running Core so it takes effect now.
     ///
     /// # Errors
     ///
-    /// Returns a typed active-session or persistence error.
+    /// Returns a typed validation, persistence, or restart error.
     pub fn set_routing_mode(
         &mut self,
         mode: RoutingMode,
     ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
-        if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
-        }
         let profile = self
             .current_route_bundle
             .profile(mode)
             .map_err(SessionCommandError::InvalidRouteSettings)?;
-        self.routing_mode
-            .save(mode)
-            .map_err(SessionCommandError::RoutingModeStore)?;
-        self.defaults.route = profile;
-        Ok(self.status())
+        self.restarting(move |session| {
+            session
+                .routing_mode
+                .save(mode)
+                .map_err(SessionCommandError::RoutingModeStore)?;
+            session.defaults.route = profile;
+            Ok(())
+        })
     }
 
-    /// Saves the ordered route rules used by the next connection.
+    /// Saves the ordered route rules, restarting a running Core so they take
+    /// effect now.
     ///
     /// # Errors
     ///
-    /// Returns a typed active-session, validation, or persistence error.
+    /// Returns a typed validation, persistence, or restart error.
     pub fn set_route_settings(
         &mut self,
         settings: RouteSettings,
     ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
-        if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
-        }
         settings
             .profile(RoutingMode::Rule)
             .map_err(SessionCommandError::InvalidRouteSettings)?;
         let profile = settings
             .profile(self.defaults.route.mode())
             .map_err(SessionCommandError::InvalidRouteSettings)?;
-        self.current_route_bundle
-            .set_active_settings(settings.clone())
-            .map_err(SessionCommandError::InvalidRouteSettings)?;
-        self.route_settings
-            .save_bundle(&self.current_route_bundle)
-            .map_err(SessionCommandError::RouteSettingsStore)?;
-        self.defaults.route = profile;
-        Ok(self.status())
+        self.restarting(move |session| {
+            session
+                .current_route_bundle
+                .set_active_settings(settings)
+                .map_err(SessionCommandError::InvalidRouteSettings)?;
+            session
+                .route_settings
+                .save_bundle(&session.current_route_bundle)
+                .map_err(SessionCommandError::RouteSettingsStore)?;
+            session.defaults.route = profile;
+            Ok(())
+        })
     }
 
-    /// Switches the active routing scheme used by the next connection.
+    /// Switches the active routing scheme, restarting a running Core so it
+    /// takes effect now.
     ///
     /// # Errors
     ///
-    /// Returns a typed active-session, validation, or persistence error.
+    /// Returns a typed validation, persistence, or restart error.
     pub fn set_route_scheme(
         &mut self,
         scheme_id: &str,
     ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
-        if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
-        }
         self.current_route_bundle
             .select_scheme(scheme_id)
             .map_err(SessionCommandError::InvalidRouteSettings)?;
@@ -1507,11 +1524,14 @@ where
             .current_route_bundle
             .profile(self.defaults.route.mode())
             .map_err(SessionCommandError::InvalidRouteSettings)?;
-        self.route_settings
-            .save_bundle(&self.current_route_bundle)
-            .map_err(SessionCommandError::RouteSettingsStore)?;
-        self.defaults.route = profile;
-        Ok(self.status())
+        self.restarting(move |session| {
+            session
+                .route_settings
+                .save_bundle(&session.current_route_bundle)
+                .map_err(SessionCommandError::RouteSettingsStore)?;
+            session.defaults.route = profile;
+            Ok(())
+        })
     }
 
     /// Creates a routing scheme cloned from the active one.
@@ -1571,18 +1591,18 @@ where
         &mut self,
         settings: DnsSettings,
     ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
-        if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
-        }
         let profile = settings
             .profile()
             .map_err(SessionCommandError::InvalidDnsSettings)?;
-        self.dns_settings
-            .save(&settings)
-            .map_err(SessionCommandError::DnsSettingsStore)?;
-        self.defaults.dns = profile;
-        self.current_dns_settings = settings;
-        Ok(self.status())
+        self.restarting(move |session| {
+            session
+                .dns_settings
+                .save(&settings)
+                .map_err(SessionCommandError::DnsSettingsStore)?;
+            session.defaults.dns = profile;
+            session.current_dns_settings = settings;
+            Ok(())
+        })
     }
 
     /// Deletes a persisted node and its operating-system credential.
@@ -1870,15 +1890,14 @@ where
                 xhttp: false,
                 kcp: false,
             })?;
-        let credential = CredentialCodec::decode(&secret).map_err(|_| {
-            CoreSelectionError::NoUsableCore {
+        let credential =
+            CredentialCodec::decode(&secret).map_err(|_| CoreSelectionError::NoUsableCore {
                 protocol: ProxyProtocol::Custom,
                 tun: self.tun_enabled,
                 certificate_pin: false,
                 xhttp: false,
                 kcp: false,
-            }
-        })?;
+            })?;
         match credential {
             StoredNodeCredential::Custom(custom) => Ok(custom.core()),
             _ => Err(CoreSelectionError::NoUsableCore {
@@ -1892,10 +1911,7 @@ where
     }
 
     /// Picks the Core for a custom node when its credential is already loaded.
-    fn selected_core_for_custom(
-        &self,
-        node: &ProxyNode,
-    ) -> Result<CoreType, CoreSelectionError> {
+    fn selected_core_for_custom(&self, node: &ProxyNode) -> Result<CoreType, CoreSelectionError> {
         let required = self.custom_required_core(node)?;
         if self.tun_enabled && required == CoreType::Xray {
             return Err(CoreSelectionError::ChosenCoreUnusable {
@@ -2261,9 +2277,7 @@ where
         if self.session.is_running() {
             return Err(SessionCommandError::SessionActive);
         }
-        self.session
-            .core_mut()
-            .apply_install_store(store);
+        self.session.core_mut().apply_install_store(store);
         Ok(())
     }
 }

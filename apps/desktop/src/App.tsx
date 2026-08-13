@@ -4130,7 +4130,7 @@ export default function App() {
                 {t("路由方案")}
                 <select
                   aria-label={t("路由方案")}
-                  disabled={busy || connected}
+                  disabled={busy}
                   value={status.routeSchemeId}
                   onChange={(event) => {
                     void (async () => {
@@ -4160,7 +4160,7 @@ export default function App() {
             <div className="actions">
               <button
                 type="button"
-                disabled={busy || connected}
+                disabled={busy}
                 onClick={() => {
                   void (async () => {
                     const name = window.prompt(t("新路由方案名称"), t("新方案"));
@@ -4223,7 +4223,7 @@ export default function App() {
                 {t("规则类型")}
                 <select
                   aria-label={t("规则类型")}
-                  disabled={busy || connected}
+                  disabled={busy}
                   value={routeRuleKind}
                   onChange={(event) =>
                     setRouteRuleKind(event.target.value as RouteRuleKind)
@@ -4240,7 +4240,7 @@ export default function App() {
                 {t("规则值")}
                 <input
                   aria-label={t("规则值")}
-                  disabled={busy || connected}
+                  disabled={busy}
                   placeholder={
                     routeRuleKind === "network"
                       ? "tcp 或 udp"
@@ -4258,7 +4258,7 @@ export default function App() {
                 {t("出口")}
                 <select
                   aria-label={t("规则出口")}
-                  disabled={busy || connected}
+                  disabled={busy}
                   value={routeRuleOutbound}
                   onChange={(event) =>
                     setRouteRuleOutbound(event.target.value as RouteOutbound)
@@ -4272,7 +4272,7 @@ export default function App() {
             <div className="actions">
               <button
                 type="button"
-                disabled={busy || connected}
+                disabled={busy}
                 onClick={onAddRouteRule}
               >
                 {t("添加规则")}
@@ -4304,7 +4304,7 @@ export default function App() {
                         <input
                           aria-label={`启用规则 ${index + 1}`}
                           checked={rule.enabled}
-                          disabled={busy || connected}
+                          disabled={busy}
                           type="checkbox"
                           onChange={(event) => {
                             const rules = [...routeDraft.rules];
@@ -4346,7 +4346,7 @@ export default function App() {
                         </button>
                         <button
                           type="button"
-                          disabled={busy || connected}
+                          disabled={busy}
                           onClick={() => {
                             setRouteDraft({
                               ...routeDraft,
@@ -4371,7 +4371,7 @@ export default function App() {
                 {t("默认出口")}
                 <select
                   aria-label={t("默认出口")}
-                  disabled={busy || connected}
+                  disabled={busy}
                   value={routeDraft.finalOutbound}
                   onChange={(event) => {
                     setRouteDraft({
@@ -4392,7 +4392,7 @@ export default function App() {
         <div className="actions">
           <button
             type="button"
-            disabled={busy || connected || routeDraft === null || !routeDirty}
+            disabled={busy || routeDraft === null || !routeDirty}
             onClick={() => void onSaveRoute()}
           >
             {t("保存路由")}
@@ -4418,7 +4418,7 @@ export default function App() {
               {t("模板")}
               <select
                 aria-label={t("DNS 模板")}
-                disabled={busy || connected}
+                disabled={busy}
                 value={dnsDraft.template}
                 onChange={(event) => {
                   const template = event.target.value as DnsTemplate;
@@ -4449,7 +4449,7 @@ export default function App() {
               {t("模式")}
               <select
                 aria-label={t("DNS 模式")}
-                disabled={busy || connected}
+                disabled={busy}
                 value={dnsDraft.mode}
                 onChange={(event) => {
                   const mode = event.target.value as DnsMode;
@@ -4483,7 +4483,7 @@ export default function App() {
                   {t("Bootstrap")}
                   <input
                     aria-label={t("Bootstrap DNS")}
-                    disabled={busy || connected}
+                    disabled={busy}
                     placeholder="223.5.5.5"
                     value={dnsDraft.bootstrap}
                     onChange={(event) => {
@@ -4496,7 +4496,7 @@ export default function App() {
                   {t("服务器")}
                   <input
                     aria-label={t("DNS 服务器")}
-                    disabled={busy || connected}
+                    disabled={busy}
                     value={dnsDraft.server}
                     onChange={(event) => {
                       setDnsDraft({ ...dnsDraft, server: event.target.value });
@@ -4508,7 +4508,7 @@ export default function App() {
                   {t("端口")}
                   <input
                     aria-label={t("DNS 端口")}
-                    disabled={busy || connected}
+                    disabled={busy}
                     min="1"
                     max="65535"
                     type="number"
@@ -4526,7 +4526,7 @@ export default function App() {
                 {t("DoH 路径")}
                 <input
                   aria-label={t("DoH 路径")}
-                  disabled={busy || connected}
+                  disabled={busy}
                   value={dnsDraft.dohPath}
                   onChange={(event) => {
                     setDnsDraft({ ...dnsDraft, dohPath: event.target.value });
@@ -4539,7 +4539,7 @@ export default function App() {
               {t("地址策略")}
               <select
                 aria-label={t("DNS 地址策略")}
-                disabled={busy || connected}
+                disabled={busy}
                 value={dnsDraft.strategy}
                 onChange={(event) => {
                   setDnsDraft({
@@ -4559,7 +4559,7 @@ export default function App() {
               {t("Hosts")}
               <textarea
                 aria-label={t("DNS Hosts")}
-                disabled={busy || connected}
+                disabled={busy}
                 rows={3}
                 placeholder={t("每行一条：example.com 1.2.3.4")}
                 value={dnsDraft.hosts}
@@ -4573,7 +4573,7 @@ export default function App() {
               {t("系统 DNS 域名后缀")}
               <textarea
                 aria-label={t("系统 DNS 域名后缀")}
-                disabled={busy || connected}
+                disabled={busy}
                 rows={2}
                 placeholder={t("每行一个，例如 lan")}
                 value={dnsDraft.systemDomains.join("\n")}
@@ -4590,7 +4590,7 @@ export default function App() {
               <input
                 aria-label={t("启用 IPv6 DNS")}
                 checked={dnsDraft.ipv6Enabled}
-                disabled={busy || connected}
+                disabled={busy}
                 type="checkbox"
                 onChange={(event) => {
                   setDnsDraft({ ...dnsDraft, ipv6Enabled: event.target.checked });
@@ -4603,7 +4603,7 @@ export default function App() {
               <input
                 aria-label={t("启用 FakeIP")}
                 checked={dnsDraft.fakeIpEnabled}
-                disabled={busy || connected}
+                disabled={busy}
                 type="checkbox"
                 onChange={(event) => {
                   setDnsDraft({ ...dnsDraft, fakeIpEnabled: event.target.checked });
@@ -4618,7 +4618,7 @@ export default function App() {
         <div className="actions">
           <button
             type="button"
-            disabled={busy || connected || dnsDraft === null || !dnsDirty}
+            disabled={busy || dnsDraft === null || !dnsDirty}
             onClick={() => void onSaveDns()}
           >
             {t("保存 DNS")}

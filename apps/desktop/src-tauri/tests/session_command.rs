@@ -750,9 +750,7 @@ fn reorders_nodes_by_explicit_id_list() {
         vec![manual_id, managed_id]
     );
 
-    let reordered = service
-        .reorder_nodes(&[managed_id, manual_id])
-        .unwrap();
+    let reordered = service.reorder_nodes(&[managed_id, manual_id]).unwrap();
     assert_eq!(
         reordered
             .into_iter()
@@ -1038,15 +1036,18 @@ fn changes_the_route_while_disconnected_and_uses_it_for_the_next_connection() {
 }
 
 #[test]
-fn refuses_to_change_the_route_while_connected() {
+fn changes_the_route_while_connected_by_restarting_the_core() {
     let (mut service, _runtime, _fail_start) = service();
     service.import_node(SHADOWSOCKS_LINK).unwrap();
     service.connect().unwrap();
 
-    let error = service.set_routing_mode(RoutingMode::Rule).unwrap_err();
+    let status = service.set_routing_mode(RoutingMode::Direct).unwrap();
 
-    assert_eq!(error.code(), "session_active");
-    assert_eq!(service.status().mode, "global");
+    assert!(status.connected);
+    assert_eq!(status.mode, "direct");
+    let config: serde_json::Value =
+        serde_json::from_slice(&fs::read(service.runtime_config_path().unwrap()).unwrap()).unwrap();
+    assert_eq!(config["route"]["final"], "direct");
 }
 
 #[test]
@@ -1096,18 +1097,51 @@ fn rejects_invalid_route_settings_without_changing_the_current_settings() {
 }
 
 #[test]
-fn refuses_to_change_route_settings_while_connected() {
+fn changes_route_settings_while_connected_by_restarting_the_core() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    service.set_routing_mode(RoutingMode::Rule).unwrap();
+    service.connect().unwrap();
+
+    let status = service
+        .set_route_settings(RouteSettings {
+            rules: vec![RouteRuleSetting {
+                kind: RouteRuleKind::DomainSuffix,
+                value: "cn".to_owned(),
+                outbound: DesktopRouteOutbound::Direct,
+                enabled: true,
+            }],
+            ..RouteSettings::default()
+        })
+        .unwrap();
+
+    assert!(status.connected);
+    assert_eq!(status.route.rules.len(), 1);
+    let config: serde_json::Value =
+        serde_json::from_slice(&fs::read(service.runtime_config_path().unwrap()).unwrap()).unwrap();
+    assert_eq!(config["route"]["rules"][1]["domain_suffix"][0], ".cn");
+}
+
+#[test]
+fn rejects_invalid_route_settings_while_connected_without_dropping_the_session() {
     let (mut service, _runtime, _fail_start) = service();
     service.import_node(SHADOWSOCKS_LINK).unwrap();
     service.connect().unwrap();
 
-    assert_eq!(
-        service
-            .set_route_settings(RouteSettings::default())
-            .unwrap_err()
-            .code(),
-        "session_active"
-    );
+    let error = service
+        .set_route_settings(RouteSettings {
+            rules: vec![RouteRuleSetting {
+                kind: RouteRuleKind::Port,
+                value: "zero".to_owned(),
+                outbound: DesktopRouteOutbound::Proxy,
+                enabled: true,
+            }],
+            ..RouteSettings::default()
+        })
+        .unwrap_err();
+
+    assert_eq!(error.code(), "invalid_route_settings");
+    assert!(service.status().connected);
 }
 
 #[test]
@@ -1138,19 +1172,41 @@ fn changes_dns_while_disconnected_and_uses_it_for_the_next_connection() {
 }
 
 #[test]
-fn refuses_to_change_dns_while_connected() {
+fn changes_dns_while_connected_by_restarting_the_core() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    service.connect().unwrap();
+
+    let status = service
+        .set_dns_settings(DnsSettings {
+            mode: DnsMode::PlainTcp,
+            ..DnsSettings::default()
+        })
+        .unwrap();
+
+    assert!(status.connected);
+    assert_eq!(status.dns.mode, DnsMode::PlainTcp);
+    let config: serde_json::Value =
+        serde_json::from_slice(&fs::read(service.runtime_config_path().unwrap()).unwrap()).unwrap();
+    assert_eq!(config["dns"]["servers"][1]["type"], "tcp");
+}
+
+#[test]
+fn rejects_invalid_dns_while_connected_without_dropping_the_session() {
     let (mut service, _runtime, _fail_start) = service();
     service.import_node(SHADOWSOCKS_LINK).unwrap();
     service.connect().unwrap();
 
     let error = service
         .set_dns_settings(DnsSettings {
-            mode: DnsMode::PlainTcp,
+            mode: DnsMode::PlainUdp,
+            port: 0,
             ..DnsSettings::default()
         })
         .unwrap_err();
 
-    assert_eq!(error.code(), "session_active");
+    assert_eq!(error.code(), "invalid_dns_settings");
+    assert!(service.status().connected);
     assert_eq!(service.status().dns, DnsSettings::default());
 }
 

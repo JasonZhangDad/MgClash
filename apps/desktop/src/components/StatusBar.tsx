@@ -58,7 +58,7 @@ export function StatusBar({
         {t("路由")}
         <select
           aria-label={t("状态栏路由模式")}
-          disabled={busy || connected || status === null}
+          disabled={busy || status === null}
           value={status?.mode ?? "global"}
           onChange={(event) => onRoutingMode(event.target.value as RoutingMode)}
         >

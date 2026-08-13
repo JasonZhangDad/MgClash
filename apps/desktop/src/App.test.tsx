@@ -2968,15 +2968,18 @@ describe("App", () => {
     expect(field?.value).toBe("rule");
   });
 
-  it("locks routing mode while connected", async () => {
+  it("changes routing mode while connected", async () => {
     loadSessionStatusMock.mockResolvedValue(CONNECTED);
+    setRoutingModeMock.mockResolvedValue({ ...CONNECTED, mode: "rule" });
     await render();
 
-    expect(
-      container.querySelector<HTMLSelectElement>(
-        "select[aria-label='状态栏路由模式']",
-      )?.disabled,
-    ).toBe(true);
+    const mode = container.querySelector<HTMLSelectElement>(
+      "select[aria-label='状态栏路由模式']",
+    );
+    expect(mode?.disabled).toBe(false);
+    await act(async () => selectValue("rule", mode!));
+
+    expect(setRoutingModeMock).toHaveBeenCalledWith("rule");
   });
 
   it("shows and saves the compact DNS settings while disconnected", async () => {
@@ -3022,15 +3025,20 @@ describe("App", () => {
     });
   });
 
-  it("locks DNS settings while connected", async () => {
+  it("saves DNS settings while connected", async () => {
     loadSessionStatusMock.mockResolvedValue(CONNECTED);
+    setDnsSettingsMock.mockResolvedValue(CONNECTED);
     await render();
 
-    expect(button("保存 DNS").disabled).toBe(true);
-    expect(
-      container.querySelector<HTMLSelectElement>("select[aria-label='DNS 模式']")
-        ?.disabled,
-    ).toBe(true);
+    const mode = container.querySelector<HTMLSelectElement>(
+      "select[aria-label='DNS 模式']",
+    );
+    expect(mode?.disabled).toBe(false);
+    await act(async () => selectValue("doh", mode!));
+
+    await act(async () => button("保存 DNS").click());
+
+    expect(setDnsSettingsMock).toHaveBeenCalledTimes(1);
   });
 
   it("shows runtime order and saves compact route settings", async () => {
@@ -3094,15 +3102,24 @@ describe("App", () => {
     });
   });
 
-  it("locks route settings while connected", async () => {
+  it("saves route settings while connected", async () => {
     loadSessionStatusMock.mockResolvedValue(CONNECTED);
+    setRouteSettingsMock.mockResolvedValue(CONNECTED);
     await render();
 
-    expect(button("保存路由").disabled).toBe(true);
-    expect(
-      container.querySelector<HTMLSelectElement>("select[aria-label='规则类型']")
-        ?.disabled,
-    ).toBe(true);
+    const kind = container.querySelector<HTMLSelectElement>(
+      "select[aria-label='规则类型']",
+    );
+    expect(kind?.disabled).toBe(false);
+    const value = container.querySelector<HTMLInputElement>(
+      "input[aria-label='规则值']",
+    );
+    await act(async () => typeInput("cn", value!));
+    await act(async () => button("添加规则").click());
+
+    await act(async () => button("保存路由").click());
+
+    expect(setRouteSettingsMock).toHaveBeenCalledTimes(1);
   });
 
   it("picks up a reconnect that automatic recovery performed", async () => {
