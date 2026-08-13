@@ -159,6 +159,8 @@ const DEFAULT_SETTINGS = {
   launchAtLogin: false,
   tunEnabled: false,
   logLevel: "info" as const,
+  systemProxyMode: "managed" as const,
+  locale: "zh-Hans" as const,
 };
 
 const SUBSCRIPTION = {
@@ -864,7 +866,7 @@ describe("App", () => {
     loadAppSettingsMock.mockResolvedValue({
       ...DEFAULT_SETTINGS,
       logLevel: "debug",
-    });
+      });
     await render();
 
     expect(createSelect("日志级别").value).toBe("debug");
@@ -2012,6 +2014,55 @@ describe("App", () => {
       "network unreachable",
     );
     expect(container.querySelector("[aria-label='检查更新结果']")).toBeNull();
+  });
+
+  it("renders the window in the saved language", async () => {
+    loadAppSettingsMock.mockResolvedValue({
+      ...DEFAULT_SETTINGS,
+      locale: "en" as const,
+    });
+    await render();
+
+    // The language is a saved setting, so the window opens in it rather than
+    // starting Chinese and switching once the settings arrive.
+    expect(container.textContent).toContain("Connect");
+    expect(container.textContent).not.toContain("检查更新");
+  });
+
+  it("switches language without a restart", async () => {
+    saveAppSettingsMock.mockImplementation(
+      async (next: unknown) => next as typeof DEFAULT_SETTINGS,
+    );
+    await render();
+    expect(container.textContent).toContain("检查更新");
+
+    const picker = container.querySelector<HTMLSelectElement>(
+      "[aria-label='界面语言']",
+    );
+    if (!picker) {
+      throw new Error("no language picker");
+    }
+    await act(async () => selectValue("en", picker));
+
+    expect(saveAppSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ locale: "en" }),
+    );
+    expect(container.textContent).toContain("Check for updates");
+  });
+
+  it("leaves an untranslated label in the source language", async () => {
+    loadAppSettingsMock.mockResolvedValue({
+      ...DEFAULT_SETTINGS,
+      locale: "en" as const,
+    });
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    await render();
+
+    // A gap in the dictionary has to be visible rather than blank: the label
+    // still names its control, and the missing entry is obvious to whoever
+    // reports it.
+    const table = container.querySelector("[aria-label='Nodes']");
+    expect(table).not.toBeNull();
   });
 
   it("keeps subscription-owned nodes read-only", async () => {

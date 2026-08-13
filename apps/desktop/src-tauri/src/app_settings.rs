@@ -38,6 +38,11 @@ const ADD_SYSTEM_PROXY_MODE: &str = "
         DEFAULT 'managed';
 ";
 
+/// Adds the interface language, on the same terms as the mode above.
+const ADD_LOCALE: &str = "
+    ALTER TABLE app_settings ADD COLUMN locale TEXT NOT NULL DEFAULT 'en';
+";
+
 /// What the shell does outside of proxying, as the settings panel edits it.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,6 +66,8 @@ pub struct AppSettings {
     pub log_level: LogLevel,
     /// What connecting does to the host's System Proxy.
     pub system_proxy_mode: SystemProxyModeSetting,
+    /// The language the window renders in.
+    pub locale: LocaleSetting,
 }
 
 impl Default for AppSettings {
@@ -73,6 +80,7 @@ impl Default for AppSettings {
             launch_at_login: false,
             core_preference: CorePreferenceSetting::Auto,
             system_proxy_mode: SystemProxyModeSetting::Managed,
+            locale: LocaleSetting::English,
             // Off by default: TUN needs elevation and takes over the whole
             // routing table, which is not something to switch on unasked.
             tun_enabled: false,
@@ -115,10 +123,12 @@ impl SqliteAppSettingsStore {
     fn from_connection(connection: Connection) -> Result<Self, AppSettingsStoreError> {
         connection.execute_batch(CREATE_APP_SETTINGS_TABLE)?;
         // Only a duplicate column is tolerated; anything else is a real failure.
-        if let Err(error) = connection.execute_batch(ADD_SYSTEM_PROXY_MODE)
-            && !error.to_string().contains("duplicate column")
-        {
-            return Err(error.into());
+        for migration in [ADD_SYSTEM_PROXY_MODE, ADD_LOCALE] {
+            if let Err(error) = connection.execute_batch(migration)
+                && !error.to_string().contains("duplicate column")
+            {
+                return Err(error.into());
+            }
         }
         Ok(Self { connection })
     }
@@ -132,7 +142,7 @@ impl SqliteAppSettingsStore {
         let row = self
             .connection
             .query_row(
-                "SELECT connect_on_launch, close_to_tray, launch_at_login, core_preference, tun_enabled, log_level, system_proxy_mode
+                "SELECT connect_on_launch, close_to_tray, launch_at_login, core_preference, tun_enabled, log_level, system_proxy_mode, locale
                  FROM app_settings WHERE id = 1",
                 [],
                 |row| {
@@ -144,6 +154,7 @@ impl SqliteAppSettingsStore {
                         row.get::<_, i64>(4)?,
                         row.get::<_, String>(5)?,
                         row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
                     ))
                 },
             )
@@ -156,6 +167,7 @@ impl SqliteAppSettingsStore {
             tun_enabled,
             log_level,
             system_proxy_mode,
+            locale,
         )) = row
         else {
             return Ok(AppSettings::default());
@@ -178,6 +190,8 @@ impl SqliteAppSettingsStore {
                     value: system_proxy_mode,
                 },
             )?,
+            locale: parse_locale(&locale)
+                .ok_or(AppSettingsStoreError::InvalidStoredValue { value: locale })?,
         })
     }
 
@@ -188,14 +202,15 @@ impl SqliteAppSettingsStore {
     /// Returns a typed database error when `SQLite` cannot update the row.
     pub fn save(&self, settings: AppSettings) -> Result<(), AppSettingsStoreError> {
         self.connection.execute(
-            "INSERT INTO app_settings (id, connect_on_launch, close_to_tray, launch_at_login, core_preference, tun_enabled, log_level, system_proxy_mode)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO app_settings (id, connect_on_launch, close_to_tray, launch_at_login, core_preference, tun_enabled, log_level, system_proxy_mode, locale)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(id) DO UPDATE SET
                  connect_on_launch = excluded.connect_on_launch,
                  close_to_tray = excluded.close_to_tray,
                  launch_at_login = excluded.launch_at_login,
                  core_preference = excluded.core_preference,
                  system_proxy_mode = excluded.system_proxy_mode,
+                 locale = excluded.locale,
                  tun_enabled = excluded.tun_enabled,
                  log_level = excluded.log_level",
             params![
@@ -206,6 +221,7 @@ impl SqliteAppSettingsStore {
                 i64::from(settings.tun_enabled),
                 log_level_name(settings.log_level),
                 settings.system_proxy_mode.name(),
+                settings.locale.name(),
             ],
         )?;
         Ok(())
@@ -270,6 +286,83 @@ pub fn parse_system_proxy_mode(value: &str) -> Option<SystemProxyModeSetting> {
         "unchanged" => Some(SystemProxyModeSetting::Unchanged),
         _ => None,
     }
+}
+
+/// The language the window renders in.
+///
+/// Chinese is the language every source string is written in, so it needs no
+/// dictionary; English is a translation layered over it.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum LocaleSetting {
+    /// The language the window opens in.
+    #[default]
+    #[serde(rename = "en")]
+    English,
+    /// The language every source string is written in, so it needs no
+    /// dictionary of its own.
+    #[serde(rename = "zh-Hans")]
+    SimplifiedChinese,
+    #[serde(rename = "zh-Hant")]
+    TraditionalChinese,
+    #[serde(rename = "de")]
+    German,
+    #[serde(rename = "fr")]
+    French,
+    #[serde(rename = "es")]
+    Spanish,
+    #[serde(rename = "it")]
+    Italian,
+    #[serde(rename = "ru")]
+    Russian,
+    #[serde(rename = "ja")]
+    Japanese,
+    #[serde(rename = "ko")]
+    Korean,
+}
+
+impl LocaleSetting {
+    /// Every language, matching the webview's own list.
+    pub const ALL: &'static [Self] = &[
+        Self::English,
+        Self::SimplifiedChinese,
+        Self::TraditionalChinese,
+        Self::German,
+        Self::French,
+        Self::Spanish,
+        Self::Italian,
+        Self::Russian,
+        Self::Japanese,
+        Self::Korean,
+    ];
+
+    /// The stable value stored in `SQLite` and exchanged with the webview.
+    ///
+    /// BCP 47 tags rather than invented names, so the stored value means the
+    /// same thing to anything else that reads it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::English => "en",
+            Self::SimplifiedChinese => "zh-Hans",
+            Self::TraditionalChinese => "zh-Hant",
+            Self::German => "de",
+            Self::French => "fr",
+            Self::Spanish => "es",
+            Self::Italian => "it",
+            Self::Russian => "ru",
+            Self::Japanese => "ja",
+            Self::Korean => "ko",
+        }
+    }
+}
+
+/// Reads the stored language, or `None` for an unknown value.
+#[must_use]
+pub fn parse_locale(value: &str) -> Option<LocaleSetting> {
+    LocaleSetting::ALL
+        .iter()
+        .copied()
+        .find(|locale| locale.name() == value)
 }
 
 /// The Core the user picked, as the settings panel offers it.

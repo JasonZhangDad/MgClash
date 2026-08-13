@@ -1,3 +1,4 @@
+import { DEFAULT_LOCALE, LOCALES, translate, type Locale } from "./i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -210,6 +211,13 @@ function describeFailure(error: unknown): string {
 }
 
 export default function App() {
+  const [locale, setLocale] = useState<Locale>(DEFAULT_LOCALE);
+  /// Every visible string goes through here; the source text is the key.
+  const t = useCallback(
+    (text: string) => translate(locale, text),
+    [locale],
+  );
+
   const [platform, setPlatform] = useState<PlatformSummary | null>(null);
   const [platformError, setPlatformError] = useState<string | null>(null);
   const [status, setStatus] = useState<SessionStatus | null>(null);
@@ -596,6 +604,7 @@ export default function App() {
       (loaded) => {
         setSettings(loaded);
         setLogLevel(loaded.logLevel);
+        setLocale(loaded.locale);
       },
       (failure: unknown) => setError(describeFailure(failure)),
     );
@@ -613,10 +622,14 @@ export default function App() {
         if (changes.logLevel !== undefined) {
           setLogLevel(changes.logLevel);
         }
+        if (changes.locale !== undefined) {
+          setLocale(changes.locale);
+        }
       } catch (failure: unknown) {
         // Put the stored values back so the switches never claim a state the
         // app did not persist.
         setSettings(settings);
+        setLocale(settings.locale);
         setError(describeFailure(failure));
       }
     },
@@ -1234,7 +1247,7 @@ export default function App() {
     <main className="app-shell">
       <header className="menubar">
         <span className="brand">MgClash</span>
-        <nav aria-label="配置入口">
+        <nav aria-label={t("配置入口")}>
           {TABS.map((entry) => (
             <button
               key={entry.id}
@@ -1251,7 +1264,7 @@ export default function App() {
             disabled={busy}
             onClick={() => void onCheckUpdate()}
           >
-            检查更新
+            {t("检查更新")}
           </button>
         </nav>
         <button
@@ -1266,9 +1279,9 @@ export default function App() {
 
       <section className="content">
         {systemProxyStartup === "restoreRequired" && (
-          <section className="notice" aria-label="系统代理恢复">
+          <section className="notice" aria-label={t("系统代理恢复")}>
             <p>
-              检测到上次异常退出留下的系统代理设置。恢复原设置可以避免系统继续指向已经停止的本地代理。
+              {t("检测到上次异常退出留下的系统代理设置。恢复原设置可以避免系统继续指向已经停止的本地代理。")}
             </p>
             <div className="actions">
               <button
@@ -1278,7 +1291,7 @@ export default function App() {
                   void resolveSystemProxyStartup(recoverSystemProxy)
                 }
               >
-                恢复原设置
+                {t("恢复原设置")}
               </button>
               <button
                 type="button"
@@ -1287,7 +1300,7 @@ export default function App() {
                   void resolveSystemProxyStartup(dismissSystemProxyRecovery)
                 }
               >
-                保留当前设置
+                {t("保留当前设置")}
               </button>
             </div>
           </section>
@@ -1296,26 +1309,26 @@ export default function App() {
         {!noticeDismissed && (
           <div className="notice" role="note">
             <p>
-              这是<strong>未签名</strong>版本：macOS Gatekeeper 与 Windows
+              {t("这是")}<strong>{t("未签名")}</strong>版本：macOS Gatekeeper 与 Windows
               SmartScreen 会在首次打开时提示，需要你手动确认后才能运行。
             </p>
             <p>{platform ? TUN_NOTICE[platform.tunAvailability] : ""}</p>
             <div className="actions">
               <button type="button" onClick={dismissNotice}>
-                我知道了
+                {t("我知道了")}
               </button>
             </div>
           </div>
         )}
 
         <div className="node-panel">
-        <h2>节点</h2>
+        <h2>{t("节点")}</h2>
 
         <div className="url-test">
           <label>
-            URL 测试地址
+            {t("URL 测试地址")}
             <input
-              aria-label="URL 测试地址"
+              aria-label={t("URL 测试地址")}
               value={urlTestAddress}
               disabled={busy || nodeTestInProgress}
               onChange={(event) => setUrlTestAddress(event.target.value)}
@@ -1326,21 +1339,21 @@ export default function App() {
             disabled={busy || nodeTestInProgress || !connected || node === null}
             onClick={() => void onTestUrl()}
           >
-            URL 测试
+            {t("URL 测试")}
           </button>
         </div>
         <div className="log-pane">
-        <h2>日志</h2>
+        <h2>{t("日志")}</h2>
 
         <p className="hint">
-          Core 输出在写入前已脱敏，凭据字段一律替换为 [REDACTED]。最多保留最近 2000 条。
+          {t("Core 输出在写入前已脱敏，凭据字段一律替换为 [REDACTED]。最多保留最近 2000 条。")}
         </p>
 
         <div className="log-controls">
           <label>
-            级别
+            {t("级别")}
             <select
-              aria-label="日志级别"
+              aria-label={t("日志级别")}
               value={logLevel}
               onChange={(event) => setLogLevel(event.target.value as LogLevel)}
             >
@@ -1352,31 +1365,31 @@ export default function App() {
             </select>
           </label>
           <label>
-            来源
+            {t("来源")}
             <select
-              aria-label="日志来源"
+              aria-label={t("日志来源")}
               value={logSource}
               onChange={(event) =>
                 setLogSource(event.target.value as LogSource | "all")
               }
             >
-              <option value="all">全部</option>
-              <option value="app">应用</option>
+              <option value="all">{t("全部")}</option>
+              <option value="app">{t("应用")}</option>
               <option value="core">Core</option>
             </select>
           </label>
           <button type="button" onClick={() => void refreshLogs()}>
-            刷新日志
+            {t("刷新日志")}
           </button>
           <button type="button" onClick={() => void onClearLogs()}>
-            清空日志
+            {t("清空日志")}
           </button>
         </div>
 
         {logs.length === 0 ? (
-          <p className="hint">暂无日志</p>
+          <p className="hint">{t("暂无日志")}</p>
         ) : (
-          <ul className="log-list" aria-label="日志列表">
+          <ul className="log-list" aria-label={t("日志列表")}>
             {logs.map((entry, index) => (
               <li
                 key={`${entry.timestampMs}-${index}`}
@@ -1400,7 +1413,7 @@ export default function App() {
         <div className="actions">
           {testingAllNodes ? (
             <button type="button" onClick={onCancelNodeTests}>
-              取消测速
+              {t("取消测速")}
             </button>
           ) : (
             <button
@@ -1408,21 +1421,21 @@ export default function App() {
               disabled={busy || nodeTestInProgress || nodes.length === 0}
               onClick={() => void onTestAllNodes()}
             >
-              全部测速
+              {t("全部测速")}
             </button>
           )}
         </div>
 
         <div className="node-group-filter">
           <label>
-            分组
+            {t("分组")}
             <select
-              aria-label="节点分组筛选"
+              aria-label={t("节点分组筛选")}
               value={nodeGroupFilter}
               onChange={(event) => setNodeGroupFilter(event.target.value)}
             >
-              <option value="all">全部</option>
-              <option value="ungrouped">未分组</option>
+              <option value="all">{t("全部")}</option>
+              <option value="ungrouped">{t("未分组")}</option>
               {nodeGroups.map((group) => (
                 <option key={group.id} value={group.id}>
                   {group.name}
@@ -1433,17 +1446,17 @@ export default function App() {
         </div>
 
         {nodes.length === 0 ? (
-          <p className="hint">尚未导入节点</p>
+          <p className="hint">{t("尚未导入节点")}</p>
         ) : visibleNodes.length === 0 ? (
-          <p className="hint">当前分组没有节点</p>
+          <p className="hint">{t("当前分组没有节点")}</p>
         ) : (
-          <table className="node-list" aria-label="节点列表">
+          <table className="node-list" aria-label={t("节点列表")}>
             <thead>
               <tr>
                 <th className="node-check">
                   <input
                     type="checkbox"
-                    aria-label="全选节点"
+                    aria-label={t("全选节点")}
                     checked={
                       visibleNodes.length > 0 &&
                       visibleNodes.every((item) => checkedNodes.has(item.id))
@@ -1457,19 +1470,19 @@ export default function App() {
                     }
                   />
                 </th>
-                <th>名称</th>
-                <th>协议</th>
-                <th>传输</th>
+                <th>{t("名称")}</th>
+                <th>{t("协议")}</th>
+                <th>{t("传输")}</th>
                 <th>TLS</th>
-                <th>分组</th>
-                <th>服务器</th>
-                <th>延迟</th>
-                <th>速度</th>
-                <th>今日上传</th>
-                <th>今日下载</th>
-                <th>总上传</th>
-                <th>总下载</th>
-                <th>操作</th>
+                <th>{t("分组")}</th>
+                <th>{t("服务器")}</th>
+                <th>{t("延迟")}</th>
+                <th>{t("速度")}</th>
+                <th>{t("今日上传")}</th>
+                <th>{t("今日下载")}</th>
+                <th>{t("总上传")}</th>
+                <th>{t("总下载")}</th>
+                <th>{t("操作")}</th>
               </tr>
             </thead>
             <tbody>
@@ -1586,7 +1599,7 @@ export default function App() {
                     disabled={busy || connected || selected}
                     onClick={act(() => void run(() => selectNode(target.id)))}
                   >
-                    设为活动
+                    {t("设为活动")}
                   </button>
                 </li>
                 <li>
@@ -1610,7 +1623,7 @@ export default function App() {
                     disabled={busy || connected || !target.deletable}
                     onClick={act(() => void onCloneNode(target.id))}
                   >
-                    克隆所选
+                    {t("克隆所选")}
                   </button>
                 </li>
                 <li>
@@ -1634,7 +1647,7 @@ export default function App() {
                     disabled={busy}
                     onClick={act(() => void onShowNodeQrCode(target))}
                   >
-                    显示二维码
+                    {t("显示二维码")}
                   </button>
                 </li>
                 <li>
@@ -1644,7 +1657,7 @@ export default function App() {
                     disabled={busy}
                     onClick={act(() => onGroupNode(target))}
                   >
-                    设置分组
+                    {t("设置分组")}
                   </button>
                 </li>
                 <li>
@@ -1654,7 +1667,7 @@ export default function App() {
                     disabled={busy || !reorderable || index === 0}
                     onClick={act(() => void onMoveNode(target.id, "up"))}
                   >
-                    上移
+                    {t("上移")}
                   </button>
                 </li>
                 <li>
@@ -1664,7 +1677,7 @@ export default function App() {
                     disabled={busy || !reorderable || index === nodes.length - 1}
                     onClick={act(() => void onMoveNode(target.id, "down"))}
                   >
-                    下移
+                    {t("下移")}
                   </button>
                 </li>
                 {target.deletable && (
@@ -1675,7 +1688,7 @@ export default function App() {
                       disabled={busy || connected}
                       onClick={act(() => onEditNode(target))}
                     >
-                      编辑
+                      {t("编辑")}
                     </button>
                   </li>
                 )}
@@ -1702,7 +1715,7 @@ export default function App() {
                     disabled={busy || connected}
                     onClick={act(() => void onRemoveDuplicateNodes())}
                   >
-                    移除重复
+                    {t("移除重复")}
                   </button>
                 </li>
               </ul>
@@ -1710,11 +1723,11 @@ export default function App() {
           })()}
 
         {groupingNodeId !== null && (
-          <div className="settings-form" aria-label="设置节点分组">
+          <div className="settings-form" aria-label={t("设置节点分组")}>
             <label>
-              分组名称
+              {t("分组名称")}
               <input
-                aria-label="节点分组"
+                aria-label={t("节点分组")}
                 disabled={busy}
                 list="node-group-options"
                 value={nodeGroupName}
@@ -1728,39 +1741,39 @@ export default function App() {
             </label>
             <div className="actions">
               <button type="button" disabled={busy} onClick={() => void onSaveNodeGroup()}>
-                保存分组
+                {t("保存分组")}
               </button>
               <button type="button" disabled={busy} onClick={resetNodeGroupForm}>
-                取消
+                {t("取消")}
               </button>
             </div>
           </div>
         )}
 
         {editingNodeId !== null && (
-          <div className="settings-form" aria-label="编辑节点">
+          <div className="settings-form" aria-label={t("编辑节点")}>
             <label>
-              名称
+              {t("名称")}
               <input
-                aria-label="节点名称"
+                aria-label={t("节点名称")}
                 disabled={busy || connected}
                 value={nodeName}
                 onChange={(event) => setNodeName(event.target.value)}
               />
             </label>
             <label>
-              服务器
+              {t("服务器")}
               <input
-                aria-label="节点服务器"
+                aria-label={t("节点服务器")}
                 disabled={busy || connected}
                 value={nodeServer}
                 onChange={(event) => setNodeServer(event.target.value)}
               />
             </label>
             <label>
-              端口
+              {t("端口")}
               <input
-                aria-label="节点端口"
+                aria-label={t("节点端口")}
                 disabled={busy || connected}
                 min="1"
                 max="65535"
@@ -1771,10 +1784,10 @@ export default function App() {
             </label>
             <div className="actions">
               <button type="button" disabled={busy || connected} onClick={() => void onSaveNode()}>
-                保存节点
+                {t("保存节点")}
               </button>
               <button type="button" disabled={busy} onClick={resetNodeForm}>
-                取消
+                {t("取消")}
               </button>
             </div>
           </div>
@@ -1786,13 +1799,13 @@ export default function App() {
             <div
               className="dialog qr-dialog"
               role="dialog"
-              aria-label="检查更新结果"
+              aria-label={t("检查更新结果")}
               onClick={(event) => event.stopPropagation()}
             >
               <header className="dialog-head">
-                <strong>检查更新</strong>
+                <strong>{t("检查更新")}</strong>
                 <button type="button" onClick={() => setUpdate(null)}>
-                  关闭
+                  {t("关闭")}
                 </button>
               </header>
               <p>
@@ -1817,7 +1830,7 @@ export default function App() {
               <header className="dialog-head">
                 <strong>{qrCode.name}</strong>
                 <button type="button" onClick={() => setQrCode(null)}>
-                  关闭
+                  {t("关闭")}
                 </button>
               </header>
               {/* The markup comes from the Rust renderer, never from a node's
@@ -1827,7 +1840,7 @@ export default function App() {
                 dangerouslySetInnerHTML={{ __html: qrCode.svg }}
               />
               <p className="hint">
-                扫描即导入该节点。二维码包含凭据，请勿分享给他人。
+                {t("扫描即导入该节点。二维码包含凭据，请勿分享给他人。")}
               </p>
             </div>
           </div>
@@ -1840,7 +1853,7 @@ export default function App() {
           <div
             className="dialog"
             role="dialog"
-            aria-label="配置"
+            aria-label={t("配置")}
             onClick={(event) => event.stopPropagation()}
           >
             <header className="dialog-head">
@@ -1859,57 +1872,57 @@ export default function App() {
               <button
                 type="button"
                 className="dialog-close"
-                aria-label="关闭配置"
+                aria-label={t("关闭配置")}
                 onClick={() => setPanel(null)}
               >
-                关闭
+                {t("关闭")}
               </button>
             </header>
             <div className="dialog-body">
               <div className="tab-panel" hidden={panel !== "connection"}>
-        <h2>连接</h2>
+        <h2>{t("连接")}</h2>
 
         <dl>
           <div>
-            <dt>状态</dt>
+            <dt>{t("状态")}</dt>
             <dd className={connected ? "connected" : undefined}>
               {connected ? "已连接" : "未连接"}
             </dd>
           </div>
           <div>
-            <dt>下载</dt>
-            <dd aria-label="下载速率">
+            <dt>{t("下载")}</dt>
+            <dd aria-label={t("下载速率")}>
               {connected ? formatRate(traffic.downloadBytesPerSecond) : "—"}
             </dd>
           </div>
           <div>
-            <dt>上传</dt>
-            <dd aria-label="上传速率">
+            <dt>{t("上传")}</dt>
+            <dd aria-label={t("上传速率")}>
               {connected ? formatRate(traffic.uploadBytesPerSecond) : "—"}
             </dd>
           </div>
           <div>
-            <dt>今日</dt>
-            <dd aria-label="今日流量">{formatBytes(traffic.todayBytes)}</dd>
+            <dt>{t("今日")}</dt>
+            <dd aria-label={t("今日流量")}>{formatBytes(traffic.todayBytes)}</dd>
           </div>
           <div>
-            <dt>本月</dt>
-            <dd aria-label="本月流量">{formatBytes(traffic.monthBytes)}</dd>
+            <dt>{t("本月")}</dt>
+            <dd aria-label={t("本月流量")}>{formatBytes(traffic.monthBytes)}</dd>
           </div>
           <div>
-            <dt>累计</dt>
-            <dd aria-label="累计流量">{formatBytes(traffic.totalBytes)}</dd>
+            <dt>{t("累计")}</dt>
+            <dd aria-label={t("累计流量")}>{formatBytes(traffic.totalBytes)}</dd>
           </div>
           <div>
-            <dt>节点</dt>
+            <dt>{t("节点")}</dt>
             <dd>{node ? node.name : "尚未导入"}</dd>
           </div>
           <div>
-            <dt>协议</dt>
+            <dt>{t("协议")}</dt>
             <dd>{node ? node.protocol : "—"}</dd>
           </div>
           <div>
-            <dt>地址</dt>
+            <dt>{t("地址")}</dt>
             <dd>{node ? `${node.server}:${node.port}` : "—"}</dd>
           </div>
           <div>
@@ -1917,10 +1930,10 @@ export default function App() {
             <dd>{status ? status.core : "—"}</dd>
           </div>
           <div>
-            <dt>模式</dt>
+            <dt>{t("模式")}</dt>
             <dd>
               <select
-                aria-label="路由模式"
+                aria-label={t("路由模式")}
                 disabled={busy || connected || status === null}
                 value={status?.mode ?? "global"}
                 onChange={(event) =>
@@ -1929,14 +1942,14 @@ export default function App() {
                   )
                 }
               >
-                <option value="global">全局</option>
-                <option value="rule">规则</option>
-                <option value="direct">直连</option>
+                <option value="global">{t("全局")}</option>
+                <option value="rule">{t("规则")}</option>
+                <option value="direct">{t("直连")}</option>
               </select>
             </dd>
           </div>
           <div>
-            <dt>本地代理</dt>
+            <dt>{t("本地代理")}</dt>
             <dd>
               {status
                 ? `SOCKS ${status.socksPort} · HTTP ${status.httpPort}`
@@ -1944,7 +1957,7 @@ export default function App() {
             </dd>
           </div>
           <div>
-            <dt>系统代理</dt>
+            <dt>{t("系统代理")}</dt>
             <dd>
               {connected && status?.systemProxy
                 ? "已接管系统代理"
@@ -1956,7 +1969,7 @@ export default function App() {
             <dd>{platform ? TUN_LABEL[platform.tunAvailability] : "—"}</dd>
           </div>
           <div>
-            <dt>构建目标</dt>
+            <dt>{t("构建目标")}</dt>
             <dd>{platform ? platform.artifactIdentifier : platformError}</dd>
           </div>
         </dl>
@@ -1980,10 +1993,10 @@ export default function App() {
 
               </div>
               <div className="tab-panel" hidden={panel !== "nodes"}>
-        <h2>导入节点</h2>
+        <h2>{t("导入节点")}</h2>
 
         <textarea
-          aria-label="分享链接"
+          aria-label={t("分享链接")}
           rows={3}
           value={uri}
           disabled={busy || connected}
@@ -1997,22 +2010,22 @@ export default function App() {
             disabled={busy || connected}
             onClick={() => void onImport()}
           >
-            导入
+            {t("导入")}
           </button>
         </div>
 
-        <h2>批量导入</h2>
+        <h2>{t("批量导入")}</h2>
 
         <p className="hint">
-          可粘贴多行分享链接，或整体 Base64 的订阅正文。批量导入不会改变当前选中的节点。
+          {t("可粘贴多行分享链接，或整体 Base64 的订阅正文。批量导入不会改变当前选中的节点。")}
         </p>
 
         <textarea
-          aria-label="批量节点列表"
+          aria-label={t("批量节点列表")}
           rows={4}
           value={bulkText}
           disabled={busy || connected}
-          placeholder="每行一个链接，或粘贴 Base64 订阅正文"
+          placeholder={t("每行一个链接，或粘贴 Base64 订阅正文")}
           onChange={(event) => setBulkText(event.target.value)}
         />
 
@@ -2022,12 +2035,12 @@ export default function App() {
             disabled={busy || connected}
             onClick={() => void runBulkImport(bulkText)}
           >
-            批量导入
+            {t("批量导入")}
           </button>
           <label className="file-import">
-            从文件导入
+            {t("从文件导入")}
             <input
-              aria-label="从文件导入节点"
+              aria-label={t("从文件导入节点")}
               type="file"
               accept=".txt,.text,text/plain"
               disabled={busy || connected}
@@ -2040,9 +2053,9 @@ export default function App() {
             />
           </label>
           <label className="file-import">
-            扫描二维码图片
+            {t("扫描二维码图片")}
             <input
-              aria-label="从二维码图片导入节点"
+              aria-label={t("从二维码图片导入节点")}
               type="file"
               accept="image/png,image/jpeg"
               disabled={busy || connected}
@@ -2056,7 +2069,7 @@ export default function App() {
         </div>
 
         {bulkReport !== null && (
-          <div className="bulk-report" role="status" aria-label="批量导入结果">
+          <div className="bulk-report" role="status" aria-label={t("批量导入结果")}>
             <p>
               成功导入 {bulkReport.imported} 个
               {bulkReport.duplicates > 0 &&
@@ -2078,13 +2091,13 @@ export default function App() {
           </div>
         )}
 
-        <h2>手动创建节点</h2>
+        <h2>{t("手动创建节点")}</h2>
 
-        <div className="settings-form" aria-label="手动创建节点">
+        <div className="settings-form" aria-label={t("手动创建节点")}>
           <label>
-            协议
+            {t("协议")}
             <select
-              aria-label="节点协议"
+              aria-label={t("节点协议")}
               value={createForm.protocol}
               disabled={busy || connected}
               onChange={(event) =>
@@ -2102,9 +2115,9 @@ export default function App() {
           </label>
 
           <label>
-            名称
+            {t("名称")}
             <input
-              aria-label="新建节点名称"
+              aria-label={t("新建节点名称")}
               value={createForm.name}
               disabled={busy || connected}
               onChange={(event) => updateCreateForm({ name: event.target.value })}
@@ -2112,9 +2125,9 @@ export default function App() {
           </label>
 
           <label>
-            服务器
+            {t("服务器")}
             <input
-              aria-label="新建节点服务器"
+              aria-label={t("新建节点服务器")}
               value={createForm.server}
               disabled={busy || connected}
               onChange={(event) =>
@@ -2124,9 +2137,9 @@ export default function App() {
           </label>
 
           <label>
-            端口
+            {t("端口")}
             <input
-              aria-label="新建节点端口"
+              aria-label={t("新建节点端口")}
               inputMode="numeric"
               value={createForm.port}
               disabled={busy || connected}
@@ -2139,7 +2152,7 @@ export default function App() {
             <label>
               UUID
               <input
-                aria-label="节点 UUID"
+                aria-label={t("节点 UUID")}
                 value={createForm.userId}
                 disabled={busy || connected}
                 onChange={(event) =>
@@ -2154,7 +2167,7 @@ export default function App() {
               flow
               <input
                 aria-label="VLESS flow"
-                placeholder="留空表示不使用"
+                placeholder={t("留空表示不使用")}
                 value={createForm.flow}
                 disabled={busy || connected}
                 onChange={(event) =>
@@ -2167,9 +2180,9 @@ export default function App() {
           {createForm.protocol === "vmess" && (
             <>
               <label>
-                加密方式
+                {t("加密方式")}
                 <select
-                  aria-label="VMess 加密方式"
+                  aria-label={t("VMess 加密方式")}
                   value={createForm.security}
                   disabled={busy || connected}
                   onChange={(event) =>
@@ -2202,9 +2215,9 @@ export default function App() {
 
           {createForm.protocol === "shadowsocks" && (
             <label>
-              加密方式
+              {t("加密方式")}
               <select
-                aria-label="Shadowsocks 加密方式"
+                aria-label={t("Shadowsocks 加密方式")}
                 value={createForm.method}
                 disabled={busy || connected}
                 onChange={(event) =>
@@ -2223,9 +2236,9 @@ export default function App() {
           {(createForm.protocol === "trojan" ||
             createForm.protocol === "shadowsocks") && (
             <label>
-              密码
+              {t("密码")}
               <input
-                aria-label="节点密码"
+                aria-label={t("节点密码")}
                 type="password"
                 value={createForm.password}
                 disabled={busy || connected}
@@ -2239,11 +2252,11 @@ export default function App() {
           {createForm.protocol === "hysteria2" && (
             <>
               <label>
-                认证密码
+                {t("认证密码")}
                 <input
-                  aria-label="Hysteria2 认证密码"
+                  aria-label={t("Hysteria2 认证密码")}
                   type="password"
-                  placeholder="留空表示不使用"
+                  placeholder={t("留空表示不使用")}
                   value={createForm.authentication}
                   disabled={busy || connected}
                   onChange={(event) =>
@@ -2253,7 +2266,7 @@ export default function App() {
               </label>
               <label>
                 <input
-                  aria-label="启用混淆"
+                  aria-label={t("启用混淆")}
                   type="checkbox"
                   checked={createForm.obfsEnabled}
                   disabled={busy || connected}
@@ -2261,14 +2274,14 @@ export default function App() {
                     updateCreateForm({ obfsEnabled: event.target.checked })
                   }
                 />
-                启用混淆
+                {t("启用混淆")}
               </label>
               {createForm.obfsEnabled && (
                 <>
                   <label>
-                    混淆方式
+                    {t("混淆方式")}
                     <select
-                      aria-label="混淆方式"
+                      aria-label={t("混淆方式")}
                       value={createForm.obfsMethod}
                       disabled={busy || connected}
                       onChange={(event) =>
@@ -2282,9 +2295,9 @@ export default function App() {
                     </select>
                   </label>
                   <label>
-                    混淆密码
+                    {t("混淆密码")}
                     <input
-                      aria-label="混淆密码"
+                      aria-label={t("混淆密码")}
                       type="password"
                       value={createForm.obfsPassword}
                       disabled={busy || connected}
@@ -2300,9 +2313,9 @@ export default function App() {
 
           {usesStreamTransport(createForm.protocol) && (
             <label>
-              传输方式
+              {t("传输方式")}
               <select
-                aria-label="传输方式"
+                aria-label={t("传输方式")}
                 value={createForm.transport}
                 disabled={
                   busy || connected || createForm.protocol === "shadowsocks"
@@ -2324,9 +2337,9 @@ export default function App() {
             createForm.transport === "websocket" && (
               <>
                 <label>
-                  路径
+                  {t("路径")}
                   <input
-                    aria-label="WebSocket 路径"
+                    aria-label={t("WebSocket 路径")}
                     value={createForm.wsPath}
                     disabled={busy || connected}
                     onChange={(event) =>
@@ -2338,7 +2351,7 @@ export default function App() {
                   Host
                   <input
                     aria-label="WebSocket Host"
-                    placeholder="留空表示不使用"
+                    placeholder={t("留空表示不使用")}
                     value={createForm.wsHost}
                     disabled={busy || connected}
                     onChange={(event) =>
@@ -2364,9 +2377,9 @@ export default function App() {
                   />
                 </label>
                 <label>
-                  模式
+                  {t("模式")}
                   <select
-                    aria-label="gRPC 模式"
+                    aria-label={t("gRPC 模式")}
                     value={createForm.grpcMode}
                     disabled={busy || connected}
                     onChange={(event) =>
@@ -2384,7 +2397,7 @@ export default function App() {
                   authority
                   <input
                     aria-label="gRPC authority"
-                    placeholder="留空表示不使用"
+                    placeholder={t("留空表示不使用")}
                     value={createForm.grpcAuthority}
                     disabled={busy || connected}
                     onChange={(event) =>
@@ -2399,7 +2412,7 @@ export default function App() {
             createForm.protocol !== "shadowsocks" && (
               <label>
                 <input
-                  aria-label="启用 TLS"
+                  aria-label={t("启用 TLS")}
                   type="checkbox"
                   checked={createForm.tlsEnabled}
                   disabled={busy || connected}
@@ -2407,7 +2420,7 @@ export default function App() {
                     updateCreateForm({ tlsEnabled: event.target.checked })
                   }
                 />
-                启用 TLS
+                {t("启用 TLS")}
               </label>
             )}
 
@@ -2418,7 +2431,7 @@ export default function App() {
                   SNI
                   <input
                     aria-label="TLS SNI"
-                    placeholder="留空表示使用服务器地址"
+                    placeholder={t("留空表示使用服务器地址")}
                     value={createForm.serverName}
                     disabled={busy || connected}
                     onChange={(event) =>
@@ -2430,7 +2443,7 @@ export default function App() {
                   ALPN
                   <input
                     aria-label="TLS ALPN"
-                    placeholder="逗号分隔，如 h2,http/1.1"
+                    placeholder={t("逗号分隔，如 h2,http/1.1")}
                     value={createForm.alpn}
                     disabled={busy || connected}
                     onChange={(event) =>
@@ -2439,10 +2452,10 @@ export default function App() {
                   />
                 </label>
                 <label>
-                  指纹
+                  {t("指纹")}
                   <input
-                    aria-label="TLS 指纹"
-                    placeholder="留空表示不使用"
+                    aria-label={t("TLS 指纹")}
+                    placeholder={t("留空表示不使用")}
                     value={createForm.fingerprint}
                     disabled={busy || connected}
                     onChange={(event) =>
@@ -2452,7 +2465,7 @@ export default function App() {
                 </label>
                 <label>
                   <input
-                    aria-label="允许不安全证书"
+                    aria-label={t("允许不安全证书")}
                     type="checkbox"
                     checked={createForm.allowInsecure}
                     disabled={busy || connected}
@@ -2460,14 +2473,14 @@ export default function App() {
                       updateCreateForm({ allowInsecure: event.target.checked })
                     }
                   />
-                  允许不安全证书
+                  {t("允许不安全证书")}
                 </label>
               </>
             )}
 
           <label>
             <input
-              aria-label="启用 UDP"
+              aria-label={t("启用 UDP")}
               type="checkbox"
               checked={createForm.udpEnabled}
               disabled={busy || connected}
@@ -2475,7 +2488,7 @@ export default function App() {
                 updateCreateForm({ udpEnabled: event.target.checked })
               }
             />
-            启用 UDP
+            {t("启用 UDP")}
           </label>
 
           <div className="actions">
@@ -2484,21 +2497,21 @@ export default function App() {
               disabled={busy || connected}
               onClick={() => void onCreateNode()}
             >
-              创建节点
+              {t("创建节点")}
             </button>
             <button
               type="button"
               disabled={busy || connected}
               onClick={() => setCreateForm(emptyManualNodeForm)}
             >
-              重置
+              {t("重置")}
             </button>
           </div>
         </div>
 
               </div>
               <div className="tab-panel" hidden={panel !== "subscriptions"}>
-        <h2>订阅</h2>
+        <h2>{t("订阅")}</h2>
 
         <div className="actions">
           <button
@@ -2511,20 +2524,20 @@ export default function App() {
             }
             onClick={() => void onRefreshAllSubscriptions()}
           >
-            全部更新
+            {t("全部更新")}
           </button>
         </div>
 
         {subscriptions.length === 0 ? (
-          <p className="hint">尚未添加订阅</p>
+          <p className="hint">{t("尚未添加订阅")}</p>
         ) : (
-          <table className="node-list" aria-label="订阅列表">
+          <table className="node-list" aria-label={t("订阅列表")}>
             <thead>
               <tr>
-                <th>名称</th>
-                <th>节点</th>
-                <th>更新</th>
-                <th>操作</th>
+                <th>{t("名称")}</th>
+                <th>{t("节点")}</th>
+                <th>{t("更新")}</th>
+                <th>{t("操作")}</th>
               </tr>
             </thead>
             <tbody>
@@ -2543,7 +2556,7 @@ export default function App() {
                       disabled={busy || connected || nodeTestInProgress}
                       onClick={() => onEditSubscription(item)}
                     >
-                      编辑
+                      {t("编辑")}
                     </button>
                     <button
                       type="button"
@@ -2553,7 +2566,7 @@ export default function App() {
                       }
                       onClick={() => void onRefreshSubscription(item.id)}
                     >
-                      刷新
+                      {t("刷新")}
                     </button>
                     <button
                       type="button"
@@ -2561,7 +2574,7 @@ export default function App() {
                       disabled={busy || connected || nodeTestInProgress}
                       onClick={() => void onDeleteSubscription(item.id)}
                     >
-                      删除
+                      {t("删除")}
                     </button>
                   </td>
                 </tr>
@@ -2572,18 +2585,18 @@ export default function App() {
 
         <div className="subscription-form">
           <label>
-            名称
+            {t("名称")}
             <input
-              aria-label="订阅名称"
+              aria-label={t("订阅名称")}
               value={subscriptionName}
               disabled={busy}
               onChange={(event) => setSubscriptionName(event.target.value)}
             />
           </label>
           <label>
-            地址
+            {t("地址")}
             <input
-              aria-label="订阅地址"
+              aria-label={t("订阅地址")}
               type="password"
               value={subscriptionUrl}
               disabled={busy}
@@ -2594,9 +2607,9 @@ export default function App() {
             />
           </label>
           <label>
-            更新间隔（分钟）
+            {t("更新间隔（分钟）")}
             <input
-              aria-label="更新间隔"
+              aria-label={t("更新间隔")}
               type="number"
               min="1"
               value={subscriptionInterval}
@@ -2613,7 +2626,7 @@ export default function App() {
                 setSubscriptionAutoUpdate(event.target.checked)
               }
             />
-            自动更新
+            {t("自动更新")}
           </label>
           {editingSubscriptionId !== null && (
             <label className="checkbox-label">
@@ -2623,7 +2636,7 @@ export default function App() {
                 disabled={busy}
                 onChange={(event) => setSubscriptionEnabled(event.target.checked)}
               />
-              启用订阅
+              {t("启用订阅")}
             </label>
           )}
         </div>
@@ -2642,27 +2655,27 @@ export default function App() {
               disabled={busy}
               onClick={resetSubscriptionForm}
             >
-              取消
+              {t("取消")}
             </button>
           )}
         </div>
 
               </div>
               <div className="tab-panel" hidden={panel !== "routing"}>
-        <h2>路由规则</h2>
+        <h2>{t("路由规则")}</h2>
 
         <p className="hint">
-          运行顺序固定为：本地安全规则 → 用户规则 → Geo 规则 → 默认出口。仅规则模式应用列表。
+          {t("运行顺序固定为：本地安全规则 → 用户规则 → Geo 规则 → 默认出口。仅规则模式应用列表。")}
         </p>
         {routeDraft === null ? (
-          <p className="hint">正在读取路由设置</p>
+          <p className="hint">{t("正在读取路由设置")}</p>
         ) : (
           <>
             <div className="settings-form">
               <label>
-                规则类型
+                {t("规则类型")}
                 <select
-                  aria-label="规则类型"
+                  aria-label={t("规则类型")}
                   disabled={busy || connected}
                   value={routeRuleKind}
                   onChange={(event) =>
@@ -2677,9 +2690,9 @@ export default function App() {
                 </select>
               </label>
               <label>
-                规则值
+                {t("规则值")}
                 <input
-                  aria-label="规则值"
+                  aria-label={t("规则值")}
                   disabled={busy || connected}
                   placeholder={routeRuleKind === "network" ? "tcp 或 udp" : undefined}
                   value={routeRuleValue}
@@ -2687,17 +2700,17 @@ export default function App() {
                 />
               </label>
               <label>
-                出口
+                {t("出口")}
                 <select
-                  aria-label="规则出口"
+                  aria-label={t("规则出口")}
                   disabled={busy || connected}
                   value={routeRuleOutbound}
                   onChange={(event) =>
                     setRouteRuleOutbound(event.target.value as RouteOutbound)
                   }
                 >
-                  <option value="proxy">代理</option>
-                  <option value="direct">直连</option>
+                  <option value="proxy">{t("代理")}</option>
+                  <option value="direct">{t("直连")}</option>
                 </select>
               </label>
             </div>
@@ -2707,22 +2720,22 @@ export default function App() {
                 disabled={busy || connected}
                 onClick={onAddRouteRule}
               >
-                添加规则
+                {t("添加规则")}
               </button>
             </div>
 
             {routeDraft.rules.length === 0 ? (
-              <p className="hint">尚未添加规则</p>
+              <p className="hint">{t("尚未添加规则")}</p>
             ) : (
-              <table className="node-list" aria-label="路由规则列表">
+              <table className="node-list" aria-label={t("路由规则列表")}>
                 <thead>
                   <tr>
-                    <th>顺序</th>
-                    <th>类型</th>
-                    <th>值</th>
-                    <th>出口</th>
-                    <th>启用</th>
-                    <th>操作</th>
+                    <th>{t("顺序")}</th>
+                    <th>{t("类型")}</th>
+                    <th>{t("值")}</th>
+                    <th>{t("出口")}</th>
+                    <th>{t("启用")}</th>
+                    <th>{t("操作")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2761,7 +2774,7 @@ export default function App() {
                           }
                           onClick={() => onMoveRouteRule(index, -1)}
                         >
-                          上移
+                          {t("上移")}
                         </button>
                         <button
                           type="button"
@@ -2774,7 +2787,7 @@ export default function App() {
                           }
                           onClick={() => onMoveRouteRule(index, 1)}
                         >
-                          下移
+                          {t("下移")}
                         </button>
                         <button
                           type="button"
@@ -2789,7 +2802,7 @@ export default function App() {
                             setRouteDirty(true);
                           }}
                         >
-                          删除
+                          {t("删除")}
                         </button>
                       </td>
                     </tr>
@@ -2800,9 +2813,9 @@ export default function App() {
 
             <div className="settings-form">
               <label>
-                默认出口
+                {t("默认出口")}
                 <select
-                  aria-label="默认出口"
+                  aria-label={t("默认出口")}
                   disabled={busy || connected}
                   value={routeDraft.finalOutbound}
                   onChange={(event) => {
@@ -2813,8 +2826,8 @@ export default function App() {
                     setRouteDirty(true);
                   }}
                 >
-                  <option value="proxy">代理</option>
-                  <option value="direct">直连</option>
+                  <option value="proxy">{t("代理")}</option>
+                  <option value="direct">{t("直连")}</option>
                 </select>
               </label>
             </div>
@@ -2827,20 +2840,20 @@ export default function App() {
             disabled={busy || connected || routeDraft === null || !routeDirty}
             onClick={() => void onSaveRoute()}
           >
-            保存路由
+            {t("保存路由")}
           </button>
         </div>
 
         <h2>DNS</h2>
 
         {dnsDraft === null ? (
-          <p className="hint">正在读取 DNS 设置</p>
+          <p className="hint">{t("正在读取 DNS 设置")}</p>
         ) : (
           <div className="settings-form">
             <label>
-              模式
+              {t("模式")}
               <select
-                aria-label="DNS 模式"
+                aria-label={t("DNS 模式")}
                 disabled={busy || connected}
                 value={dnsDraft.mode}
                 onChange={(event) => {
@@ -2862,7 +2875,7 @@ export default function App() {
                   setDnsDirty(true);
                 }}
               >
-                <option value="system">系统 DNS</option>
+                <option value="system">{t("系统 DNS")}</option>
                 <option value="plainUdp">UDP</option>
                 <option value="plainTcp">TCP</option>
                 <option value="doh">DoH</option>
@@ -2872,9 +2885,9 @@ export default function App() {
             {dnsDraft.mode !== "system" && (
               <>
                 <label>
-                  服务器
+                  {t("服务器")}
                   <input
-                    aria-label="DNS 服务器"
+                    aria-label={t("DNS 服务器")}
                     disabled={busy || connected}
                     value={dnsDraft.server}
                     onChange={(event) => {
@@ -2884,9 +2897,9 @@ export default function App() {
                   />
                 </label>
                 <label>
-                  端口
+                  {t("端口")}
                   <input
-                    aria-label="DNS 端口"
+                    aria-label={t("DNS 端口")}
                     disabled={busy || connected}
                     min="1"
                     max="65535"
@@ -2902,9 +2915,9 @@ export default function App() {
             )}
             {dnsDraft.mode === "doh" && (
               <label>
-                DoH 路径
+                {t("DoH 路径")}
                 <input
-                  aria-label="DoH 路径"
+                  aria-label={t("DoH 路径")}
                   disabled={busy || connected}
                   value={dnsDraft.dohPath}
                   onChange={(event) => {
@@ -2915,9 +2928,9 @@ export default function App() {
               </label>
             )}
             <label>
-              地址策略
+              {t("地址策略")}
               <select
-                aria-label="DNS 地址策略"
+                aria-label={t("DNS 地址策略")}
                 disabled={busy || connected}
                 value={dnsDraft.strategy}
                 onChange={(event) => {
@@ -2928,19 +2941,19 @@ export default function App() {
                   setDnsDirty(true);
                 }}
               >
-                <option value="preferIpv4">优先 IPv4</option>
-                <option value="preferIpv6">优先 IPv6</option>
-                <option value="ipv4Only">仅 IPv4</option>
-                <option value="ipv6Only">仅 IPv6</option>
+                <option value="preferIpv4">{t("优先 IPv4")}</option>
+                <option value="preferIpv6">{t("优先 IPv6")}</option>
+                <option value="ipv4Only">{t("仅 IPv4")}</option>
+                <option value="ipv6Only">{t("仅 IPv6")}</option>
               </select>
             </label>
             <label>
-              系统 DNS 域名后缀
+              {t("系统 DNS 域名后缀")}
               <textarea
-                aria-label="系统 DNS 域名后缀"
+                aria-label={t("系统 DNS 域名后缀")}
                 disabled={busy || connected}
                 rows={2}
-                placeholder="每行一个，例如 lan"
+                placeholder={t("每行一个，例如 lan")}
                 value={dnsDraft.systemDomains.join("\n")}
                 onChange={(event) => {
                   setDnsDraft({
@@ -2953,7 +2966,7 @@ export default function App() {
             </label>
             <label className="checkbox-label">
               <input
-                aria-label="启用 IPv6 DNS"
+                aria-label={t("启用 IPv6 DNS")}
                 checked={dnsDraft.ipv6Enabled}
                 disabled={busy || connected}
                 type="checkbox"
@@ -2966,7 +2979,7 @@ export default function App() {
             </label>
             <label className="checkbox-label">
               <input
-                aria-label="启用 FakeIP"
+                aria-label={t("启用 FakeIP")}
                 checked={dnsDraft.fakeIpEnabled}
                 disabled={busy || connected}
                 type="checkbox"
@@ -2986,21 +2999,21 @@ export default function App() {
             disabled={busy || connected || dnsDraft === null || !dnsDirty}
             onClick={() => void onSaveDns()}
           >
-            保存 DNS
+            {t("保存 DNS")}
           </button>
         </div>
 
               </div>
               <div className="tab-panel" hidden={panel !== "settings"}>
-        <h2>设置</h2>
+        <h2>{t("设置")}</h2>
 
         {settings === null ? (
-          <p className="hint">正在读取设置…</p>
+          <p className="hint">{t("正在读取设置…")}</p>
         ) : (
-          <div className="settings-form" aria-label="应用设置">
+          <div className="settings-form" aria-label={t("应用设置")}>
             <label className="checkbox-label">
               <input
-                aria-label="启用 TUN"
+                aria-label={t("启用 TUN")}
                 type="checkbox"
                 checked={settings.tunEnabled}
                 disabled={
@@ -3012,7 +3025,7 @@ export default function App() {
                   void onChangeSettings({ tunEnabled: event.target.checked })
                 }
               />
-              使用 TUN 接管全局流量
+              {t("使用 TUN 接管全局流量")}
             </label>
             <p className="hint">
               {platform ? TUN_NOTICE[platform.tunAvailability] : ""}
@@ -3020,7 +3033,7 @@ export default function App() {
             </p>
             <label className="checkbox-label">
               <input
-                aria-label="开机启动"
+                aria-label={t("开机启动")}
                 type="checkbox"
                 checked={settings.launchAtLogin}
                 disabled={busy}
@@ -3028,11 +3041,11 @@ export default function App() {
                   void onChangeSettings({ launchAtLogin: event.target.checked })
                 }
               />
-              登录系统时自动启动 MgClash
+              {t("登录系统时自动启动 MgClash")}
             </label>
             <label className="checkbox-label">
               <input
-                aria-label="启动时自动连接"
+                aria-label={t("启动时自动连接")}
                 type="checkbox"
                 checked={settings.connectOnLaunch}
                 disabled={busy}
@@ -3042,11 +3055,11 @@ export default function App() {
                   })
                 }
               />
-              启动时自动连接上次选中的节点
+              {t("启动时自动连接上次选中的节点")}
             </label>
             <label className="checkbox-label">
               <input
-                aria-label="关闭时最小化到托盘"
+                aria-label={t("关闭时最小化到托盘")}
                 type="checkbox"
                 checked={settings.closeToTray}
                 disabled={busy}
@@ -3054,12 +3067,12 @@ export default function App() {
                   void onChangeSettings({ closeToTray: event.target.checked })
                 }
               />
-              关闭窗口时最小化到托盘，而不是退出
+              {t("关闭窗口时最小化到托盘，而不是退出")}
             </label>
             <label>
               Core
               <select
-                aria-label="Core 选择"
+                aria-label={t("Core 选择")}
                 value={settings.corePreference}
                 disabled={busy || connected}
                 onChange={(event) =>
@@ -3068,18 +3081,18 @@ export default function App() {
                   })
                 }
               >
-                <option value="auto">自动</option>
+                <option value="auto">{t("自动")}</option>
                 <option value="sing-box">sing-box</option>
                 <option value="xray">Xray</option>
               </select>
             </label>
             <p className="hint">
-              自动模式按节点协议和能力矩阵决定。Xray 不支持 Hysteria2，选中后遇到该协议的节点会提示原因。
+              {t("自动模式按节点协议和能力矩阵决定。Xray 不支持 Hysteria2，选中后遇到该协议的节点会提示原因。")}
             </p>
             <label>
-              默认日志级别
+              {t("默认日志级别")}
               <select
-                aria-label="默认日志级别"
+                aria-label={t("默认日志级别")}
                 value={settings.logLevel}
                 disabled={busy}
                 onChange={(event) =>
@@ -3100,15 +3113,15 @@ export default function App() {
 
               </div>
               <div className="tab-panel" hidden={panel !== "logs"}>
-        <h2>诊断</h2>
+        <h2>{t("诊断")}</h2>
 
         <p className="hint">
-          导出的诊断包已按 PRD 25.3 脱敏：凭据字段一律替换为 [REDACTED]。
+          {t("导出的诊断包已按 PRD 25.3 脱敏：凭据字段一律替换为 [REDACTED]。")}
         </p>
 
         <div className="actions">
           <button type="button" disabled={busy} onClick={() => void onExport()}>
-            导出诊断
+            {t("导出诊断")}
           </button>
         </div>
 
@@ -3135,23 +3148,23 @@ export default function App() {
         </span>
         <span>Core {status?.core ?? "—"}</span>
         <label className="status-control">
-          路由
+          {t("路由")}
           <select
-            aria-label="状态栏路由模式"
+            aria-label={t("状态栏路由模式")}
             disabled={busy || connected || status === null}
             value={status?.mode ?? "global"}
             onChange={(event) =>
               void run(() => setRoutingMode(event.target.value as RoutingMode))
             }
           >
-            <option value="global">全局</option>
-            <option value="rule">规则</option>
-            <option value="direct">直连</option>
+            <option value="global">{t("全局")}</option>
+            <option value="rule">{t("规则")}</option>
+            <option value="direct">{t("直连")}</option>
           </select>
         </label>
         <label className="status-control">
           <input
-            aria-label="状态栏 TUN"
+            aria-label={t("状态栏 TUN")}
             type="checkbox"
             checked={settings?.tunEnabled ?? false}
             disabled={
@@ -3167,9 +3180,26 @@ export default function App() {
           TUN
         </label>
         <label className="status-control">
-          系统代理
+          {t("语言")}
           <select
-            aria-label="状态栏系统代理"
+            aria-label={t("界面语言")}
+            disabled={busy || settings === null}
+            value={locale}
+            onChange={(event) =>
+              void onChangeSettings({ locale: event.target.value as Locale })
+            }
+          >
+            {LOCALES.map((entry) => (
+              <option key={entry.id} value={entry.id}>
+                {entry.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="status-control">
+          {t("系统代理")}
+          <select
+            aria-label={t("状态栏系统代理")}
             disabled={busy || connected || settings === null}
             value={settings?.systemProxyMode ?? "managed"}
             onChange={(event) =>
@@ -3178,10 +3208,10 @@ export default function App() {
               })
             }
           >
-            <option value="managed">自动配置</option>
+            <option value="managed">{t("自动配置")}</option>
             <option value="pac">PAC</option>
-            <option value="cleared">清除</option>
-            <option value="unchanged">不改变</option>
+            <option value="cleared">{t("清除")}</option>
+            <option value="unchanged">{t("不改变")}</option>
           </select>
         </label>
         <span className="statusbar-rates">
