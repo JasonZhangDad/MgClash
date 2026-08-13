@@ -781,3 +781,183 @@ describe("formFromManualNodeDraft protocol coverage", () => {
     expect(ss.password).toBe("secret");
   });
 });
+
+describe("round-tripping every protocol through the form", () => {
+  /// A draft the window can edit has to survive the trip back into the form:
+  /// a missing switch arm silently drops the credential the user typed.
+  it("keeps TUIC, SOCKS, HTTP, AnyTLS, Naive and custom credentials", () => {
+    const tuic = formFromManualNodeDraft(
+      draftOf({
+        protocol: "tuic",
+        password: "tuic-secret",
+        congestionControl: "bbr",
+        udpRelayMode: "quic",
+        zeroRttHandshake: true,
+      }),
+    );
+    expect(tuic.protocol).toBe("tuic");
+    expect(tuic.userId).toBe(USER_ID);
+    expect(tuic.password).toBe("tuic-secret");
+    expect(tuic.congestionControl).toBe("bbr");
+    expect(tuic.udpRelayMode).toBe("quic");
+    expect(tuic.zeroRttHandshake).toBe(true);
+
+    const socks = formFromManualNodeDraft(
+      draftOf({ protocol: "socks", username: "user", password: "pass" }),
+    );
+    expect(socks.protocol).toBe("socks");
+    expect(socks.username).toBe("user");
+    expect(socks.password).toBe("pass");
+
+    const http = formFromManualNodeDraft(
+      draftOf({ protocol: "http", username: "user", password: "pass" }),
+    );
+    expect(http.protocol).toBe("http");
+    expect(http.username).toBe("user");
+
+    const anytls = formFromManualNodeDraft(
+      draftOf({
+        protocol: "anytls",
+        password: "anytls-secret",
+        tlsEnabled: true,
+        serverName: "edge.example.com",
+      }),
+    );
+    expect(anytls.protocol).toBe("anytls");
+    expect(anytls.password).toBe("anytls-secret");
+
+    const naive = formFromManualNodeDraft(
+      draftOf({
+        protocol: "naive",
+        username: "user",
+        password: "pass",
+        quic: true,
+        quicCongestionControl: "bbr",
+        tlsEnabled: true,
+        serverName: "edge.example.com",
+      }),
+    );
+    expect(naive.protocol).toBe("naive");
+    expect(naive.username).toBe("user");
+    expect(naive.quic).toBe(true);
+    expect(naive.quicCongestionControl).toBe("bbr");
+
+    const custom = formFromManualNodeDraft(
+      draftOf({
+        protocol: "custom",
+        customCore: "xray",
+        customDocument: '{"outbounds":[]}',
+      }),
+    );
+    expect(custom.protocol).toBe("custom");
+    expect(custom.customCore).toBe("xray");
+    expect(custom.customDocument).toBe('{"outbounds":[]}');
+  });
+
+  it("keeps an mKCP transport and a pinned TLS certificate", () => {
+    const kcp = formFromManualNodeDraft(
+      draftOf({
+        transport: "kcp",
+        kcpSeed: "seed",
+        kcpHeaderType: "wechat-video",
+        kcpMtu: "1350",
+        kcpTti: "20",
+        kcpUplinkCapacity: "5",
+        kcpDownlinkCapacity: "20",
+        kcpCongestion: true,
+      }),
+    );
+    expect(kcp.transport).toBe("kcp");
+    expect(kcp.kcpSeed).toBe("seed");
+    expect(kcp.kcpMtu).toBe("1350");
+    expect(kcp.kcpCongestion).toBe(true);
+
+    const pinned = formFromManualNodeDraft(
+      draftOf({
+        tlsEnabled: true,
+        serverName: "edge.example.com",
+        alpn: "h2",
+        pinnedSha256: "a".repeat(64),
+      }),
+    );
+    expect(pinned.pinnedSha256).toBe("a".repeat(64));
+    expect(pinned.alpn).toBe("h2");
+  });
+});
+
+describe("the validation paths the window relies on", () => {
+  function errorOf(overrides: Partial<ManualNodeForm>): string {
+    const result = buildManualNodeDraft(form(overrides));
+    if (!("error" in result)) {
+      throw new Error("expected a validation error");
+    }
+    return result.error;
+  }
+
+  it("rejects a TUIC node that is neither a UUID nor a single UDP mode", () => {
+    expect(errorOf({ protocol: "tuic", userId: "not-a-uuid" })).toContain(
+      "UUID",
+    );
+    expect(
+      errorOf({
+        protocol: "tuic",
+        udpRelayMode: "quic",
+        udpOverStream: true,
+      }),
+    ).toContain("udp_relay_mode");
+  });
+
+  it("rejects a Naive password without a username", () => {
+    expect(
+      errorOf({
+        protocol: "naive",
+        password: "pass",
+        tlsEnabled: true,
+        serverName: "edge.example.com",
+      }),
+    ).toContain("用户名");
+  });
+
+  it("rejects every non-integer mKCP number", () => {
+    for (const field of [
+      "kcpMtu",
+      "kcpTti",
+      "kcpUplinkCapacity",
+      "kcpDownlinkCapacity",
+    ] as const) {
+      expect(errorOf({ transport: "kcp", [field]: "-1" })).toContain("mKCP");
+    }
+  });
+
+  it("rejects the TLS options Naive cannot carry", () => {
+    const naive = {
+      protocol: "naive" as const,
+      username: "user",
+      password: "pass",
+      tlsEnabled: true,
+      serverName: "edge.example.com",
+    };
+    expect(errorOf({ ...naive, allowInsecure: true })).toContain("证书校验");
+    expect(errorOf({ ...naive, alpn: "h2" })).toContain("ALPN");
+    expect(errorOf({ ...naive, fingerprint: "chrome" })).toContain("指纹");
+    expect(errorOf({ ...naive, pinnedSha256: "a".repeat(64) })).toContain(
+      "证书固定",
+    );
+  });
+
+  it("rejects Reality on an HTTP proxy", () => {
+    expect(
+      errorOf({
+        protocol: "http",
+        realityEnabled: true,
+        serverName: "edge.example.com",
+        publicKey: "key",
+      }),
+    ).toContain("HTTP");
+  });
+
+  it("rejects finalmask JSON that is not a mask entry", () => {
+    expect(errorOf({ xrayFinalmaskJson: "[]" })).toContain("JSON 对象");
+    expect(errorOf({ xrayFinalmaskJson: '{"other":1}' })).toContain("mask");
+  });
+});

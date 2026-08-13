@@ -59,6 +59,12 @@ const setNodeEnabledMock = vi.hoisted(() => vi.fn());
 const deleteSubscriptionMock = vi.hoisted(() => vi.fn());
 const syncGlobalHotkeysMock = vi.hoisted(() => vi.fn());
 const loadConnectionsMock = vi.hoisted(() => vi.fn());
+const downloadCoreUpdateMock = vi.hoisted(() => vi.fn());
+const setRouteSchemeMock = vi.hoisted(() => vi.fn());
+const createRouteSchemeMock = vi.hoisted(() => vi.fn());
+const deleteRouteSchemeMock = vi.hoisted(() => vi.fn());
+const loadGeoAssetsStatusMock = vi.hoisted(() => vi.fn());
+const updateGeoAssetsMock = vi.hoisted(() => vi.fn());
 const closeConnectionMock = vi.hoisted(() => vi.fn());
 const closeConnectionsMock = vi.hoisted(() => vi.fn());
 const clearGlobalHotkeysMock = vi.hoisted(() => vi.fn());
@@ -77,6 +83,12 @@ vi.mock("./session", async () => {
   return {
     clearLogs: clearLogsMock,
     loadConnections: loadConnectionsMock,
+    downloadCoreUpdate: downloadCoreUpdateMock,
+    setRouteScheme: setRouteSchemeMock,
+    createRouteScheme: createRouteSchemeMock,
+    deleteRouteScheme: deleteRouteSchemeMock,
+    loadGeoAssetsStatus: loadGeoAssetsStatusMock,
+    updateGeoAssets: updateGeoAssetsMock,
     closeConnection: closeConnectionMock,
     closeConnections: closeConnectionsMock,
     clearTraffic: clearTrafficMock,
@@ -293,6 +305,12 @@ describe("App", () => {
     refreshAllSubscriptionsMock.mockReset();
     deleteSubscriptionMock.mockReset();
     loadConnectionsMock.mockReset();
+    downloadCoreUpdateMock.mockReset();
+    setRouteSchemeMock.mockReset();
+    createRouteSchemeMock.mockReset();
+    deleteRouteSchemeMock.mockReset();
+    loadGeoAssetsStatusMock.mockReset();
+    updateGeoAssetsMock.mockReset();
     closeConnectionMock.mockReset();
     closeConnectionsMock.mockReset();
 
@@ -3672,6 +3690,270 @@ describe("App", () => {
 
     expect(container.querySelector("[aria-label='连接列表']")).toBeNull();
     expect(container.textContent).toContain("连接后才会有连接记录");
+  });
+
+
+  it("shows the release check result and closes it", async () => {
+    checkUpdateMock.mockResolvedValue({
+      current: "0.1.0",
+      latest: "0.2.0",
+      updateAvailable: true,
+      url: "https://example.com/releases",
+    });
+    await render();
+
+    await act(async () => button("检查更新").click());
+
+    const dialog = container.querySelector("[aria-label='检查更新结果']");
+    expect(dialog?.textContent).toContain("0.2.0");
+    expect(dialog?.textContent).toContain("https://example.com/releases");
+
+    await act(async () =>
+      dialog!.querySelector<HTMLButtonElement>(".dialog-head button")?.click(),
+    );
+    expect(container.querySelector("[aria-label='检查更新结果']")).toBeNull();
+  });
+
+  it("downloads a Core from the update dialog", async () => {
+    const check = {
+      singBox: {
+        name: "sing-box",
+        current: "1.13.18",
+        latest: "1.14.0",
+        url: "https://example.com/sing-box",
+        updateAvailable: true,
+        fromBinary: true,
+      },
+      xray: {
+        name: "xray",
+        current: "26.3.27",
+        latest: "26.3.27",
+        url: "https://example.com/xray",
+        updateAvailable: false,
+        fromBinary: false,
+      },
+      install: { directory: "/tmp/cores" },
+    };
+    checkCoreUpdateMock.mockResolvedValue(check);
+    downloadCoreUpdateMock.mockResolvedValue({ directory: "/tmp/cores" });
+    await render();
+
+    await act(async () => button("检查 Core 更新").click());
+    const dialog = container.querySelector("[aria-label='检查 Core 更新结果']");
+    expect(dialog?.textContent).toContain("1.14.0");
+    // Only the Core with an update offers the button.
+    expect(button("下载 Xray").disabled).toBe(true);
+
+    await act(async () => button("下载 sing-box").click());
+
+    expect(downloadCoreUpdateMock).toHaveBeenCalledWith("sing-box");
+    // The dialog re-reads the versions so the installed line is not stale.
+    expect(checkCoreUpdateMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("reads and updates the Geo files", async () => {
+    const status = {
+      directory: "/tmp/geo",
+      geoip: { name: "geoip.dat", present: false, bytes: 0, modifiedAt: null },
+      geosite: {
+        name: "geosite.dat",
+        present: true,
+        bytes: 2_048,
+        modifiedAt: 1_760_000_000_000,
+      },
+      assetEnvApplied: false,
+    };
+    loadGeoAssetsStatusMock.mockResolvedValue(status);
+    updateGeoAssetsMock.mockResolvedValue({ ...status, assetEnvApplied: true });
+    await render();
+
+    await act(async () => button("更新 Geo 文件").click());
+    expect(container.textContent).toContain("/tmp/geo");
+
+    await act(async () => button("立即更新").click());
+
+    expect(updateGeoAssetsMock).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain("Geo 文件已更新");
+  });
+
+  it("saves the free-text settings fields", async () => {
+    await render();
+
+    const fields: [string, string, string][] = [
+      ["设置中的 URL 测试地址", "https://probe.example.com", "urlTestAddress"],
+      ["默认 TLS 指纹", "firefox", "defFingerprint"],
+      ["热键：连接/断开", "Ctrl+Enter", "hotkeyConnect"],
+      ["热键：上一节点", "Ctrl+[", "hotkeyPrevious"],
+      ["热键：下一节点", "Ctrl+]", "hotkeyNext"],
+    ];
+    for (const [label, value, key] of fields) {
+      const field = container.querySelector<HTMLInputElement>(
+        `input[aria-label='${label}']`,
+      );
+      if (!field) {
+        throw new Error(`no ${label} field`);
+      }
+      await act(async () => typeInput(value, field));
+      // Each field commits on blur rather than on every keystroke.
+      await act(async () =>
+        field.dispatchEvent(new FocusEvent("focusout", { bubbles: true })),
+      );
+      expect(saveAppSettingsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ [key]: value }),
+      );
+    }
+  });
+
+
+  it("switches, creates and deletes routing schemes", async () => {
+    const schemes = [
+      { id: "default", name: "默认" },
+      { id: "work", name: "Work" },
+    ];
+    const withSchemes = {
+      ...IDLE,
+      routeSchemeId: "default",
+      routeSchemes: schemes,
+    };
+    loadSessionStatusMock.mockResolvedValue(withSchemes);
+    setRouteSchemeMock.mockResolvedValue({
+      ...withSchemes,
+      routeSchemeId: "work",
+    });
+    createRouteSchemeMock.mockResolvedValue(withSchemes);
+    deleteRouteSchemeMock.mockResolvedValue(withSchemes);
+    const prompt = vi
+      .spyOn(window, "prompt")
+      .mockReturnValue("  Travel  ");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      await render();
+
+      const picker = container.querySelector<HTMLSelectElement>(
+        "select[aria-label='路由方案']",
+      );
+      if (!picker) {
+        throw new Error("no scheme picker");
+      }
+      await act(async () => selectValue("work", picker));
+      expect(setRouteSchemeMock).toHaveBeenCalledWith("work");
+
+      await act(async () => button("新建方案").click());
+      // The typed name is trimmed before it reaches the command.
+      expect(createRouteSchemeMock).toHaveBeenCalledWith("Travel");
+
+      await act(async () => button("删除方案").click());
+      expect(deleteRouteSchemeMock).toHaveBeenCalledWith("default");
+    } finally {
+      prompt.mockRestore();
+      confirm.mockRestore();
+    }
+  });
+
+  it("keeps a routing scheme the user declined to create or delete", async () => {
+    loadSessionStatusMock.mockResolvedValue({
+      ...IDLE,
+      routeSchemeId: "default",
+      routeSchemes: [
+        { id: "default", name: "默认" },
+        { id: "work", name: "Work" },
+      ],
+    });
+    const prompt = vi.spyOn(window, "prompt").mockReturnValue(null);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    try {
+      await render();
+
+      await act(async () => button("新建方案").click());
+      await act(async () => button("删除方案").click());
+
+      expect(createRouteSchemeMock).not.toHaveBeenCalled();
+      expect(deleteRouteSchemeMock).not.toHaveBeenCalled();
+    } finally {
+      prompt.mockRestore();
+      confirm.mockRestore();
+    }
+  });
+
+
+  it("filters the connection list and switches proxy groups", async () => {
+    const work = {
+      id: "00000000-0000-0000-0000-000000000020",
+      name: "Work",
+      strategy: "select" as const,
+    };
+    const home = {
+      id: "00000000-0000-0000-0000-000000000021",
+      name: "Home",
+      strategy: "select" as const,
+    };
+    const osaka = {
+      ...SELECTED.node!,
+      groupId: home.id,
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Osaka",
+    };
+    loadSessionStatusMock.mockResolvedValue(CONNECTED);
+    loadNodeGroupsMock.mockResolvedValue([work, home]);
+    loadNodesMock.mockResolvedValue([CONNECTED.node, osaka]);
+    loadConnectionsMock.mockResolvedValue({
+      uploadTotalBytes: 0,
+      downloadTotalBytes: 0,
+      connections: [
+        {
+          id: "c1",
+          host: "example.com",
+          destination: "93.184.216.34:443",
+          network: "tcp",
+          process: "Safari",
+          rule: "final",
+          chain: "proxy",
+          uploadBytes: 0,
+          downloadBytes: 0,
+          start: "2026-08-13T00:00:00Z",
+        },
+        {
+          id: "c2",
+          host: "cdn.example.net",
+          destination: "1.1.1.1:443",
+          network: "tcp",
+          process: "curl",
+          rule: "final",
+          chain: "direct",
+          uploadBytes: 0,
+          downloadBytes: 0,
+          start: "2026-08-13T00:00:00Z",
+        },
+      ],
+    });
+    await render();
+
+    // The second group only shows once it is picked from the rail.
+    await act(async () => button("代理组").click());
+    expect(
+      container.querySelectorAll("[aria-label='代理组节点'] tbody tr"),
+    ).toHaveLength(0);
+    await act(async () => button("Home").click());
+    expect(
+      [...container.querySelectorAll("[aria-label='代理组节点'] tbody tr")].map(
+        (row) => row.textContent,
+      ),
+    ).toEqual([expect.stringContaining("Osaka")]);
+
+    await act(async () => button("连接列表").click());
+    const search = container.querySelector<HTMLInputElement>(
+      "input[aria-label='搜索连接']",
+    );
+    if (!search) {
+      throw new Error("no connection search box");
+    }
+    await act(async () => typeInput("curl", search));
+
+    expect(
+      [...container.querySelectorAll("[aria-label='连接列表'] tbody tr")].map(
+        (row) => row.textContent,
+      ),
+    ).toEqual([expect.stringContaining("cdn.example.net")]);
   });
 
   it("changes the main window layout from the menu", async () => {
