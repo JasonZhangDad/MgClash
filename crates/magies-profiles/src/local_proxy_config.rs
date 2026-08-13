@@ -267,9 +267,5 @@ fn sing_box_http_inbound(profile: LocalHttpProfile) -> Value {
 }
 
 const fn listen_address(allow_lan: bool) -> &'static str {
-    if allow_lan {
-        "0.0.0.0"
-    } else {
-        "127.0.0.1"
-    }
+    if allow_lan { "0.0.0.0" } else { "127.0.0.1" }
 }

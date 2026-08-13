@@ -19,12 +19,12 @@ use magies_platform::{CpuArchitecture, OperatingSystem};
 use magies_profiles::{
     BulkImportError, BulkNodeImportParser, CoreCapabilityMatrix, CorePreference, CoreRequirements,
     CoreSelectionError, CredentialCodec, CredentialCodecError, DnsConfigError, DnsProfile,
-    LocalHttpProfile, LocalSocksProfile, LocalProxyConfigError, ManualNodeDraft, ManualNodeDraftError,
-    ManualNodeStoreError, NodeFingerprint, NodeGroup, NodeGroupStoreError, NodeOrderStoreError,
-    ShareLinkParseError, ShareLinkParser, ShareLinkQrCode, ShareLinkQrError, ShareLinkSerializer,
-    ShareLinkSerializerError, SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore,
-    SqliteSubscriptionStore, StoredNodeCredential, SubscriptionTransactionError, TunProfile,
-    TunProfileError, core_name, node_fingerprint,
+    LocalHttpProfile, LocalProxyConfigError, LocalSocksProfile, ManualNodeDraft,
+    ManualNodeDraftError, ManualNodeStoreError, NodeFingerprint, NodeGroup, NodeGroupStoreError,
+    NodeOrderStoreError, ShareLinkParseError, ShareLinkParser, ShareLinkQrCode, ShareLinkQrError,
+    ShareLinkSerializer, ShareLinkSerializerError, SqliteManualNodeStore, SqliteNodeGroupStore,
+    SqliteNodeOrderStore, SqliteSubscriptionStore, StoredNodeCredential,
+    SubscriptionTransactionError, TunProfile, TunProfileError, core_name, node_fingerprint,
 };
 use magies_routing::{RouteProfile, RoutingMode};
 use magies_session::{
@@ -161,7 +161,7 @@ impl From<&ProxyNode> for NodeSummary {
             server: node.server.as_str().to_owned(),
             port: node.port.get(),
             group_id: node.group_id,
-            transport: transport_name(node.transport.as_ref()),
+            transport: transport_name(node.protocol_type, node.transport.as_ref()),
             tls: node.tls.as_ref().map(tls_name),
             deletable: node.subscription_id.is_none(),
             enabled: node.enabled,
@@ -181,14 +181,17 @@ const fn system_proxy_mode_name(mode: &SystemProxyMode) -> &'static str {
     }
 }
 
-/// Hysteria2 carries its own QUIC transport, which the model stores as `None`.
-const fn transport_name(transport: Option<&TransportConfig>) -> &'static str {
+/// Hysteria2 and TUIC carry their own QUIC transport, and WireGuard is its own
+/// tunnel; the model stores `None` for all three, so the protocol decides
+/// which label a missing transport gets.
+const fn transport_name(protocol: ProxyProtocol, transport: Option<&TransportConfig>) -> &'static str {
     match transport {
         Some(TransportConfig::Tcp) => "tcp",
         Some(TransportConfig::WebSocket { .. }) => "ws",
         Some(TransportConfig::HttpUpgrade { .. }) => "httpupgrade",
         Some(TransportConfig::Grpc { .. }) => "grpc",
         Some(TransportConfig::XHttp { .. }) => "xhttp",
+        None if matches!(protocol, ProxyProtocol::WireGuard) => "wireguard",
         None => "quic",
     }
 }
@@ -1510,10 +1513,7 @@ where
         if self.session.is_running() {
             return Err(SessionCommandError::SessionActive);
         }
-        if socks_port == http_port
-            || socks_port == clash_api_port
-            || http_port == clash_api_port
-        {
+        if socks_port == http_port || socks_port == clash_api_port || http_port == clash_api_port {
             return Err(SessionCommandError::DuplicateLocalProxyPort {
                 port: if socks_port == http_port || socks_port == clash_api_port {
                     socks_port

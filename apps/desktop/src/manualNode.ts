@@ -31,17 +31,23 @@ export interface ManualNodeForm {
   grpcAuthority: string;
   grpcMode: GrpcMode;
   grpcServiceName: string;
+  localAddress: string;
   method: string;
+  mtu: string;
   name: string;
   obfsEnabled: boolean;
   obfsMethod: ObfuscationMethod;
   obfsPassword: string;
   password: string;
+  peerPublicKey: string;
   pinnedSha256: string;
   port: string;
+  preSharedKey: string;
+  privateKey: string;
   protocol: ProxyProtocol;
   publicKey: string;
   realityEnabled: boolean;
+  reserved: string;
   security: VmessSecurity;
   server: string;
   serverName: string;
@@ -53,6 +59,7 @@ export interface ManualNodeForm {
   udpOverStream: boolean;
   udpRelayMode: "" | "native" | "quic";
   userId: string;
+  username: string;
   wsHost: string;
   wsPath: string;
   xhttpMode: XhttpMode;
@@ -70,17 +77,23 @@ export const emptyManualNodeForm: ManualNodeForm = {
   grpcAuthority: "",
   grpcMode: "gun",
   grpcServiceName: "",
+  localAddress: "",
   method: "aes-256-gcm",
+  mtu: "",
   name: "",
   obfsEnabled: false,
   obfsMethod: "Salamander",
   obfsPassword: "",
   password: "",
+  peerPublicKey: "",
   pinnedSha256: "",
   port: "",
+  preSharedKey: "",
+  privateKey: "",
   protocol: "vless",
   publicKey: "",
   realityEnabled: false,
+  reserved: "",
   security: "Auto",
   server: "",
   serverName: "",
@@ -92,6 +105,7 @@ export const emptyManualNodeForm: ManualNodeForm = {
   udpOverStream: false,
   udpRelayMode: "",
   userId: "",
+  username: "",
   wsHost: "",
   wsPath: "",
   xhttpMode: "auto",
@@ -142,9 +156,14 @@ export const SHADOWSOCKS_METHODS = [
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
-/** Hysteria2 / TUIC carry their own QUIC transport and always run over TLS. */
+/**
+ * Hysteria2 / TUIC carry their own QUIC transport and always run over TLS.
+ * WireGuard carries its own tunnel and never runs over TLS at all.
+ */
 export function usesStreamTransport(protocol: ProxyProtocol): boolean {
-  return protocol !== "hysteria2" && protocol !== "tuic";
+  return (
+    protocol !== "hysteria2" && protocol !== "tuic" && protocol !== "wireguard"
+  );
 }
 
 function optional(value: string): string | null {
@@ -233,7 +252,74 @@ function buildCredential(
         zeroRttHandshake: form.zeroRttHandshake,
       };
     }
+    case "socks":
+    case "http": {
+      const username = optional(form.username);
+      const password = optional(form.password);
+      if (password !== null && username === null) {
+        return { error: "填写密码时必须同时填写用户名" };
+      }
+      return {
+        password,
+        protocol: form.protocol,
+        username,
+      };
+    }
+    case "wireguard": {
+      const privateKey = form.privateKey.trim();
+      if (privateKey === "") {
+        return { error: "请填写 WireGuard 私钥" };
+      }
+      const peerPublicKey = form.peerPublicKey.trim();
+      if (peerPublicKey === "") {
+        return { error: "请填写 WireGuard 对端公钥" };
+      }
+      const localAddress = form.localAddress
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry !== "");
+      if (localAddress.length === 0) {
+        return { error: "请填写至少一个本地地址" };
+      }
+      let mtu: number | null = null;
+      if (form.mtu.trim() !== "") {
+        mtu = Number(form.mtu);
+        if (!Number.isInteger(mtu) || mtu < 0) {
+          return { error: "MTU 必须是不小于 0 的整数" };
+        }
+      }
+      const reserved = parseReserved(form.reserved);
+      if (hasError(reserved)) {
+        return reserved;
+      }
+      return {
+        localAddress,
+        mtu,
+        peerPublicKey,
+        preSharedKey: optional(form.preSharedKey),
+        privateKey,
+        protocol: "wireguard",
+        reserved,
+      };
+    }
   }
+}
+
+/** Parses the `1,2,3` reserved-bytes field, or `null` when left blank. */
+function parseReserved(
+  value: string,
+): [number, number, number] | null | { error: string } {
+  if (value.trim() === "") {
+    return null;
+  }
+  const parts = value.split(",").map((entry) => Number(entry.trim()));
+  if (
+    parts.length !== 3 ||
+    parts.some((entry) => !Number.isInteger(entry) || entry < 0 || entry > 255)
+  ) {
+    return { error: "reserved 必须是 3 个 0-255 的整数，以逗号分隔" };
+  }
+  return [parts[0], parts[1], parts[2]];
 }
 
 function buildTransport(
@@ -242,9 +328,13 @@ function buildTransport(
   if (!usesStreamTransport(form.protocol)) {
     return null;
   }
-  // Shadowsocks accepts nothing but plain TCP, so a transport left over from a
-  // previously selected protocol must not leak into the payload.
-  if (form.protocol === "shadowsocks") {
+  // Shadowsocks / SOCKS / HTTP accept nothing but plain TCP, so a transport
+  // left over from a previously selected protocol must not leak into the payload.
+  if (
+    form.protocol === "shadowsocks" ||
+    form.protocol === "socks" ||
+    form.protocol === "http"
+  ) {
     return { type: "tcp" };
   }
   switch (form.transport) {
@@ -296,11 +386,19 @@ function buildTransport(
 }
 
 function buildTls(form: ManualNodeForm): TlsDraft | null | { error: string } {
-  // The Shadowsocks outbound has no TLS layer at all.
-  if (form.protocol === "shadowsocks") {
+  // Shadowsocks and SOCKS outbounds have no TLS layer at all, and WireGuard
+  // authenticates peers by key instead of certificate.
+  if (
+    form.protocol === "shadowsocks" ||
+    form.protocol === "socks" ||
+    form.protocol === "wireguard"
+  ) {
     return null;
   }
   if (form.realityEnabled) {
+    if (form.protocol === "http") {
+      return { error: "HTTP 代理不支持 Reality" };
+    }
     if (form.serverName.trim() === "") {
       return { error: "Reality 需要填写 SNI / serverName" };
     }
@@ -431,6 +529,28 @@ export function formFromManualNodeDraft(draft: ManualNodeDraft): ManualNodeForm 
       form.udpRelayMode = draft.credential.udpRelayMode ?? "";
       form.udpOverStream = draft.credential.udpOverStream;
       form.zeroRttHandshake = draft.credential.zeroRttHandshake;
+      break;
+    case "socks":
+      form.protocol = "socks";
+      form.username = draft.credential.username ?? "";
+      form.password = draft.credential.password ?? "";
+      break;
+    case "http":
+      form.protocol = "http";
+      form.username = draft.credential.username ?? "";
+      form.password = draft.credential.password ?? "";
+      break;
+    case "wireguard":
+      form.protocol = "wireguard";
+      form.privateKey = draft.credential.privateKey;
+      form.peerPublicKey = draft.credential.peerPublicKey;
+      form.preSharedKey = draft.credential.preSharedKey ?? "";
+      form.localAddress = draft.credential.localAddress.join(",");
+      form.mtu = draft.credential.mtu === null ? "" : String(draft.credential.mtu);
+      form.reserved =
+        draft.credential.reserved === null
+          ? ""
+          : draft.credential.reserved.join(",");
       break;
   }
 

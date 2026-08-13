@@ -41,15 +41,25 @@ const SING_BOX_CAPABILITIES: &[CoreCapability] = &[
     capability(ProxyProtocol::Shadowsocks, true, false),
     capability(ProxyProtocol::Hysteria2, true, false),
     capability(ProxyProtocol::Tuic, true, false),
+    capability(ProxyProtocol::Socks, true, false),
+    capability(ProxyProtocol::Http, true, false),
+    capability(ProxyProtocol::WireGuard, true, false),
 ];
 
 /// Xray covers the stream protocols but has no Hysteria2 or TUIC outbound and
 /// no TUN inbound of its own — TUN there needs an external tun2socks.
+///
+/// WireGuard is deliberately absent too: Xray does ship a `wireguard`
+/// outbound, but nothing in this codebase's Xray patterns pins a verified
+/// field-for-field shape for it the way the other outbounds are pinned
+/// against upstream, so it stays sing-box-only rather than guessing.
 const XRAY_CAPABILITIES: &[CoreCapability] = &[
     capability(ProxyProtocol::Vless, false, true),
     capability(ProxyProtocol::Vmess, false, true),
     capability(ProxyProtocol::Trojan, false, true),
     capability(ProxyProtocol::Shadowsocks, false, true),
+    capability(ProxyProtocol::Socks, false, true),
+    capability(ProxyProtocol::Http, false, true),
 ];
 
 const fn capability(
@@ -318,6 +328,9 @@ pub const fn protocol_name(protocol: ProxyProtocol) -> &'static str {
         ProxyProtocol::Shadowsocks => "Shadowsocks",
         ProxyProtocol::Hysteria2 => "Hysteria2",
         ProxyProtocol::Tuic => "TUIC",
+        ProxyProtocol::Socks => "SOCKS5",
+        ProxyProtocol::Http => "HTTP",
+        ProxyProtocol::WireGuard => "WireGuard",
     }
 }
 

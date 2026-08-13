@@ -52,6 +52,9 @@ fn serializes_all_p0_protocol_names_stably() {
         (ProxyProtocol::Shadowsocks, "shadowsocks"),
         (ProxyProtocol::Hysteria2, "hysteria2"),
         (ProxyProtocol::Tuic, "tuic"),
+        (ProxyProtocol::Socks, "socks"),
+        (ProxyProtocol::Http, "http"),
+        (ProxyProtocol::WireGuard, "wireguard"),
     ];
 
     for (protocol, expected) in cases {

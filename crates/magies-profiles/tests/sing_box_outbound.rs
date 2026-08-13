@@ -2,8 +2,8 @@ use magies_domain::{
     CertificatePin, CredentialRef, GrpcMode, ProxyNode, ProxyProtocol, TlsConfig, TransportConfig,
 };
 use magies_profiles::{
-    Hysteria2Parser, NodeCredential, OutboundConfigError, ShadowsocksParser,
-    SingBoxOutboundConfigGenerator, TrojanParser, VlessParser, VmessParser,
+    HttpProxyParser, Hysteria2Parser, NodeCredential, OutboundConfigError, ShadowsocksParser,
+    SingBoxOutboundConfigGenerator, SocksParser, TrojanParser, VlessParser, VmessParser,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -96,10 +96,7 @@ fn refuses_xhttp_because_the_pinned_sing_box_has_none() {
     node.tls = parsed.tls().cloned();
 
     assert_eq!(
-        SingBoxOutboundConfigGenerator::generate(
-            &node,
-            NodeCredential::from(parsed.credential())
-        ),
+        SingBoxOutboundConfigGenerator::generate(&node, NodeCredential::from(parsed.credential())),
         Err(OutboundConfigError::XhttpUnsupported)
     );
 }
@@ -223,6 +220,130 @@ fn generates_trojan_shadowsocks_and_hysteria2_outbounds() {
                 "alpn": ["h3"],
                 "utls": { "enabled": true, "fingerprint": "chrome" }
             }
+        })
+    );
+}
+
+#[test]
+fn generates_socks_and_http_outbounds() {
+    let socks = SocksParser
+        .parse("socks5://alice:hunter2@edge.example.com:1080")
+        .unwrap();
+    let mut socks_node = node(ProxyProtocol::Socks);
+    socks_node.transport = Some(TransportConfig::Tcp);
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &socks_node,
+            NodeCredential::from(socks.credential())
+        )
+        .unwrap()
+        .json(),
+        &json!({
+            "type": "socks",
+            "tag": "proxy",
+            "server": "edge.example.com",
+            "server_port": 443,
+            "version": "5",
+            "username": "alice",
+            "password": "hunter2"
+        })
+    );
+
+    let socks_anonymous = SocksParser.parse("socks://edge.example.com:1080").unwrap();
+    let mut socks_anonymous_node = node(ProxyProtocol::Socks);
+    socks_anonymous_node.transport = Some(TransportConfig::Tcp);
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &socks_anonymous_node,
+            NodeCredential::from(socks_anonymous.credential())
+        )
+        .unwrap()
+        .json(),
+        &json!({
+            "type": "socks",
+            "tag": "proxy",
+            "server": "edge.example.com",
+            "server_port": 443,
+            "version": "5"
+        })
+    );
+
+    let http_plain = HttpProxyParser
+        .parse("http://alice:hunter2@edge.example.com:8080")
+        .unwrap();
+    let mut http_node = node(ProxyProtocol::Http);
+    http_node.transport = Some(TransportConfig::Tcp);
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &http_node,
+            NodeCredential::from(http_plain.credential())
+        )
+        .unwrap()
+        .json(),
+        &json!({
+            "type": "http",
+            "tag": "proxy",
+            "server": "edge.example.com",
+            "server_port": 443,
+            "username": "alice",
+            "password": "hunter2"
+        })
+    );
+
+    let https = HttpProxyParser.parse("https://edge.example.com").unwrap();
+    let mut tls_http_node = node(ProxyProtocol::Http);
+    tls_http_node.transport = Some(TransportConfig::Tcp);
+    tls_http_node.tls = https.tls().cloned();
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &tls_http_node,
+            NodeCredential::from(https.credential())
+        )
+        .unwrap()
+        .json(),
+        &json!({
+            "type": "http",
+            "tag": "proxy",
+            "server": "edge.example.com",
+            "server_port": 443,
+            "tls": {
+                "enabled": true,
+                "server_name": "edge.example.com"
+            }
+        })
+    );
+}
+
+#[test]
+fn rejects_socks_tls_and_missing_transport() {
+    let socks = SocksParser.parse("socks://edge.example.com:1080").unwrap();
+    let mut tls_socks = node(ProxyProtocol::Socks);
+    tls_socks.transport = Some(TransportConfig::Tcp);
+    tls_socks.tls = Some(TlsConfig::Tls {
+        server_name: None,
+        allow_insecure: false,
+        alpn: Vec::new(),
+        fingerprint: None,
+        pinned_sha256: None,
+    });
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &tls_socks,
+            NodeCredential::from(socks.credential())
+        ),
+        Err(OutboundConfigError::UnsupportedTls {
+            protocol: ProxyProtocol::Socks
+        })
+    );
+
+    let missing_transport = node(ProxyProtocol::Socks);
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &missing_transport,
+            NodeCredential::from(socks.credential())
+        ),
+        Err(OutboundConfigError::MissingTransport {
+            protocol: ProxyProtocol::Socks
         })
     );
 }

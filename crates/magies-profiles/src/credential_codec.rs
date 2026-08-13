@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    Hysteria2Credential, NodeCredential, ShadowsocksCredential, TrojanCredential, TuicCredential,
-    VlessCredential, VmessCredential,
+    HttpCredential, Hysteria2Credential, NodeCredential, ShadowsocksCredential, SocksCredential,
+    TrojanCredential, TuicCredential, VlessCredential, VmessCredential, WireGuardCredential,
 };
 
 const CREDENTIAL_PAYLOAD_VERSION: u8 = 1;
@@ -22,6 +22,9 @@ pub enum StoredNodeCredential {
     Shadowsocks(ShadowsocksCredential),
     Hysteria2(Hysteria2Credential),
     Tuic(TuicCredential),
+    Socks(SocksCredential),
+    Http(HttpCredential),
+    WireGuard(WireGuardCredential),
 }
 
 impl StoredNodeCredential {
@@ -34,6 +37,9 @@ impl StoredNodeCredential {
             Self::Shadowsocks(_) => ProxyProtocol::Shadowsocks,
             Self::Hysteria2(_) => ProxyProtocol::Hysteria2,
             Self::Tuic(_) => ProxyProtocol::Tuic,
+            Self::Socks(_) => ProxyProtocol::Socks,
+            Self::Http(_) => ProxyProtocol::Http,
+            Self::WireGuard(_) => ProxyProtocol::WireGuard,
         }
     }
 
@@ -46,6 +52,9 @@ impl StoredNodeCredential {
             Self::Shadowsocks(value) => NodeCredential::Shadowsocks(value),
             Self::Hysteria2(value) => NodeCredential::Hysteria2(value),
             Self::Tuic(value) => NodeCredential::Tuic(value),
+            Self::Socks(value) => NodeCredential::Socks(value),
+            Self::Http(value) => NodeCredential::Http(value),
+            Self::WireGuard(value) => NodeCredential::WireGuard(value),
         }
     }
 }
@@ -72,6 +81,9 @@ impl_from_credential!(TrojanCredential, Trojan);
 impl_from_credential!(ShadowsocksCredential, Shadowsocks);
 impl_from_credential!(Hysteria2Credential, Hysteria2);
 impl_from_credential!(TuicCredential, Tuic);
+impl_from_credential!(SocksCredential, Socks);
+impl_from_credential!(HttpCredential, Http);
+impl_from_credential!(WireGuardCredential, WireGuard);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CredentialCodec;

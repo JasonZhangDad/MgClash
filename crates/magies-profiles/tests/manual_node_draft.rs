@@ -60,6 +60,17 @@ fn hysteria2_draft() -> ManualNodeDraft {
     value
 }
 
+fn wireguard() -> ManualCredentialDraft {
+    ManualCredentialDraft::WireGuard {
+        private_key: "private-key".to_owned(),
+        peer_public_key: "peer-public-key".to_owned(),
+        pre_shared_key: None,
+        local_address: vec!["10.0.0.2/32".to_owned()],
+        mtu: None,
+        reserved: None,
+    }
+}
+
 fn plain_tls() -> TlsConfig {
     TlsConfig::Tls {
         server_name: Some("edge.example.com".to_owned()),
@@ -179,6 +190,237 @@ fn builds_a_hysteria2_node_with_obfuscation() {
     assert_eq!(obfuscation.max_packet_size(), None);
 }
 
+#[test]
+fn builds_a_socks_node() {
+    let (node, credential) = build(draft(ManualCredentialDraft::Socks {
+        username: Some("alice".to_owned()),
+        password: Some("hunter2".to_owned()),
+    }))
+    .unwrap();
+
+    assert_eq!(node.protocol_type, ProxyProtocol::Socks);
+    assert_eq!(node.transport, Some(TransportConfig::Tcp));
+    assert!(node.tls.is_none());
+    let StoredNodeCredential::Socks(credential) = credential else {
+        panic!("expected a SOCKS credential");
+    };
+    assert_eq!(credential.username(), Some("alice"));
+    assert_eq!(credential.password(), Some("hunter2"));
+}
+
+#[test]
+fn builds_an_anonymous_socks_node() {
+    let (_, credential) = build(draft(ManualCredentialDraft::Socks {
+        username: None,
+        password: None,
+    }))
+    .unwrap();
+
+    let StoredNodeCredential::Socks(credential) = credential else {
+        panic!("expected a SOCKS credential");
+    };
+    assert_eq!(credential.username(), None);
+    assert_eq!(credential.password(), None);
+}
+
+#[test]
+fn builds_an_http_node_with_tls() {
+    let mut value = draft(ManualCredentialDraft::Http {
+        username: Some("alice".to_owned()),
+        password: Some("hunter2".to_owned()),
+    });
+    value.tls = Some(plain_tls());
+
+    let (node, credential) = build(value).unwrap();
+
+    assert_eq!(node.protocol_type, ProxyProtocol::Http);
+    assert_eq!(node.transport, Some(TransportConfig::Tcp));
+    assert!(matches!(node.tls, Some(TlsConfig::Tls { .. })));
+    let StoredNodeCredential::Http(credential) = credential else {
+        panic!("expected an HTTP credential");
+    };
+    assert_eq!(credential.username(), Some("alice"));
+}
+
+#[test]
+fn builds_a_wireguard_node() {
+    let (node, credential) = build(draft(ManualCredentialDraft::WireGuard {
+        private_key: "private-key".to_owned(),
+        peer_public_key: "peer-public-key".to_owned(),
+        pre_shared_key: Some("psk".to_owned()),
+        local_address: vec!["10.0.0.2/32".to_owned(), "fd00::1/128".to_owned()],
+        mtu: Some(1420),
+        reserved: Some([1, 2, 3]),
+    }))
+    .unwrap();
+
+    assert_eq!(node.protocol_type, ProxyProtocol::WireGuard);
+    // WireGuard is its own tunnel: no stream transport, no TLS.
+    assert!(node.transport.is_none());
+    assert!(node.tls.is_none());
+    let StoredNodeCredential::WireGuard(credential) = credential else {
+        panic!("expected a WireGuard credential");
+    };
+    assert_eq!(credential.private_key(), "private-key");
+    assert_eq!(credential.peer_public_key(), "peer-public-key");
+    assert_eq!(credential.pre_shared_key(), Some("psk"));
+    assert_eq!(
+        credential.local_address(),
+        &["10.0.0.2/32".to_owned(), "fd00::1/128".to_owned()]
+    );
+    assert_eq!(credential.mtu(), Some(1420));
+    assert_eq!(credential.reserved(), Some([1, 2, 3]));
+}
+
+#[test]
+fn rejects_a_transport_for_wireguard() {
+    let mut value = draft(wireguard());
+    value.transport = Some(TransportConfig::Tcp);
+
+    assert_eq!(
+        build(value).unwrap_err(),
+        ManualNodeDraftError::WireGuardRejectsTransport
+    );
+}
+
+#[test]
+fn rejects_tls_for_wireguard() {
+    let mut value = draft(wireguard());
+    value.tls = Some(plain_tls());
+
+    assert_eq!(
+        build(value).unwrap_err(),
+        ManualNodeDraftError::WireGuardRejectsTls
+    );
+}
+
+#[test]
+fn rejects_empty_wireguard_fields() {
+    let missing_private_key = draft(ManualCredentialDraft::WireGuard {
+        private_key: "  ".to_owned(),
+        peer_public_key: "peer-public-key".to_owned(),
+        pre_shared_key: None,
+        local_address: vec!["10.0.0.2/32".to_owned()],
+        mtu: None,
+        reserved: None,
+    });
+    assert_eq!(
+        build(missing_private_key).unwrap_err(),
+        ManualNodeDraftError::MissingWireGuardPrivateKey
+    );
+
+    let missing_peer_key = draft(ManualCredentialDraft::WireGuard {
+        private_key: "private-key".to_owned(),
+        peer_public_key: String::new(),
+        pre_shared_key: None,
+        local_address: vec!["10.0.0.2/32".to_owned()],
+        mtu: None,
+        reserved: None,
+    });
+    assert_eq!(
+        build(missing_peer_key).unwrap_err(),
+        ManualNodeDraftError::MissingWireGuardPeerPublicKey
+    );
+
+    let missing_address = draft(ManualCredentialDraft::WireGuard {
+        private_key: "private-key".to_owned(),
+        peer_public_key: "peer-public-key".to_owned(),
+        pre_shared_key: None,
+        local_address: vec!["  ".to_owned()],
+        mtu: None,
+        reserved: None,
+    });
+    assert_eq!(
+        build(missing_address).unwrap_err(),
+        ManualNodeDraftError::MissingWireGuardLocalAddress
+    );
+}
+
+#[test]
+fn rejects_socks_tls() {
+    let mut value = draft(ManualCredentialDraft::Socks {
+        username: None,
+        password: None,
+    });
+    value.tls = Some(plain_tls());
+
+    assert_eq!(
+        build(value).unwrap_err(),
+        ManualNodeDraftError::SocksRejectsTls
+    );
+}
+
+#[test]
+fn rejects_a_non_tcp_transport_for_socks_and_http() {
+    let mut socks = draft(ManualCredentialDraft::Socks {
+        username: None,
+        password: None,
+    });
+    socks.transport = Some(TransportConfig::WebSocket {
+        path: "/ray".to_owned(),
+        host: None,
+    });
+    assert_eq!(
+        build(socks).unwrap_err(),
+        ManualNodeDraftError::SocksRequiresTcpTransport
+    );
+
+    let mut http = draft(ManualCredentialDraft::Http {
+        username: None,
+        password: None,
+    });
+    http.transport = Some(TransportConfig::WebSocket {
+        path: "/ray".to_owned(),
+        host: None,
+    });
+    assert_eq!(
+        build(http).unwrap_err(),
+        ManualNodeDraftError::HttpRequiresTcpTransport
+    );
+}
+
+#[test]
+fn rejects_reality_for_http() {
+    let mut value = draft(ManualCredentialDraft::Http {
+        username: None,
+        password: None,
+    });
+    value.tls = Some(TlsConfig::Reality {
+        server_name: "edge.example.com".to_owned(),
+        public_key: "key".to_owned(),
+        short_id: None,
+        fingerprint: None,
+        alpn: Vec::new(),
+        spider_x: None,
+    });
+
+    assert_eq!(
+        build(value).unwrap_err(),
+        ManualNodeDraftError::HttpRejectsReality
+    );
+}
+
+#[test]
+fn rejects_a_password_without_a_username_for_socks_and_http() {
+    let socks = draft(ManualCredentialDraft::Socks {
+        username: None,
+        password: Some("hunter2".to_owned()),
+    });
+    assert_eq!(
+        build(socks).unwrap_err(),
+        ManualNodeDraftError::SocksPasswordRequiresUsername
+    );
+
+    let http = draft(ManualCredentialDraft::Http {
+        username: None,
+        password: Some("hunter2".to_owned()),
+    });
+    assert_eq!(
+        build(http).unwrap_err(),
+        ManualNodeDraftError::HttpPasswordRequiresUsername
+    );
+}
+
 /// The guarantee that matters: anything the form accepts must survive outbound
 /// generation, otherwise the node only fails once the user hits connect.
 #[test]
@@ -198,6 +440,15 @@ fn every_accepted_draft_generates_a_sing_box_outbound() {
             password: "hunter2".to_owned(),
         }),
         hysteria2_draft(),
+        draft(ManualCredentialDraft::Socks {
+            username: Some("alice".to_owned()),
+            password: Some("hunter2".to_owned()),
+        }),
+        draft(ManualCredentialDraft::Http {
+            username: None,
+            password: None,
+        }),
+        draft(wireguard()),
     ];
 
     for value in drafts {

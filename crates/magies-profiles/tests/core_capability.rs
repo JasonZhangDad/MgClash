@@ -57,6 +57,30 @@ fn xray_serves_the_stream_protocols_but_not_hysteria2() {
 }
 
 #[test]
+fn both_cores_serve_socks_and_http() {
+    for core in [CoreType::SingBox, CoreType::Xray] {
+        for protocol in [ProxyProtocol::Socks, ProxyProtocol::Http] {
+            assert!(
+                CoreCapabilityMatrix::supports(core, requirements(protocol, false)),
+                "{core:?} should support {protocol:?}"
+            );
+        }
+    }
+
+    // Only sing-box can put SOCKS/HTTP behind TUN; Xray has no TUN inbound.
+    assert!(CoreCapabilityMatrix::supports(
+        CoreType::SingBox,
+        requirements(ProxyProtocol::Socks, true)
+    ));
+    assert_eq!(
+        CoreCapabilityMatrix::rejection(CoreType::Xray, requirements(ProxyProtocol::Http, true)),
+        Some(CoreRejection::TunUnsupported {
+            core: CoreType::Xray
+        })
+    );
+}
+
+#[test]
 fn only_sing_box_provides_tun() {
     assert!(CoreCapabilityMatrix::supports(
         CoreType::SingBox,
@@ -288,8 +312,8 @@ fn a_pinned_hysteria2_node_has_no_usable_core() {
 
 #[test]
 fn an_xhttp_node_is_routed_to_xray() {
-    let xhttp = CoreRequirements::new(ProxyProtocol::Vless, false, CpuArchitecture::X86_64)
-        .with_xhttp();
+    let xhttp =
+        CoreRequirements::new(ProxyProtocol::Vless, false, CpuArchitecture::X86_64).with_xhttp();
 
     assert_eq!(
         CoreCapabilityMatrix::select(CorePreference::Auto, xhttp).unwrap(),

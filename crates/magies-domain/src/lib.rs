@@ -22,6 +22,9 @@ pub enum ProxyProtocol {
     Shadowsocks,
     Hysteria2,
     Tuic,
+    Socks,
+    Http,
+    WireGuard,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

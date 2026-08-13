@@ -9,9 +9,7 @@ use std::fmt::Write as _;
 
 use base64::Engine as _;
 use base64::engine::general_purpose;
-use magies_domain::{
-    GrpcMode, ProxyNode, ProxyProtocol, TlsConfig, TransportConfig, XhttpMode,
-};
+use magies_domain::{GrpcMode, ProxyNode, ProxyProtocol, TlsConfig, TransportConfig, XhttpMode};
 
 use crate::xhttp_mode_name;
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
@@ -22,6 +20,7 @@ use crate::credential_codec::StoredNodeCredential;
 use crate::hysteria2::{Hysteria2Credential, Hysteria2ObfuscationMethod};
 use crate::tuic::{TuicCongestionControl, TuicCredential, TuicUdpRelayMode};
 use crate::vmess::{VmessCredential, VmessSecurity};
+use crate::wireguard::WireGuardCredential;
 use crate::{TrojanCredential, VlessCredential};
 
 /// Everything a URI component must escape.
@@ -87,10 +86,18 @@ impl ShareLinkSerializer {
             }
             StoredNodeCredential::Hysteria2(value) => hysteria2_authority(value, &mut query),
             StoredNodeCredential::Tuic(value) => tuic_authority(value, &mut query),
+            StoredNodeCredential::Socks(value) => {
+                user_pass_authority(value.username(), value.password())
+            }
+            StoredNodeCredential::Http(value) => {
+                user_pass_authority(value.username(), value.password())
+            }
+            StoredNodeCredential::WireGuard(value) => wireguard_authority(value, &mut query),
         };
         // Only VLESS and Trojan read a `type` parameter. Shadowsocks rejects
         // unknown parameters outright, and Hysteria2/TUIC carry their own QUIC
-        // transport, so a missing transport is expected for all three.
+        // transport, so a missing transport is expected for all three. SOCKS
+        // and HTTP are the same story: their transport is always plain TCP.
         let carries_transport = matches!(
             node.protocol_type,
             ProxyProtocol::Vless | ProxyProtocol::Trojan
@@ -104,16 +111,25 @@ impl ShareLinkSerializer {
                     })?;
             write_transport(transport, &mut query);
         }
-        // Shadowsocks has no TLS layer of its own in this model.
-        if let Some(tls) = node.tls.as_ref() {
-            if node.protocol_type != ProxyProtocol::Shadowsocks {
-                write_tls(node.protocol_type, tls, &mut query);
-            }
+        // Shadowsocks has no TLS layer of its own in this model; SOCKS never
+        // carries TLS either, HTTP signals it through the `https` scheme
+        // rather than a query parameter, and WireGuard authenticates peers by
+        // key instead of certificate, so none of the four write TLS fields here.
+        if let Some(tls) = node.tls.as_ref()
+            && !matches!(
+                node.protocol_type,
+                ProxyProtocol::Shadowsocks
+                    | ProxyProtocol::Socks
+                    | ProxyProtocol::Http
+                    | ProxyProtocol::WireGuard
+            )
+        {
+            write_tls(node.protocol_type, tls, &mut query);
         }
 
         let mut link = format!(
             "{}://{authority}@{}:{}",
-            scheme(node.protocol_type),
+            scheme(node.protocol_type, node.tls.is_some()),
             node.server.as_str(),
             node.port.get()
         );
@@ -156,7 +172,12 @@ fn encode(value: &str) -> String {
     utf8_percent_encode(value, ESCAPED).to_string()
 }
 
-const fn scheme(protocol: ProxyProtocol) -> &'static str {
+/// The sharing URI scheme for `protocol`.
+///
+/// HTTP is the only protocol whose scheme depends on more than the protocol
+/// itself: `has_tls` picks `https` over `http` since that link carries no
+/// other way to signal it.
+const fn scheme(protocol: ProxyProtocol, has_tls: bool) -> &'static str {
     match protocol {
         ProxyProtocol::Vless => "vless",
         ProxyProtocol::Vmess => "vmess",
@@ -164,6 +185,21 @@ const fn scheme(protocol: ProxyProtocol) -> &'static str {
         ProxyProtocol::Shadowsocks => "ss",
         ProxyProtocol::Hysteria2 => "hysteria2",
         ProxyProtocol::Tuic => "tuic",
+        ProxyProtocol::Socks => "socks",
+        ProxyProtocol::Http if has_tls => "https",
+        ProxyProtocol::Http => "http",
+        ProxyProtocol::WireGuard => "wireguard",
+    }
+}
+
+/// The user-info authority SOCKS and HTTP share: both credentials have an
+/// optional username and password, unlike every other protocol's mandatory
+/// secret.
+fn user_pass_authority(username: Option<&str>, password: Option<&str>) -> String {
+    match (username, password) {
+        (Some(username), Some(password)) => format!("{}:{}", encode(username), encode(password)),
+        (Some(username), None) => encode(username),
+        (None, _) => String::new(),
     }
 }
 
@@ -332,6 +368,30 @@ fn tuic_authority(credential: &TuicCredential, query: &mut Query) -> String {
         || uuid.clone(),
         |password| format!("{uuid}:{}", encode(password)),
     )
+}
+
+/// The private key is the userinfo; everything else WireGuard needs has no
+/// natural home in the authority, so it all becomes query parameters.
+fn wireguard_authority(credential: &WireGuardCredential, query: &mut Query) -> String {
+    query.set("publickey", credential.peer_public_key());
+    query.set("address", credential.local_address().join(","));
+    if let Some(pre_shared_key) = credential.pre_shared_key() {
+        query.set("presharedkey", pre_shared_key);
+    }
+    if let Some(mtu) = credential.mtu() {
+        query.set("mtu", mtu.to_string());
+    }
+    if let Some(reserved) = credential.reserved() {
+        query.set(
+            "reserved",
+            reserved
+                .iter()
+                .map(u8::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+    }
+    encode(credential.private_key())
 }
 
 const fn tuic_congestion_control_name(value: TuicCongestionControl) -> &'static str {

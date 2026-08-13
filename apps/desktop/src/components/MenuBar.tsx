@@ -93,6 +93,15 @@ export function MenuBar({
             <button type="button" role="menuitem" disabled={busy || connected} onClick={() => onAddServer("tuic")}>
               {t("添加")} TUIC {t("服务器")}
             </button>
+            <button type="button" role="menuitem" disabled={busy || connected} onClick={() => onAddServer("socks")}>
+              {t("添加")} SOCKS5 {t("服务器")}
+            </button>
+            <button type="button" role="menuitem" disabled={busy || connected} onClick={() => onAddServer("http")}>
+              {t("添加")} HTTP {t("服务器")}
+            </button>
+            <button type="button" role="menuitem" disabled={busy || connected} onClick={() => onAddServer("wireguard")}>
+              {t("添加")} WireGuard {t("服务器")}
+            </button>
             <hr />
             <button type="button" role="menuitem" disabled={busy || connected} onClick={onOpenCreate}>
               {t("手动创建")}

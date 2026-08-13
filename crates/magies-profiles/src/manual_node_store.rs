@@ -204,8 +204,10 @@ impl SqliteManualNodeStore {
     ///
     /// Returns a database error when the selection cannot be cleared.
     pub fn clear_selected(&self) -> Result<(), ManualNodeStoreError> {
-        self.connection
-            .execute("UPDATE manual_nodes SET selected = 0 WHERE selected = 1", [])?;
+        self.connection.execute(
+            "UPDATE manual_nodes SET selected = 0 WHERE selected = 1",
+            [],
+        )?;
         Ok(())
     }
 

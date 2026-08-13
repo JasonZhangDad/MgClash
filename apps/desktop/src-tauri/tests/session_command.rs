@@ -73,6 +73,34 @@ fn importing_a_share_link_stores_the_credential_and_selects_the_node() {
 }
 
 #[test]
+fn importing_a_socks_link_stores_the_credential_and_connects() {
+    let (mut service, _runtime, _fail_start) = service();
+
+    let status = service
+        .import_node("socks5://alice:runtime-secret@edge.example.com:1080#Proxy")
+        .unwrap();
+
+    let node = status.node.as_ref().unwrap();
+    assert_eq!(node.protocol, ProxyProtocol::Socks);
+    assert_eq!(node.port, 1080);
+    assert!(service.connect().unwrap().connected);
+}
+
+#[test]
+fn importing_an_https_proxy_link_stores_tls_and_connects() {
+    let (mut service, _runtime, _fail_start) = service();
+
+    let status = service
+        .import_node("https://alice:runtime-secret@edge.example.com#Proxy")
+        .unwrap();
+
+    let node = status.node.as_ref().unwrap();
+    assert_eq!(node.protocol, ProxyProtocol::Http);
+    assert_eq!(node.port, 443);
+    assert!(service.connect().unwrap().connected);
+}
+
+#[test]
 fn importing_a_second_link_keeps_both_nodes_and_replaces_the_selection() {
     let (mut service, _runtime, _fail_start) = service();
     service.import_node(SHADOWSOCKS_LINK).unwrap();
@@ -340,6 +368,25 @@ fn a_tuic_node_imports_and_reports_its_own_quic_transport() {
 }
 
 #[test]
+fn a_wireguard_node_imports_and_reports_its_own_tunnel() {
+    let (mut service, _runtime, _fail_start) = service();
+    service
+        .import_node(
+            "wireguard://cHJpdmF0ZS1rZXk=@edge.example.com:51820\
+             ?publickey=cGVlci1wdWJsaWMta2V5&address=10.0.0.2/32#Tokyo",
+        )
+        .unwrap();
+
+    let node = &service.nodes().unwrap()[0];
+
+    // The model stores no transport or TLS for WireGuard because it is its own
+    // tunnel, but the two protocols must not be confused in the UI.
+    assert_eq!(node.transport, "wireguard");
+    assert_eq!(node.tls, None);
+    assert_eq!(node.protocol, ProxyProtocol::WireGuard);
+}
+
+#[test]
 fn the_status_reports_sing_box_by_default() {
     let (mut service, _runtime, _fail_start) = service();
     assert_eq!(service.status().core, "sing-box");
@@ -384,6 +431,40 @@ fn auto_keeps_sing_box_for_a_hysteria2_node() {
     let (mut service, _runtime, _fail_start) = service();
     service
         .import_node("hysteria2://secret@edge.example.com:8443#Tokyo")
+        .unwrap();
+
+    service.set_core_preference(CorePreference::Auto);
+
+    assert_eq!(service.selected_core(), Ok(CoreType::SingBox));
+}
+
+#[test]
+fn choosing_xray_for_a_wireguard_node_reports_why_it_cannot_run() {
+    let (mut service, _runtime, _fail_start) = service();
+    service
+        .import_node(
+            "wireguard://cHJpdmF0ZS1rZXk=@edge.example.com:51820\
+             ?publickey=cGVlci1wdWJsaWMta2V5&address=10.0.0.2/32#Tokyo",
+        )
+        .unwrap();
+
+    service.set_core_preference(CorePreference::Fixed(CoreType::Xray));
+
+    let error = service.selected_core().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "the selected Core cannot run this node: xray does not support WireGuard"
+    );
+}
+
+#[test]
+fn auto_keeps_sing_box_for_a_wireguard_node() {
+    let (mut service, _runtime, _fail_start) = service();
+    service
+        .import_node(
+            "wireguard://cHJpdmF0ZS1rZXk=@edge.example.com:51820\
+             ?publickey=cGVlci1wdWJsaWMta2V5&address=10.0.0.2/32#Tokyo",
+        )
         .unwrap();
 
     service.set_core_preference(CorePreference::Auto);
@@ -654,9 +735,7 @@ fn reorders_nodes_by_explicit_id_list() {
         vec![manual_id, managed_id]
     );
 
-    let reordered = service
-        .reorder_nodes(vec![managed_id, manual_id])
-        .unwrap();
+    let reordered = service.reorder_nodes(vec![managed_id, manual_id]).unwrap();
     assert_eq!(
         reordered
             .into_iter()
@@ -1048,7 +1127,7 @@ fn rejects_an_unsupported_share_link_without_selecting_a_node() {
     let (mut service, _runtime, _fail_start) = service();
 
     assert!(matches!(
-        service.import_node("wireguard://token@edge.example.com:443"),
+        service.import_node("anytls://token@edge.example.com:443"),
         Err(SessionCommandError::ShareLink(_))
     ));
     assert!(service.status().node.is_none());
@@ -1389,7 +1468,7 @@ fn every_session_failure_carries_a_stable_code_for_the_ui() {
     assert_eq!(service.connect().unwrap_err().code(), "no_selected_node");
     assert_eq!(
         service
-            .import_node("wireguard://token@edge.example.com")
+            .import_node("anytls://token@edge.example.com")
             .unwrap_err()
             .code(),
         "invalid_share_link"

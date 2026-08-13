@@ -2511,8 +2511,11 @@ export default function App() {
               <option value="vmess">VMess</option>
               <option value="trojan">Trojan</option>
               <option value="shadowsocks">Shadowsocks</option>
+              <option value="socks">SOCKS5</option>
+              <option value="http">HTTP</option>
               <option value="hysteria2">Hysteria2</option>
               <option value="tuic">TUIC</option>
+              <option value="wireguard">WireGuard</option>
             </select>
           </label>
 
@@ -2636,13 +2639,35 @@ export default function App() {
             </label>
           )}
 
+          {(createForm.protocol === "socks" || createForm.protocol === "http") && (
+            <label>
+              {t("用户名")}
+              <input
+                aria-label={t("代理用户名")}
+                placeholder={t("留空表示不使用")}
+                value={createForm.username}
+                disabled={busy || connected}
+                onChange={(event) =>
+                  updateCreateForm({ username: event.target.value })
+                }
+              />
+            </label>
+          )}
+
           {(createForm.protocol === "trojan" ||
-            createForm.protocol === "shadowsocks") && (
+            createForm.protocol === "shadowsocks" ||
+            createForm.protocol === "socks" ||
+            createForm.protocol === "http") && (
             <label>
               {t("密码")}
               <input
                 aria-label={t("节点密码")}
                 type="password"
+                placeholder={
+                  createForm.protocol === "socks" || createForm.protocol === "http"
+                    ? t("留空表示不使用")
+                    : undefined
+                }
                 value={createForm.password}
                 disabled={busy || connected}
                 onChange={(event) =>
@@ -2805,6 +2830,84 @@ export default function App() {
             </>
           )}
 
+          {createForm.protocol === "wireguard" && (
+            <>
+              <label>
+                {t("私钥")}
+                <input
+                  aria-label={t("WireGuard 私钥")}
+                  type="password"
+                  value={createForm.privateKey}
+                  disabled={busy || connected}
+                  onChange={(event) =>
+                    updateCreateForm({ privateKey: event.target.value })
+                  }
+                />
+              </label>
+              <label>
+                {t("对端公钥")}
+                <input
+                  aria-label={t("WireGuard 对端公钥")}
+                  value={createForm.peerPublicKey}
+                  disabled={busy || connected}
+                  onChange={(event) =>
+                    updateCreateForm({ peerPublicKey: event.target.value })
+                  }
+                />
+              </label>
+              <label>
+                {t("预共享密钥")}
+                <input
+                  aria-label={t("WireGuard 预共享密钥")}
+                  type="password"
+                  placeholder={t("留空表示不使用")}
+                  value={createForm.preSharedKey}
+                  disabled={busy || connected}
+                  onChange={(event) =>
+                    updateCreateForm({ preSharedKey: event.target.value })
+                  }
+                />
+              </label>
+              <label>
+                {t("本地地址")}
+                <input
+                  aria-label={t("WireGuard 本地地址")}
+                  placeholder={t("逗号分隔，如 10.0.0.2/32")}
+                  value={createForm.localAddress}
+                  disabled={busy || connected}
+                  onChange={(event) =>
+                    updateCreateForm({ localAddress: event.target.value })
+                  }
+                />
+              </label>
+              <label>
+                MTU
+                <input
+                  aria-label="WireGuard MTU"
+                  inputMode="numeric"
+                  placeholder={t("留空表示不使用")}
+                  value={createForm.mtu}
+                  disabled={busy || connected}
+                  onChange={(event) =>
+                    updateCreateForm({ mtu: event.target.value })
+                  }
+                />
+              </label>
+              <label>
+                Reserved
+                <input
+                  aria-label="WireGuard reserved"
+                  placeholder={t("留空表示不使用，如 1,2,3")}
+                  value={createForm.reserved}
+                  disabled={busy || connected}
+                  onChange={(event) =>
+                    updateCreateForm({ reserved: event.target.value })
+                  }
+                />
+              </label>
+            </>
+          )}
+
           {usesStreamTransport(createForm.protocol) && (
             <label>
               {t("传输方式")}
@@ -2812,7 +2915,11 @@ export default function App() {
                 aria-label={t("传输方式")}
                 value={createForm.transport}
                 disabled={
-                  busy || connected || createForm.protocol === "shadowsocks"
+                  busy ||
+                  connected ||
+                  createForm.protocol === "shadowsocks" ||
+                  createForm.protocol === "socks" ||
+                  createForm.protocol === "http"
                 }
                 onChange={(event) =>
                   updateCreateForm({
@@ -2941,7 +3048,8 @@ export default function App() {
             )}
 
           {usesStreamTransport(createForm.protocol) &&
-            createForm.protocol !== "shadowsocks" && (
+            createForm.protocol !== "shadowsocks" &&
+            createForm.protocol !== "socks" && (
               <>
                 <label>
                   <input
@@ -2960,21 +3068,24 @@ export default function App() {
                   />
                   {t("启用 TLS")}
                 </label>
-                <label>
-                  <input
-                    aria-label={t("启用 Reality")}
-                    type="checkbox"
-                    checked={createForm.realityEnabled}
-                    disabled={busy || connected}
-                    onChange={(event) =>
-                      updateCreateForm({
-                        realityEnabled: event.target.checked,
-                        tlsEnabled: event.target.checked || createForm.tlsEnabled,
-                      })
-                    }
-                  />
-                  {t("启用 Reality")}
-                </label>
+                {createForm.protocol !== "http" && (
+                  <label>
+                    <input
+                      aria-label={t("启用 Reality")}
+                      type="checkbox"
+                      checked={createForm.realityEnabled}
+                      disabled={busy || connected}
+                      onChange={(event) =>
+                        updateCreateForm({
+                          realityEnabled: event.target.checked,
+                          tlsEnabled:
+                            event.target.checked || createForm.tlsEnabled,
+                        })
+                      }
+                    />
+                    {t("启用 Reality")}
+                  </label>
+                )}
               </>
             )}
 
@@ -2982,7 +3093,8 @@ export default function App() {
             createForm.realityEnabled ||
             createForm.protocol === "hysteria2" ||
             createForm.protocol === "tuic") &&
-            createForm.protocol !== "shadowsocks" && (
+            createForm.protocol !== "shadowsocks" &&
+            createForm.protocol !== "socks" && (
               <>
                 <label>
                   SNI

@@ -72,6 +72,26 @@ fn links() -> Vec<(&'static str, String)> {
              &pinSHA256=6ff212bbab490b686b06209c6074865f9340f4c0f9c4aa7d34d568c2a2cebe73#Pinned"
                 .to_owned(),
         ),
+        (
+            "socks-anonymous",
+            "socks://edge.example.com:1080#Anon".to_owned(),
+        ),
+        (
+            "socks-auth",
+            "socks5://alice:hunter2@edge.example.com:1080#Auth".to_owned(),
+        ),
+        (
+            "http-plain",
+            "http://edge.example.com:8080#Plain".to_owned(),
+        ),
+        (
+            "http-username-only",
+            "http://alice@edge.example.com:8080#Alice".to_owned(),
+        ),
+        (
+            "https-tls",
+            "https://alice:hunter2@edge.example.com#Secure".to_owned(),
+        ),
     ]
 }
 
@@ -167,6 +187,9 @@ fn the_scheme_matches_what_the_parser_claims() {
             "hysteria2://p@edge.example.com:5555".to_owned(),
             "hysteria2://",
         ),
+        ("socks://edge.example.com:1080".to_owned(), "socks://"),
+        ("http://edge.example.com:8080".to_owned(), "http://"),
+        ("https://edge.example.com".to_owned(), "https://"),
     ] {
         let (node, credential) = parse(&link);
 
