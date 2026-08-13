@@ -12,6 +12,7 @@ export interface SubscriptionSummary {
   nodeCount: number;
   updateIntervalMinutes: number;
   userAgent: string | null;
+  subconverterUrl: string | null;
 }
 
 export interface CreateSubscriptionInput {
@@ -19,6 +20,7 @@ export interface CreateSubscriptionInput {
   excludeKeywords: string;
   includeKeywords: string;
   name: string;
+  subconverterUrl: string | null;
   updateIntervalMinutes: number;
   url: string;
   userAgent: string | null;
@@ -31,6 +33,7 @@ export interface UpdateSubscriptionInput {
   id: string;
   includeKeywords: string;
   name: string;
+  subconverterUrl: string | null;
   updateIntervalMinutes: number;
   url: string | null;
   userAgent: string | null;

@@ -113,6 +113,12 @@ const ADD_UDP_NOISE_ENABLED: &str = "
     ALTER TABLE app_settings ADD COLUMN udp_noise_enabled INTEGER NOT NULL DEFAULT 0;
 ";
 
+/// Adds the Final (tail) fragmentation toggle (v2rayN-style route-options /
+/// finalmask), off by default so existing installs keep their traffic shape.
+const ADD_FINAL_FRAGMENT_ENABLED: &str = "
+    ALTER TABLE app_settings ADD COLUMN final_fragment_enabled INTEGER NOT NULL DEFAULT 0;
+";
+
 /// Default URL used when measuring latency through the connected node.
 pub const DEFAULT_URL_TEST_ADDRESS: &str = "https://www.gstatic.com/generate_204";
 
@@ -178,6 +184,8 @@ pub struct AppSettings {
     /// Send random UDP noise before each datagram on the next connect
     /// (v2rayN-style freedom `noises`), Xray only.
     pub udp_noise_enabled: bool,
+    /// Fragment TLS at the final landing stage (v2rayN Final tail fragmentation).
+    pub final_fragment_enabled: bool,
 }
 
 impl Default for AppSettings {
@@ -211,6 +219,7 @@ impl Default for AppSettings {
             hotkey_next: "Ctrl+]".to_owned(),
             fragment_enabled: false,
             udp_noise_enabled: false,
+            final_fragment_enabled: false,
         }
     }
 }
@@ -268,6 +277,7 @@ impl SqliteAppSettingsStore {
             ADD_HOTKEY_NEXT,
             ADD_FRAGMENT_ENABLED,
             ADD_UDP_NOISE_ENABLED,
+            ADD_FINAL_FRAGMENT_ENABLED,
         ] {
             if let Err(error) = connection.execute_batch(migration)
                 && !error.to_string().contains("duplicate column")
@@ -291,7 +301,7 @@ impl SqliteAppSettingsStore {
         let row = self
             .connection
             .query_row(
-                "SELECT connect_on_launch, close_to_tray, launch_at_login, core_preference, tun_enabled, log_level, system_proxy_mode, locale, socks_port, http_port, clash_api_port, mux_enabled, auto_select_lowest_latency, url_test_address, allow_lan, speed_test_url, inbound_udp_enabled, def_allow_insecure, def_fingerprint, hotkey_connect, hotkey_previous, hotkey_next, fragment_enabled, udp_noise_enabled
+                "SELECT connect_on_launch, close_to_tray, launch_at_login, core_preference, tun_enabled, log_level, system_proxy_mode, locale, socks_port, http_port, clash_api_port, mux_enabled, auto_select_lowest_latency, url_test_address, allow_lan, speed_test_url, inbound_udp_enabled, def_allow_insecure, def_fingerprint, hotkey_connect, hotkey_previous, hotkey_next, fragment_enabled, udp_noise_enabled, final_fragment_enabled
                  FROM app_settings WHERE id = 1",
                 [],
                 |row| {
@@ -320,6 +330,7 @@ impl SqliteAppSettingsStore {
                         row.get::<_, String>(21)?,
                         row.get::<_, i64>(22)?,
                         row.get::<_, i64>(23)?,
+                        row.get::<_, i64>(24)?,
                     ))
                 },
             )
@@ -349,6 +360,7 @@ impl SqliteAppSettingsStore {
             hotkey_next,
             fragment_enabled,
             udp_noise_enabled,
+            final_fragment_enabled,
         )) = row
         else {
             return Ok(AppSettings::default());
@@ -389,6 +401,7 @@ impl SqliteAppSettingsStore {
             hotkey_next: normalize_hotkey(hotkey_next),
             fragment_enabled: fragment_enabled != 0,
             udp_noise_enabled: udp_noise_enabled != 0,
+            final_fragment_enabled: final_fragment_enabled != 0,
         })
     }
 
@@ -399,8 +412,8 @@ impl SqliteAppSettingsStore {
     /// Returns a typed database error when `SQLite` cannot update the row.
     pub fn save(&self, settings: &AppSettings) -> Result<(), AppSettingsStoreError> {
         self.connection.execute(
-            "INSERT INTO app_settings (id, connect_on_launch, close_to_tray, launch_at_login, core_preference, tun_enabled, log_level, system_proxy_mode, locale, socks_port, http_port, clash_api_port, mux_enabled, auto_select_lowest_latency, url_test_address, allow_lan, speed_test_url, inbound_udp_enabled, def_allow_insecure, def_fingerprint, hotkey_connect, hotkey_previous, hotkey_next, fragment_enabled, udp_noise_enabled)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
+            "INSERT INTO app_settings (id, connect_on_launch, close_to_tray, launch_at_login, core_preference, tun_enabled, log_level, system_proxy_mode, locale, socks_port, http_port, clash_api_port, mux_enabled, auto_select_lowest_latency, url_test_address, allow_lan, speed_test_url, inbound_udp_enabled, def_allow_insecure, def_fingerprint, hotkey_connect, hotkey_previous, hotkey_next, fragment_enabled, udp_noise_enabled, final_fragment_enabled)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
              ON CONFLICT(id) DO UPDATE SET
                  connect_on_launch = excluded.connect_on_launch,
                  close_to_tray = excluded.close_to_tray,
@@ -425,7 +438,8 @@ impl SqliteAppSettingsStore {
                  hotkey_previous = excluded.hotkey_previous,
                  hotkey_next = excluded.hotkey_next,
                  fragment_enabled = excluded.fragment_enabled,
-                 udp_noise_enabled = excluded.udp_noise_enabled",
+                 udp_noise_enabled = excluded.udp_noise_enabled,
+                 final_fragment_enabled = excluded.final_fragment_enabled",
             params![
                 i64::from(settings.connect_on_launch),
                 i64::from(settings.close_to_tray),
@@ -451,6 +465,7 @@ impl SqliteAppSettingsStore {
                 normalize_hotkey(&settings.hotkey_next),
                 i64::from(settings.fragment_enabled),
                 i64::from(settings.udp_noise_enabled),
+                i64::from(settings.final_fragment_enabled),
             ],
         )?;
         Ok(())

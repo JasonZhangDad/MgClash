@@ -59,10 +59,20 @@ impl XrayDnsConfigGenerator {
             servers.push(entry);
         }
 
-        GeneratedDnsConfig::from_json(json!({
-            "servers": servers,
-            "queryStrategy": query_strategy(profile.strategy()),
-        }))
+        GeneratedDnsConfig::from_json({
+            let mut dns = json!({
+                "servers": servers,
+                "queryStrategy": query_strategy(profile.strategy()),
+            });
+            if !profile.hosts().is_empty() {
+                let mut hosts = serde_json::Map::new();
+                for (domain, address) in profile.hosts() {
+                    hosts.insert(domain.clone(), Value::String(address.to_string()));
+                }
+                dns["hosts"] = Value::Object(hosts);
+            }
+            dns
+        })
     }
 }
 

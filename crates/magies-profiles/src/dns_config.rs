@@ -334,6 +334,7 @@ pub struct DnsProfile {
     strategy: DnsStrategy,
     fake_ip_enabled: bool,
     ipv6_enabled: bool,
+    hosts: Vec<(String, IpAddr)>,
 }
 
 impl DnsProfile {
@@ -353,6 +354,10 @@ impl DnsProfile {
         self.fake_ip_enabled
     }
 
+    pub(crate) fn hosts(&self) -> &[(String, IpAddr)] {
+        &self.hosts
+    }
+
     /// Creates a validated DNS profile.
     ///
     /// # Errors
@@ -366,6 +371,32 @@ impl DnsProfile {
         strategy: DnsStrategy,
         fake_ip_enabled: bool,
         ipv6_enabled: bool,
+    ) -> Result<Self, DnsConfigError> {
+        Self::with_hosts(
+            servers,
+            rules,
+            final_server,
+            strategy,
+            fake_ip_enabled,
+            ipv6_enabled,
+            Vec::new(),
+        )
+    }
+
+    /// Creates a validated DNS profile that also pins static host mappings.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for missing or duplicate servers, invalid hosts,
+    /// references, recursive bootstrap resolution, or an unavailable strategy.
+    pub fn with_hosts(
+        servers: Vec<DnsServer>,
+        rules: Vec<DnsRule>,
+        final_server: &str,
+        strategy: DnsStrategy,
+        fake_ip_enabled: bool,
+        ipv6_enabled: bool,
+        hosts: Vec<(String, IpAddr)>,
     ) -> Result<Self, DnsConfigError> {
         if servers.is_empty() {
             return Err(DnsConfigError::NoServers);
@@ -412,6 +443,16 @@ impl DnsProfile {
         }
         reject_bootstrap_cycles(&servers, &by_tag)?;
 
+        let mut seen_hosts = HashSet::new();
+        let mut normalized_hosts = Vec::with_capacity(hosts.len());
+        for (domain, address) in hosts {
+            let domain = validated_domain_for_host(&domain)?;
+            if !seen_hosts.insert(domain.clone()) {
+                return Err(DnsConfigError::DuplicateHost { domain });
+            }
+            normalized_hosts.push((domain, address));
+        }
+
         Ok(Self {
             servers,
             rules,
@@ -419,6 +460,7 @@ impl DnsProfile {
             strategy,
             fake_ip_enabled,
             ipv6_enabled,
+            hosts: normalized_hosts,
         })
     }
 
@@ -492,12 +534,22 @@ impl SingBoxDnsConfigGenerator {
             }));
         }
         GeneratedDnsConfig {
-            json: json!({
-                "servers": servers,
-                "rules": rules,
-                "final": profile.final_server,
-                "strategy": profile.strategy.as_str()
-            }),
+            json: {
+                let mut dns = json!({
+                    "servers": servers,
+                    "rules": rules,
+                    "final": profile.final_server,
+                    "strategy": profile.strategy.as_str()
+                });
+                if !profile.hosts.is_empty() {
+                    let mut hosts = serde_json::Map::new();
+                    for (domain, address) in &profile.hosts {
+                        hosts.insert(domain.clone(), Value::String(address.to_string()));
+                    }
+                    dns["hosts"] = Value::Object(hosts);
+                }
+                dns
+            },
         }
     }
 }
@@ -528,6 +580,10 @@ pub enum DnsConfigError {
     RecursiveBootstrap { tag: String },
     #[error("the selected DNS strategy requires IPv6")]
     Ipv6StrategyRequiresIpv6,
+    #[error("invalid DNS hosts domain: {value}")]
+    InvalidHostDomain { value: String },
+    #[error("duplicate DNS hosts domain: {domain}")]
+    DuplicateHost { domain: String },
 }
 
 fn validated_tag(value: &str) -> Result<String, DnsConfigError> {
@@ -557,5 +613,15 @@ fn validated_server(value: &str) -> Result<(String, bool), DnsConfigError> {
     match Host::parse(value) {
         Ok(Host::Domain(_)) => Ok((value.to_owned(), true)),
         _ => Err(DnsConfigError::InvalidServerAddress),
+    }
+}
+
+fn validated_domain_for_host(value: &str) -> Result<String, DnsConfigError> {
+    let value = value.trim();
+    match Host::parse(value) {
+        Ok(Host::Domain(domain)) => Ok(domain),
+        _ => Err(DnsConfigError::InvalidHostDomain {
+            value: value.to_owned(),
+        }),
     }
 }

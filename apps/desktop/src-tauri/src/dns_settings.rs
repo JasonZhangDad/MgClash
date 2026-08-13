@@ -48,6 +48,14 @@ impl From<DesktopDnsStrategy> for DnsStrategy {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DnsTemplate {
+    #[default]
+    Simple,
+    Advanced,
+}
+
 /// The complete DNS settings exchanged with the desktop webview.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,6 +68,12 @@ pub struct DnsSettings {
     pub fake_ip_enabled: bool,
     pub ipv6_enabled: bool,
     pub system_domains: Vec<String>,
+    #[serde(default)]
+    pub bootstrap: String,
+    #[serde(default)]
+    pub hosts: String,
+    #[serde(default)]
+    pub template: DnsTemplate,
 }
 
 impl Default for DnsSettings {
@@ -73,6 +87,9 @@ impl Default for DnsSettings {
             fake_ip_enabled: false,
             ipv6_enabled: false,
             system_domains: Vec::new(),
+            bootstrap: String::new(),
+            hosts: String::new(),
+            template: DnsTemplate::Simple,
         }
     }
 }
@@ -86,6 +103,20 @@ impl DnsSettings {
     pub fn profile(&self) -> Result<DnsProfile, DnsConfigError> {
         let system = DnsServer::system("system")?;
         let mut servers = vec![system];
+        let bootstrap_tag = match self.bootstrap.trim() {
+            "" => "system".to_owned(),
+            value if value.parse::<std::net::IpAddr>().is_ok() => {
+                servers.push(DnsServer::plain(
+                    "bootstrap",
+                    PlainDnsTransport::Udp,
+                    value,
+                    53,
+                    None,
+                )?);
+                "bootstrap".to_owned()
+            }
+            value => value.to_owned(),
+        };
         let final_server = match self.mode {
             DnsMode::System => "system",
             DnsMode::PlainUdp | DnsMode::PlainTcp => {
@@ -99,7 +130,7 @@ impl DnsSettings {
                     transport,
                     &self.server,
                     u32::from(self.port),
-                    Some("system"),
+                    Some(&bootstrap_tag),
                 )?);
                 "primary"
             }
@@ -109,7 +140,7 @@ impl DnsSettings {
                     &self.server,
                     u32::from(self.port),
                     &self.doh_path,
-                    "system",
+                    &bootstrap_tag,
                 )?);
                 "primary"
             }
@@ -118,7 +149,7 @@ impl DnsSettings {
                     "primary",
                     &self.server,
                     u32::from(self.port),
-                    "system",
+                    &bootstrap_tag,
                 )?);
                 "primary"
             }
@@ -131,15 +162,36 @@ impl DnsSettings {
                 "system",
             )?]
         };
-        DnsProfile::new(
+        let host_entries = parse_hosts(&self.hosts)?;
+        DnsProfile::with_hosts(
             servers,
             rules,
             final_server,
             self.strategy.into(),
             self.fake_ip_enabled,
             self.ipv6_enabled,
+            host_entries,
         )
     }
+}
+
+fn parse_hosts(value: &str) -> Result<Vec<(String, std::net::IpAddr)>, DnsConfigError> {
+    let mut entries = Vec::new();
+    for line in value.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((domain, address)) = line.split_once([' ', '\t']) else {
+            continue;
+        };
+        let address = address
+            .trim()
+            .parse()
+            .map_err(|_| DnsConfigError::InvalidServerAddress)?;
+        entries.push((domain.trim().to_owned(), address));
+    }
+    Ok(entries)
 }
 
 #[derive(Debug, Error)]

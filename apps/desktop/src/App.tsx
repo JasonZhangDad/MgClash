@@ -21,6 +21,10 @@ import {
   cloneNode,
   deleteNode,
   checkUpdate,
+  checkCoreUpdate,
+  downloadCoreUpdate,
+  loadGeoAssetsStatus,
+  updateGeoAssets,
   nodeQrCode,
   readQrCode,
   exportNodeLink,
@@ -29,7 +33,9 @@ import {
   disconnectSession,
   exportDiagnostics,
   exportPreferences,
+  exportProfile,
   importPreferences,
+  importProfile,
   clearLogs,
   clearTraffic,
   importNode,
@@ -52,7 +58,11 @@ import {
   setDnsSettings,
   setNodeEnabled,
   setNodeGroup,
+  setNodeGroupStrategy as saveNodeGroupStrategy,
   setRouteSettings,
+  setRouteScheme,
+  createRouteScheme,
+  deleteRouteScheme,
   setRoutingMode,
   testAllNodes,
   testDownloadSpeed,
@@ -66,6 +76,7 @@ import {
   type LogLevel,
   type LogSource,
   type NodeSummary,
+  type NodeGroupStrategy,
   type NodeGroupSummary,
   type NodeTestResult,
   type ObfuscationMethod,
@@ -75,6 +86,7 @@ import {
   type DnsMode,
   type DnsSettings,
   type DnsStrategy,
+  type DnsTemplate,
   type RouteOutbound,
   type RouteRuleKind,
   type RouteSettings,
@@ -82,6 +94,10 @@ import {
   type SystemProxyStartupStatus,
   type NodeTraffic,
   type UpdateCheck,
+  type CoreUpdateCheck,
+  type CoreVersionCheck,
+  type InstalledCoreEntry,
+  type GeoAssetsStatus,
   type TrafficSnapshot,
 } from "./session";
 import {
@@ -134,6 +150,22 @@ import { StatusBar } from "./components/StatusBar";
 import { MsgView } from "./components/MsgView";
 import { Dialog } from "./components/Dialog";
 
+function nodeGroupStrategyBadge(
+  strategy: NodeGroupStrategy,
+  t: (text: string) => string,
+): string {
+  switch (strategy) {
+    case "urlTest":
+      return t("自动");
+    case "fallback":
+      return t("故障转移");
+    case "loadBalance":
+      return t("负载均衡");
+    default:
+      return "";
+  }
+}
+
 const EMPTY_TRAFFIC: TrafficSnapshot = {
   downloadBytesPerSecond: 0,
   monthBytes: 0,
@@ -171,6 +203,8 @@ export default function App() {
     null,
   );
   const [update, setUpdate] = useState<UpdateCheck | null>(null);
+  const [coreUpdate, setCoreUpdate] = useState<CoreUpdateCheck | null>(null);
+  const [geoStatus, setGeoStatus] = useState<GeoAssetsStatus | null>(null);
   const toggleCheckedNode = (id: string) =>
     setCheckedNodes((current) => {
       const next = new Set(current);
@@ -187,6 +221,8 @@ export default function App() {
     setNodeMenu({ nodeId, x: event.clientX, y: event.clientY });
   };
   const [nodeGroupName, setNodeGroupName] = useState("");
+  const [nodeGroupStrategy, setNodeGroupStrategy] =
+    useState<NodeGroupStrategy>("select");
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
   const [subscriptions, setSubscriptions] = useState<SubscriptionSummary[]>([]);
   const [uri, setUri] = useState("");
@@ -211,6 +247,7 @@ export default function App() {
   const [subscriptionAutoUpdate, setSubscriptionAutoUpdate] = useState(true);
   const [subscriptionEnabled, setSubscriptionEnabled] = useState(true);
   const [subscriptionUserAgent, setSubscriptionUserAgent] = useState("");
+  const [subscriptionSubconverter, setSubscriptionSubconverter] = useState("");
   const [subscriptionInclude, setSubscriptionInclude] = useState("");
   const [subscriptionExclude, setSubscriptionExclude] = useState("");
   const [editingSubscriptionId, setEditingSubscriptionId] = useState<
@@ -372,18 +409,24 @@ export default function App() {
     };
   }, []);
 
-  const run = useCallback(async (command: () => Promise<SessionStatus>) => {
-    setBusy(true);
-    setError(null);
-    setExportedTo(null);
-    try {
-      setStatus(await command());
-    } catch (failure: unknown) {
-      setError(describeFailure(failure));
-    } finally {
-      setBusy(false);
-    }
-  }, []);
+  const run = useCallback(
+    async (command: () => Promise<SessionStatus | void>) => {
+      setBusy(true);
+      setError(null);
+      setExportedTo(null);
+      try {
+        const next = await command();
+        if (next !== undefined) {
+          setStatus(next);
+        }
+      } catch (failure: unknown) {
+        setError(describeFailure(failure));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [],
+  );
 
   const onExport = useCallback(async () => {
     setBusy(true);
@@ -853,6 +896,87 @@ export default function App() {
     }
   }, []);
 
+  const formatCoreVersionLine = (entry: CoreVersionCheck) => {
+    const source = entry.fromBinary
+      ? entry.current
+      : `${entry.current}（${t("未检测到已配置的二进制，显示本构建期望版本")}）`;
+    if (entry.updateAvailable) {
+      return t("{name} 有新版本 {latest}，当前 {current}")
+        .replace("{name}", entry.name)
+        .replace("{latest}", entry.latest)
+        .replace("{current}", source);
+    }
+    return t("{name} 已是最新版本 {current}")
+      .replace("{name}", entry.name)
+      .replace("{current}", source);
+  };
+
+  const formatInstalledCoreLine = (name: string, entry: InstalledCoreEntry | undefined) => {
+    if (entry === undefined) {
+      return t("{name} 未通过应用内安装").replace("{name}", name);
+    }
+    return t("应用内已安装 {name} {version}")
+      .replace("{name}", name)
+      .replace("{version}", entry.version);
+  };
+
+  const onCheckCoreUpdate = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    setExportedTo(null);
+    setCoreUpdate(null);
+    try {
+      setCoreUpdate(await checkCoreUpdate());
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, [t]);
+
+  const onDownloadCore = useCallback(
+    async (core: "sing-box" | "xray") => {
+      setBusy(true);
+      setError(null);
+      setExportedTo(null);
+      try {
+        await downloadCoreUpdate(core);
+        setCoreUpdate(await checkCoreUpdate());
+        setExportedTo(t("Core 已下载并安装，下次连接时生效"));
+      } catch (failure: unknown) {
+        setError(describeFailure(failure));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [t],
+  );
+
+  const onOpenGeo = useCallback(async () => {
+    setDialog("geo");
+    setError(null);
+    try {
+      setGeoStatus(await loadGeoAssetsStatus());
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    }
+  }, []);
+
+  const onUpdateGeo = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    setExportedTo(null);
+    try {
+      const next = await updateGeoAssets();
+      setGeoStatus(next);
+      setExportedTo(t("Geo 文件已更新"));
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, [t]);
+
   const onShowNodeQrCode = useCallback(async (candidate: NodeSummary) => {
     setBusy(true);
     setError(null);
@@ -983,14 +1107,15 @@ export default function App() {
   const resetNodeGroupForm = useCallback(() => {
     setGroupingNodeId(null);
     setNodeGroupName("");
+    setNodeGroupStrategy("select");
   }, []);
 
   const onGroupNode = useCallback(
     (candidate: NodeSummary) => {
       setGroupingNodeId(candidate.id);
-      setNodeGroupName(
-        nodeGroups.find((group) => group.id === candidate.groupId)?.name ?? "",
-      );
+      const group = nodeGroups.find((item) => item.id === candidate.groupId);
+      setNodeGroupName(group?.name ?? "");
+      setNodeGroupStrategy(group?.strategy ?? "select");
     },
     [nodeGroups],
   );
@@ -1004,14 +1129,21 @@ export default function App() {
     setError(null);
     try {
       setNodes(await setNodeGroup(groupingNodeId, groupName || null));
-      setNodeGroups(await loadNodeGroups());
+      let groups = await loadNodeGroups();
+      if (groupName) {
+        const group = groups.find((item) => item.name === groupName);
+        if (group) {
+          groups = await saveNodeGroupStrategy(group.id, nodeGroupStrategy);
+        }
+      }
+      setNodeGroups(groups);
       resetNodeGroupForm();
     } catch (failure: unknown) {
       setError(describeFailure(failure));
     } finally {
       setBusy(false);
     }
-  }, [groupingNodeId, nodeGroupName, resetNodeGroupForm]);
+  }, [groupingNodeId, nodeGroupName, nodeGroupStrategy, resetNodeGroupForm]);
 
   const onTestNode = useCallback(async (id: string) => {
     setError(null);
@@ -1043,11 +1175,7 @@ export default function App() {
     setNodeTests(
       Object.fromEntries(enabledIds.map((id) => [id, { status: "testing" }])),
     );
-    const results: {
-      id: string;
-      latencyMs?: number;
-      status: string;
-    }[] = [];
+    const results: NodeTestResult[] = [];
     try {
       await testAllNodes(
         enabledIds,
@@ -1061,12 +1189,12 @@ export default function App() {
         const measured = results
           .filter(
             (result) =>
-              result.status === "success" && typeof result.latencyMs === "number",
+              result.status === "success" && result.latencyMs !== null,
           )
           .map((result) => ({
             enabled: true,
             id: result.id,
-            latencyMs: result.latencyMs ?? null,
+            latencyMs: result.latencyMs,
           }));
         const bestId = lowestLatencyNodeId(measured);
         if (bestId !== null && bestId !== status?.node?.id) {
@@ -1229,6 +1357,62 @@ export default function App() {
     }
   }, [t]);
 
+  const onExportProfile = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    setExportedTo(null);
+    try {
+      setExportedTo(await exportProfile());
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const onImportProfile = useCallback(async () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/json,.json";
+    const selected = await new Promise<File | null>((resolve) => {
+      input.addEventListener("change", () => {
+        resolve(input.files?.[0] ?? null);
+      });
+      input.addEventListener("cancel", () => resolve(null));
+      input.click();
+    });
+    if (selected === null) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setExportedTo(null);
+    try {
+      const path = (selected as File & { path?: string }).path;
+      if (path === undefined || path === "") {
+        setError(t("无法读取所选文件路径"));
+        return;
+      }
+      const result = await importProfile(path);
+      setSettings(result.app);
+      setLocale(result.app.locale);
+      setLogLevel(result.app.logLevel);
+      setUrlTestAddress(result.app.urlTestAddress);
+      setStatus(await loadSessionStatus());
+      setNodes(await loadNodes());
+      setSubscriptions(await loadSubscriptions());
+      setExportedTo(
+        t("完整配置已恢复（{manual} 个手动节点，{subs} 个订阅）")
+          .replace("{manual}", String(result.manualNodeCount))
+          .replace("{subs}", String(result.subscriptionCount)),
+      );
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, [t]);
+
   const onCancelNodeTests = useCallback(() => {
     cancelNodeTests.current = true;
   }, []);
@@ -1314,6 +1498,7 @@ export default function App() {
     setSubscriptionAutoUpdate(true);
     setSubscriptionEnabled(true);
     setSubscriptionUserAgent("");
+    setSubscriptionSubconverter("");
     setSubscriptionInclude("");
     setSubscriptionExclude("");
   }, []);
@@ -1356,6 +1541,10 @@ export default function App() {
                 subscriptionUserAgent.trim() === ""
                   ? null
                   : subscriptionUserAgent.trim(),
+              subconverterUrl:
+                subscriptionSubconverter.trim() === ""
+                  ? null
+                  : subscriptionSubconverter.trim(),
             })
           : await updateSubscription({
               autoUpdate: subscriptionAutoUpdate,
@@ -1370,6 +1559,10 @@ export default function App() {
                 subscriptionUserAgent.trim() === ""
                   ? null
                   : subscriptionUserAgent.trim(),
+              subconverterUrl:
+                subscriptionSubconverter.trim() === ""
+                  ? null
+                  : subscriptionSubconverter.trim(),
             });
       setSubscriptions((current) => {
         const existing = current.findIndex((item) => item.id === saved.id);
@@ -1396,6 +1589,7 @@ export default function App() {
     subscriptionName,
     subscriptionUrl,
     subscriptionUserAgent,
+    subscriptionSubconverter,
     syncNodes,
   ]);
 
@@ -1407,6 +1601,7 @@ export default function App() {
     setSubscriptionAutoUpdate(item.autoUpdate);
     setSubscriptionEnabled(item.enabled);
     setSubscriptionUserAgent(item.userAgent ?? "");
+    setSubscriptionSubconverter(item.subconverterUrl ?? "");
     setSubscriptionInclude(item.includeKeywords);
     setSubscriptionExclude(item.excludeKeywords);
   }, []);
@@ -1614,7 +1809,9 @@ export default function App() {
         onOpenSettings={() => setDialog("settings")}
         onOpenRouting={() => setDialog("routing")}
         onOpenDns={() => setDialog("dns")}
+        onOpenGeo={() => void onOpenGeo()}
         onCheckUpdate={() => void onCheckUpdate()}
+        onCheckCoreUpdate={() => void onCheckCoreUpdate()}
         onOpenAbout={() => setDialog("about")}
         onReload={() => void onReload()}
         onClearTraffic={() => void onClearTraffic()}
@@ -1623,6 +1820,8 @@ export default function App() {
         }
         onExportPreferences={() => void onExportPreferences()}
         onImportPreferences={() => void onImportPreferences()}
+        onExportProfile={() => void onExportProfile()}
+        onImportProfile={() => void onImportProfile()}
         onPreviousNode={() => void onStepNode(-1)}
         onNextNode={() => void onStepNode(1)}
         onConnect={() => void run(connectSession)}
@@ -1722,7 +1921,12 @@ export default function App() {
                       }
                       onClick={() => setNodeGroupFilter(group.id)}
                     >
-                      {group.name}
+                      {(() => {
+                        const badge = nodeGroupStrategyBadge(group.strategy, t);
+                        return badge === ""
+                          ? group.name
+                          : `${group.name} · ${badge}`;
+                      })()}
                     </button>
                   ))}
                 </div>
@@ -2223,6 +2427,33 @@ export default function App() {
                         ))}
                       </datalist>
                     </label>
+                    <label>
+                      {t("分组策略")}
+                      <select
+                        aria-label={t("分组策略")}
+                        value={nodeGroupStrategy}
+                        disabled={busy}
+                        onChange={(event) =>
+                          setNodeGroupStrategy(
+                            event.target.value as NodeGroupStrategy,
+                          )
+                        }
+                      >
+                        <option value="select">{t("手动选择")}</option>
+                        <option value="urlTest">{t("URL-TEST 自动测速")}</option>
+                        <option value="fallback">{t("故障转移")}</option>
+                        <option value="loadBalance">{t("负载均衡")}</option>
+                      </select>
+                    </label>
+                    <p className="hint">
+                      {nodeGroupStrategy === "urlTest"
+                        ? t("该分组连接时由 Core 测速选节点")
+                        : nodeGroupStrategy === "fallback"
+                          ? t("按列表顺序尝试节点，失败则切换下一个")
+                          : nodeGroupStrategy === "loadBalance"
+                            ? t("连接时在组成员之间分配流量")
+                            : t("连接时使用你在列表中选中的节点")}
+                    </p>
                     <div className="actions">
                       <button type="button" disabled={busy} onClick={() => void onSaveNodeGroup()}>
                         {t("保存分组")}
@@ -2397,6 +2628,51 @@ export default function App() {
               {/* A link rather than an in-app download: the artifacts are
                   unsigned, so the user has to see what they are fetching. */}
               <p className="hint">{update.url}</p>
+            </div>
+          </div>
+        )}
+      {coreUpdate !== null && (
+          <div className="dialog-backdrop" onClick={() => setCoreUpdate(null)}>
+            <div
+              className="dialog qr-dialog"
+              role="dialog"
+              aria-label={t("检查 Core 更新结果")}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <header className="dialog-head">
+                <strong>{t("检查 Core 更新")}</strong>
+                <button type="button" onClick={() => setCoreUpdate(null)}>
+                  {t("关闭")}
+                </button>
+              </header>
+              <p>{formatCoreVersionLine(coreUpdate.singBox)}</p>
+              <p className="hint">{formatInstalledCoreLine("sing-box", coreUpdate.install.singBox)}</p>
+              <p className="hint">{coreUpdate.singBox.url}</p>
+              <p>{formatCoreVersionLine(coreUpdate.xray)}</p>
+              <p className="hint">{formatInstalledCoreLine("Xray", coreUpdate.install.xray)}</p>
+              <p className="hint">{coreUpdate.xray.url}</p>
+              <p className="hint">
+                {t("Core 更新说明")}
+              </p>
+              <div className="actions">
+                <button
+                  type="button"
+                  disabled={busy || connected || !coreUpdate.singBox.updateAvailable}
+                  onClick={() => void onDownloadCore("sing-box")}
+                >
+                  {t("下载 sing-box")}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || connected || !coreUpdate.xray.updateAvailable}
+                  onClick={() => void onDownloadCore("xray")}
+                >
+                  {t("下载 Xray")}
+                </button>
+              </div>
+              {connected ? (
+                <p className="hint">{t("请先断开连接再更新 Core")}</p>
+              ) : null}
             </div>
           </div>
         )}
@@ -3506,6 +3782,27 @@ export default function App() {
             {t("启用 UDP")}
           </label>
 
+          {createForm.protocol !== "custom" && (
+            <>
+              <label>
+                {t("Xray Finalmask JSON")}
+                <textarea
+                  aria-label={t("Xray Finalmask JSON")}
+                  rows={4}
+                  placeholder={t("留空使用全局 Final Fragment 默认 mask")}
+                  value={createForm.xrayFinalmaskJson}
+                  disabled={busy || connected}
+                  onChange={(event) =>
+                    updateCreateForm({ xrayFinalmaskJson: event.target.value })
+                  }
+                />
+              </label>
+              <p className="hint">
+                {t("仅 Xray 且在设置中启用 Final Fragment 时生效；可填 mask 条目或 {tcp:[...]} 对象。")}
+              </p>
+            </>
+          )}
+
           <div className="actions">
             <button
               type="button"
@@ -3624,15 +3921,29 @@ export default function App() {
           </label>
           <label>
             {t("地址")}
-            <input
+            <textarea
               aria-label={t("订阅地址")}
-              type="password"
-              value={subscriptionUrl}
               disabled={busy}
+              rows={3}
               placeholder={
-                editingSubscriptionId === null ? "https://" : "留空则不修改"
+                editingSubscriptionId === null
+                  ? "https://\n一行一个，或用 | 分隔"
+                  : t("留空则不修改")
               }
+              value={subscriptionUrl}
               onChange={(event) => setSubscriptionUrl(event.target.value)}
+            />
+          </label>
+          <label>
+            {t("Subconverter 地址")}
+            <input
+              aria-label={t("Subconverter 地址")}
+              disabled={busy}
+              placeholder="http://127.0.0.1:25500/sub"
+              value={subscriptionSubconverter}
+              onChange={(event) =>
+                setSubscriptionSubconverter(event.target.value)
+              }
             />
           </label>
           <label>
@@ -3733,10 +4044,103 @@ export default function App() {
         <p className="hint">
           {t("运行顺序固定为：本地安全规则 → 用户规则 → Geo 规则 → 默认出口。仅规则模式应用列表。")}
         </p>
-        {routeDraft === null ? (
+        {routeDraft === null || status === null ? (
           <p className="hint">{t("正在读取路由设置")}</p>
         ) : (
           <>
+            <div className="settings-form">
+              <label>
+                {t("路由方案")}
+                <select
+                  aria-label={t("路由方案")}
+                  disabled={busy || connected}
+                  value={status.routeSchemeId}
+                  onChange={(event) => {
+                    void (async () => {
+                      setBusy(true);
+                      setError(null);
+                      try {
+                        const next = await setRouteScheme(event.target.value);
+                        setStatus(next);
+                        setRouteDraft(runtimeOrderedRoute(next.route));
+                        setRouteDirty(false);
+                      } catch (failure: unknown) {
+                        setError(describeFailure(failure));
+                      } finally {
+                        setBusy(false);
+                      }
+                    })();
+                  }}
+                >
+                  {status.routeSchemes.map((scheme) => (
+                    <option key={scheme.id} value={scheme.id}>
+                      {scheme.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="actions">
+              <button
+                type="button"
+                disabled={busy || connected}
+                onClick={() => {
+                  void (async () => {
+                    const name = window.prompt(t("新路由方案名称"), t("新方案"));
+                    if (name === null || name.trim() === "") {
+                      return;
+                    }
+                    setBusy(true);
+                    setError(null);
+                    try {
+                      const next = await createRouteScheme(name.trim());
+                      setStatus(next);
+                      setRouteDraft(runtimeOrderedRoute(next.route));
+                      setRouteDirty(false);
+                    } catch (failure: unknown) {
+                      setError(describeFailure(failure));
+                    } finally {
+                      setBusy(false);
+                    }
+                  })();
+                }}
+              >
+                {t("新建方案")}
+              </button>
+              <button
+                type="button"
+                disabled={
+                  busy ||
+                  connected ||
+                  status.routeSchemes.length <= 1
+                }
+                onClick={() => {
+                  void (async () => {
+                    if (
+                      !window.confirm(
+                        t("确定删除当前路由方案？"),
+                      )
+                    ) {
+                      return;
+                    }
+                    setBusy(true);
+                    setError(null);
+                    try {
+                      const next = await deleteRouteScheme(status.routeSchemeId);
+                      setStatus(next);
+                      setRouteDraft(runtimeOrderedRoute(next.route));
+                      setRouteDirty(false);
+                    } catch (failure: unknown) {
+                      setError(describeFailure(failure));
+                    } finally {
+                      setBusy(false);
+                    }
+                  })();
+                }}
+              >
+                {t("删除方案")}
+              </button>
+            </div>
             <div className="settings-form">
               <label>
                 {t("规则类型")}
@@ -3750,7 +4154,7 @@ export default function App() {
                 >
                   {Object.entries(ROUTE_KIND_LABEL).map(([value, label]) => (
                     <option key={value} value={value}>
-                      {label}
+                      {t(label)}
                     </option>
                   ))}
                 </select>
@@ -3760,7 +4164,15 @@ export default function App() {
                 <input
                   aria-label={t("规则值")}
                   disabled={busy || connected}
-                  placeholder={routeRuleKind === "network" ? "tcp 或 udp" : undefined}
+                  placeholder={
+                    routeRuleKind === "network"
+                      ? "tcp 或 udp"
+                      : routeRuleKind === "processName"
+                        ? "chrome"
+                        : routeRuleKind === "processPath"
+                          ? "/Applications/Safari.app"
+                          : undefined
+                  }
                   value={routeRuleValue}
                   onChange={(event) => setRouteRuleValue(event.target.value)}
                 />
@@ -3808,7 +4220,7 @@ export default function App() {
                   {routeDraft.rules.map((rule, index) => (
                     <tr key={`${rule.kind}-${rule.value}-${index}`}>
                       <td>{index + 1}</td>
-                      <td>{ROUTE_KIND_LABEL[rule.kind]}</td>
+                      <td>{t(ROUTE_KIND_LABEL[rule.kind])}</td>
                       <td>{rule.value}</td>
                       <td>{rule.outbound === "proxy" ? "代理" : "直连"}</td>
                       <td>
@@ -3926,6 +4338,37 @@ export default function App() {
         ) : (
           <div className="settings-form">
             <label>
+              {t("模板")}
+              <select
+                aria-label={t("DNS 模板")}
+                disabled={busy || connected}
+                value={dnsDraft.template}
+                onChange={(event) => {
+                  const template = event.target.value as DnsTemplate;
+                  const patch =
+                    template === "advanced"
+                      ? {
+                          mode: "doh" as const,
+                          server: "cloudflare-dns.com",
+                          port: 443,
+                          dohPath: "/dns-query",
+                          bootstrap: "223.5.5.5",
+                          fakeIpEnabled: true,
+                        }
+                      : {
+                          mode: "system" as const,
+                          bootstrap: "",
+                          fakeIpEnabled: false,
+                        };
+                  setDnsDraft({ ...dnsDraft, ...patch, template });
+                  setDnsDirty(true);
+                }}
+              >
+                <option value="simple">{t("简易")}</option>
+                <option value="advanced">{t("高级")}</option>
+              </select>
+            </label>
+            <label>
               {t("模式")}
               <select
                 aria-label={t("DNS 模式")}
@@ -3959,6 +4402,19 @@ export default function App() {
             </label>
             {dnsDraft.mode !== "system" && (
               <>
+                <label>
+                  {t("Bootstrap")}
+                  <input
+                    aria-label={t("Bootstrap DNS")}
+                    disabled={busy || connected}
+                    placeholder="223.5.5.5"
+                    value={dnsDraft.bootstrap}
+                    onChange={(event) => {
+                      setDnsDraft({ ...dnsDraft, bootstrap: event.target.value });
+                      setDnsDirty(true);
+                    }}
+                  />
+                </label>
                 <label>
                   {t("服务器")}
                   <input
@@ -4023,6 +4479,20 @@ export default function App() {
               </select>
             </label>
             <label>
+              {t("Hosts")}
+              <textarea
+                aria-label={t("DNS Hosts")}
+                disabled={busy || connected}
+                rows={3}
+                placeholder={t("每行一条：example.com 1.2.3.4")}
+                value={dnsDraft.hosts}
+                onChange={(event) => {
+                  setDnsDraft({ ...dnsDraft, hosts: event.target.value });
+                  setDnsDirty(true);
+                }}
+              />
+            </label>
+            <label>
               {t("系统 DNS 域名后缀")}
               <textarea
                 aria-label={t("系统 DNS 域名后缀")}
@@ -4078,6 +4548,61 @@ export default function App() {
           </button>
         </div>
 
+      </Dialog>
+
+      <Dialog
+        hidden={dialog !== "geo"}
+        title={t("更新 Geo 文件")}
+        ariaLabel={t("更新 Geo 文件")}
+        onClose={() => setDialog(null)}
+      >
+        <h2>{t("更新 Geo 文件")}</h2>
+        <p className="hint">
+          {t("下载 Xray 使用的 geoip.dat / geosite.dat。sing-box 在连接时按需拉取远程规则集。")}
+        </p>
+        {geoStatus === null ? (
+          <p className="hint">{t("正在读取 Geo 状态")}</p>
+        ) : (
+          <div className="settings-form">
+            <p className="hint">
+              {t("目录")}：{geoStatus.directory}
+            </p>
+            <p>
+              geoip.dat —{" "}
+              {geoStatus.geoip.present
+                ? `${formatBytes(geoStatus.geoip.bytes)}${
+                    geoStatus.geoip.modifiedAt === null
+                      ? ""
+                      : ` · ${formatClock(geoStatus.geoip.modifiedAt * 1000)}`
+                  }`
+                : t("未下载")}
+            </p>
+            <p>
+              geosite.dat —{" "}
+              {geoStatus.geosite.present
+                ? `${formatBytes(geoStatus.geosite.bytes)}${
+                    geoStatus.geosite.modifiedAt === null
+                      ? ""
+                      : ` · ${formatClock(geoStatus.geosite.modifiedAt * 1000)}`
+                  }`
+                : t("未下载")}
+            </p>
+            <p className="hint">
+              {geoStatus.assetEnvApplied
+                ? t("已准备就绪（下次启动 Xray 时生效）")
+                : t("下载完成后，下次启动 Xray 时生效")}
+            </p>
+          </div>
+        )}
+        <div className="actions">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void onUpdateGeo()}
+          >
+            {t("立即更新")}
+          </button>
+        </div>
       </Dialog>
 
       <Dialog
@@ -4253,6 +4778,23 @@ export default function App() {
             </label>
             <p className="hint">
               {t("将 TLS ClientHello 拆分发送以规避基于明文特征的检测；sing-box 使用 TLS fragment/record_fragment，Xray 使用 freedom fragment 出站。仅对含 TLS 握手的节点生效。")}
+            </p>
+            <label className="checkbox-label">
+              <input
+                aria-label={t("启用 Final Fragment")}
+                type="checkbox"
+                checked={settings.finalFragmentEnabled}
+                disabled={busy || connected}
+                onChange={(event) =>
+                  void onChangeSettings({
+                    finalFragmentEnabled: event.target.checked,
+                  })
+                }
+              />
+              {t("启用 Final Fragment 尾部分片（下次连接生效）")}
+            </label>
+            <p className="hint">
+              {t("在最终落地阶段拆分 TLS 记录；sing-box 使用 route-options tls_record_fragment，Xray 使用 freedom finalmask 包装代理出站。")}
             </p>
             <label className="checkbox-label">
               <input

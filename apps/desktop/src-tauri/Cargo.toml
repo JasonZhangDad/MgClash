@@ -21,6 +21,9 @@ magies-profiles = { path = "../../../crates/magies-profiles" }
 magies-routing = { path = "../../../crates/magies-routing" }
 magies-session = { path = "../../../crates/magies-session" }
 magies-storage = { path = "../../../crates/magies-storage" }
+flate2 = "1"
+tar = "0.4"
+zip = "2"
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls-no-provider"] }
 rusqlite = { version = "=0.35.0", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

@@ -82,6 +82,8 @@ enum RuleMatcher {
     IpCidr(IpNet),
     Port(NonZeroU16),
     Network(Network),
+    ProcessName(String),
+    ProcessPath(String),
     Geo { kind: GeoKind, code: String },
 }
 
@@ -245,6 +247,52 @@ impl RoutingRule {
         Self::new(RuleMatcher::Network(network), outbound, priority, enabled)
     }
 
+    /// Creates a process-name rule (sing-box `process_name`, Xray `process`).
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when `value` is empty.
+    pub fn process_name(
+        value: &str,
+        outbound: RouteOutbound,
+        priority: i32,
+        enabled: bool,
+    ) -> Result<Self, RouteConfigError> {
+        let value = value.trim();
+        if value.is_empty() {
+            return Err(RouteConfigError::EmptyValue);
+        }
+        Ok(Self::new(
+            RuleMatcher::ProcessName(value.to_owned()),
+            outbound,
+            priority,
+            enabled,
+        ))
+    }
+
+    /// Creates a process-path rule (sing-box `process_path`).
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when `value` is empty.
+    pub fn process_path(
+        value: &str,
+        outbound: RouteOutbound,
+        priority: i32,
+        enabled: bool,
+    ) -> Result<Self, RouteConfigError> {
+        let value = value.trim();
+        if value.is_empty() {
+            return Err(RouteConfigError::EmptyValue);
+        }
+        Ok(Self::new(
+            RuleMatcher::ProcessPath(value.to_owned()),
+            outbound,
+            priority,
+            enabled,
+        ))
+    }
+
     /// Creates a `GeoIP` rule backed by the official binary rule set.
     ///
     /// # Errors
@@ -311,6 +359,8 @@ impl RoutingRule {
             RuleMatcher::IpCidr(network) => json!({ "ip_cidr": [network.to_string()] }),
             RuleMatcher::Port(port) => json!({ "port": [port.get()] }),
             RuleMatcher::Network(network) => json!({ "network": network.as_str() }),
+            RuleMatcher::ProcessName(name) => json!({ "process_name": [name] }),
+            RuleMatcher::ProcessPath(path) => json!({ "process_path": [path] }),
             RuleMatcher::Geo { kind, code } => {
                 json!({ "rule_set": [format!("{}-{code}", kind.prefix())] })
             }

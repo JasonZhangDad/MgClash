@@ -40,6 +40,7 @@ fn node() -> (ProxyNode, StoredNodeCredential) {
             fingerprint: Some("chrome".to_owned()),
             pinned_sha256: None,
         }),
+        xray_finalmask_json: None,
         credential: ManualCredentialDraft::Vless {
             user_id: Uuid::parse_str(USER_ID).unwrap(),
             flow: None,

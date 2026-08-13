@@ -9,6 +9,7 @@ pub use network_recovery::{
 };
 pub use network_watcher::NetworkWatcher;
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::net::SocketAddr;
 use std::num::NonZeroU16;
@@ -29,8 +30,9 @@ use magies_platform::system_proxy_recovery::{
 };
 use magies_profiles::{
     CredentialCodec, CredentialCodecError, DnsProfile, LocalHttpProfile, LocalSocksProfile,
-    RuntimeConfigError, SingBoxRuntimeConfigGenerator, SingBoxRuntimeProfile, StoredNodeCredential,
-    TunProfile, XrayRuntimeConfigError, XrayRuntimeConfigGenerator, XrayRuntimeProfile,
+    NodeCredential, NodeGroupStrategy, RuntimeConfigError, SingBoxRuntimeConfigGenerator,
+    SingBoxRuntimeProfile, StoredNodeCredential, TunProfile, XrayRuntimeConfigError,
+    XrayRuntimeConfigGenerator, XrayRuntimeProfile,
 };
 use magies_routing::RouteProfile;
 use magies_storage::{SecretStore, SecretStoreError};
@@ -53,10 +55,70 @@ where
     Ok(value)
 }
 
+fn group_members<'a>(
+    profile: &'a DesktopSessionProfile,
+    credential: &'a StoredNodeCredential,
+    member_credentials: &'a HashMap<Uuid, StoredNodeCredential>,
+) -> Vec<(&'a ProxyNode, NodeCredential<'a>)> {
+    profile
+        .group_members
+        .iter()
+        .filter_map(|member| {
+            let cred = if member.id == profile.node.id {
+                credential.as_node_credential()
+            } else {
+                member_credentials.get(&member.id)?.as_node_credential()
+            };
+            Some((member, cred))
+        })
+        .collect()
+}
+
+fn apply_group_outbound<'a>(
+    runtime_profile: SingBoxRuntimeProfile<'a>,
+    profile: &'a DesktopSessionProfile,
+    credential: &'a StoredNodeCredential,
+    member_credentials: &'a HashMap<Uuid, StoredNodeCredential>,
+) -> SingBoxRuntimeProfile<'a> {
+    let Some(strategy) = profile
+        .group_strategy
+        .filter(|strategy| strategy.uses_group_outbound())
+    else {
+        return runtime_profile;
+    };
+    let members = group_members(profile, credential, member_credentials);
+    if members.len() < 2 {
+        runtime_profile
+    } else {
+        runtime_profile.with_group_outbound(strategy, members, &profile.probe_url)
+    }
+}
+
+fn apply_xray_group_outbound<'a>(
+    runtime_profile: XrayRuntimeProfile<'a>,
+    profile: &'a DesktopSessionProfile,
+    credential: &'a StoredNodeCredential,
+    member_credentials: &'a HashMap<Uuid, StoredNodeCredential>,
+) -> XrayRuntimeProfile<'a> {
+    let Some(strategy) = profile
+        .group_strategy
+        .filter(|strategy| strategy.uses_group_outbound())
+    else {
+        return runtime_profile;
+    };
+    let members = group_members(profile, credential, member_credentials);
+    if members.len() < 2 {
+        runtime_profile
+    } else {
+        runtime_profile.with_group_outbound(strategy, members, &profile.probe_url)
+    }
+}
+
 /// Builds the sing-box document for one profile.
 fn generate_sing_box<C, P>(
     profile: &DesktopSessionProfile,
     credential: &StoredNodeCredential,
+    member_credentials: &HashMap<Uuid, StoredNodeCredential>,
 ) -> Result<serde_json::Value, DesktopSessionError<C, P>>
 where
     C: Error + 'static,
@@ -81,9 +143,13 @@ where
     if profile.fragment_enabled {
         runtime_profile = runtime_profile.with_fragment(true);
     }
+    if profile.final_fragment_enabled {
+        runtime_profile = runtime_profile.with_final_fragment(true);
+    }
     if let Some(tun) = profile.tun.as_ref() {
         runtime_profile = runtime_profile.with_tun(tun, profile.dns_hijack);
     }
+    runtime_profile = apply_group_outbound(runtime_profile, profile, credential, member_credentials);
     Ok(SingBoxRuntimeConfigGenerator::generate(&runtime_profile)
         .map_err(|source| DesktopSessionError::Config { source })?
         .json()
@@ -98,6 +164,7 @@ where
 fn generate_xray<C, P>(
     profile: &DesktopSessionProfile,
     credential: &StoredNodeCredential,
+    member_credentials: &HashMap<Uuid, StoredNodeCredential>,
 ) -> Result<serde_json::Value, DesktopSessionError<C, P>>
 where
     C: Error + 'static,
@@ -125,9 +192,13 @@ where
     if profile.fragment_enabled {
         runtime_profile = runtime_profile.with_fragment(true);
     }
+    if profile.final_fragment_enabled {
+        runtime_profile = runtime_profile.with_final_fragment(true);
+    }
     if profile.udp_noise_enabled {
         runtime_profile = runtime_profile.with_udp_noise(true);
     }
+    runtime_profile = apply_xray_group_outbound(runtime_profile, profile, credential, member_credentials);
     Ok(XrayRuntimeConfigGenerator::generate(&runtime_profile)
         .map_err(|source| DesktopSessionError::XrayConfig { source })?
         .json()
@@ -213,7 +284,11 @@ pub struct DesktopSessionProfile {
     system_proxy: SystemProxyMode,
     mux_enabled: bool,
     fragment_enabled: bool,
+    final_fragment_enabled: bool,
     udp_noise_enabled: bool,
+    group_strategy: Option<NodeGroupStrategy>,
+    group_members: Vec<ProxyNode>,
+    probe_url: String,
 }
 
 impl DesktopSessionProfile {
@@ -234,7 +309,11 @@ impl DesktopSessionProfile {
             system_proxy: SystemProxyMode::Unchanged,
             mux_enabled: false,
             fragment_enabled: false,
+            final_fragment_enabled: false,
             udp_noise_enabled: false,
+            group_strategy: None,
+            group_members: Vec::new(),
+            probe_url: String::new(),
         }
     }
 
@@ -277,11 +356,39 @@ impl DesktopSessionProfile {
         self
     }
 
+    /// Turns on TLS record fragmentation at the landing stage (v2rayN's Final
+    /// tail fragmentation toggle).
+    #[must_use]
+    pub const fn with_final_fragment(mut self, enabled: bool) -> Self {
+        self.final_fragment_enabled = enabled;
+        self
+    }
+
     /// Turns on Xray UDP noise (v2rayN-style freedom `noises`) for this session.
     #[must_use]
     pub const fn with_udp_noise(mut self, enabled: bool) -> Self {
         self.udp_noise_enabled = enabled;
         self
+    }
+
+    /// Runs the selected node's group as a Core policy-group outbound.
+    #[must_use]
+    pub fn with_group_outbound(
+        mut self,
+        strategy: NodeGroupStrategy,
+        members: Vec<ProxyNode>,
+        probe_url: impl Into<String>,
+    ) -> Self {
+        self.group_strategy = Some(strategy);
+        self.group_members = members;
+        self.probe_url = probe_url.into();
+        self
+    }
+
+    /// Runs the selected node's group as a Core URL-TEST / leastPing balancer.
+    #[must_use]
+    pub fn with_urltest(self, members: Vec<ProxyNode>, probe_url: impl Into<String>) -> Self {
+        self.with_group_outbound(NodeGroupStrategy::UrlTest, members, probe_url)
     }
 
     /// Chooses the Core this session runs.
@@ -380,6 +487,11 @@ where
         }
     }
 
+    /// Borrows the injected Core control so the shell can reload a user install.
+    pub fn core_mut(&mut self) -> &mut C {
+        &mut self.core
+    }
+
     #[must_use]
     pub const fn is_running(&self) -> bool {
         self.active.is_some()
@@ -436,6 +548,23 @@ where
             .map_err(|source| DesktopSessionError::Secret { source })?;
         let credential = CredentialCodec::decode(&payload)
             .map_err(|source| DesktopSessionError::Credential { source })?;
+        let mut member_credentials = HashMap::new();
+        if !matches!(credential, StoredNodeCredential::Custom(_)) {
+            for member in &profile.group_members {
+                if member.id == profile.node.id {
+                    continue;
+                }
+                let payload = self
+                    .secret_store
+                    .get(&member.credential_ref)
+                    .map_err(|source| DesktopSessionError::Secret { source })?;
+                member_credentials.insert(
+                    member.id,
+                    CredentialCodec::decode(&payload)
+                        .map_err(|source| DesktopSessionError::Credential { source })?,
+                );
+            }
+        }
         let generated = match &credential {
             StoredNodeCredential::Custom(custom) => {
                 if profile.core != custom.core() {
@@ -447,8 +576,10 @@ where
                 parse_custom_document(custom.document())?
             }
             _ => match profile.core {
-                CoreType::SingBox => generate_sing_box(profile, &credential)?,
-                CoreType::Xray => generate_xray(profile, &credential)?,
+                CoreType::SingBox => {
+                    generate_sing_box(profile, &credential, &member_credentials)?
+                }
+                CoreType::Xray => generate_xray(profile, &credential, &member_credentials)?,
             },
         };
         let bytes = serde_json::to_vec(&generated)

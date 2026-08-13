@@ -52,6 +52,19 @@ function errorOf(overrides: Partial<ManualNodeForm> = {}): string {
 }
 
 describe("buildManualNodeDraft", () => {
+  it("rejects invalid Xray finalmask JSON", () => {
+    expect(
+      errorOf({ xrayFinalmaskJson: "{not-json" }),
+    ).toBe("Xray finalmask JSON 格式无效");
+  });
+
+  it("passes through valid Xray finalmask JSON", () => {
+    const json =
+      '{"type":"fragment","settings":{"packets":"tlshello","lengths":["80-120"]}}';
+    const draft = draftOf({ xrayFinalmaskJson: json });
+    expect(draft.xrayFinalmaskJson).toBe(json);
+  });
+
   it("builds a VLESS draft with TCP transport by default", () => {
     const draft = draftOf();
 

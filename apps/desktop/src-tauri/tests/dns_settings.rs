@@ -55,6 +55,7 @@ fn builds_doh_path_strategy_fake_ip_and_system_domain_rules() {
         fake_ip_enabled: true,
         ipv6_enabled: true,
         system_domains: vec!["lan".to_owned(), "example.local".to_owned()],
+        ..DnsSettings::default()
     };
 
     let config = SingBoxDnsConfigGenerator::generate(&settings.profile().unwrap());

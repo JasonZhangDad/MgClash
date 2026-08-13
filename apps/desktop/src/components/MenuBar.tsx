@@ -12,13 +12,17 @@ interface MenuBarProps {
   onOpenSettings: () => void;
   onOpenRouting: () => void;
   onOpenDns: () => void;
+  onOpenGeo: () => void;
   onCheckUpdate: () => void;
+  onCheckCoreUpdate: () => void;
   onOpenAbout: () => void;
   onReload: () => void;
   onClearTraffic: () => void;
   onExportAllLinks: () => void;
   onExportPreferences: () => void;
   onImportPreferences: () => void;
+  onExportProfile: () => void;
+  onImportProfile: () => void;
   onPreviousNode: () => void;
   onNextNode: () => void;
   onConnect: () => void;
@@ -45,13 +49,17 @@ export function MenuBar({
   onOpenSettings,
   onOpenRouting,
   onOpenDns,
+  onOpenGeo,
   onCheckUpdate,
+  onCheckCoreUpdate,
   onOpenAbout,
   onReload,
   onClearTraffic,
   onExportAllLinks,
   onExportPreferences,
   onImportPreferences,
+  onExportProfile,
+  onImportProfile,
   onPreviousNode,
   onNextNode,
   onConnect,
@@ -157,6 +165,9 @@ export function MenuBar({
             <button type="button" role="menuitem" disabled={busy} onClick={onOpenDns}>
               DNS
             </button>
+            <button type="button" role="menuitem" disabled={busy} onClick={onOpenGeo}>
+              {t("更新 Geo 文件")}
+            </button>
             <button type="button" role="menuitem" disabled={busy} onClick={onClearTraffic}>
               {t("清除流量统计")}
             </button>
@@ -170,6 +181,17 @@ export function MenuBar({
               onClick={onImportPreferences}
             >
               {t("导入设置")}
+            </button>
+            <button type="button" role="menuitem" disabled={busy} onClick={onExportProfile}>
+              {t("导出完整配置")}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={busy || connected}
+              onClick={onImportProfile}
+            >
+              {t("导入完整配置")}
             </button>
             <hr />
             <button type="button" role="menuitem" onClick={() => onTheme(theme === "light" ? "dark" : "light")}>
@@ -196,6 +218,9 @@ export function MenuBar({
           <div className="menu-panel" role="menu">
             <button type="button" role="menuitem" disabled={busy} onClick={onCheckUpdate}>
               {t("检查更新")}
+            </button>
+            <button type="button" role="menuitem" disabled={busy} onClick={onCheckCoreUpdate}>
+              {t("检查 Core 更新")}
             </button>
             <button type="button" role="menuitem" onClick={onOpenAbout}>
               {t("关于")}

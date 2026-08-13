@@ -2,11 +2,11 @@ use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 
 use magies_domain::{CredentialRef, NodeModelError, Subscription, SubscriptionModelError};
-use magies_storage::{SecretStore, SecretStoreError, SecretValue};
+use magies_storage::{SecretStore, SecretStoreError};
 use thiserror::Error;
-use url::Url;
 use uuid::Uuid;
 
+use crate::subscription_url::{SubscriptionUrlError, validated_url_secret};
 use crate::{DeletedSubscription, SqliteSubscriptionStore, SubscriptionTransactionError};
 
 pub struct SubscriptionManagementService<'a, S: SecretStore + ?Sized> {
@@ -42,8 +42,9 @@ impl<'a, S: SecretStore + ?Sized> SubscriptionManagementService<'a, S> {
         user_agent: Option<&str>,
         include_keywords: &str,
         exclude_keywords: &str,
+        subconverter_url: Option<&str>,
     ) -> Result<Subscription, SubscriptionManagementError> {
-        let url_secret = validated_url_secret(url)?;
+        let url_secret = validated_url_secret(url).map_err(SubscriptionManagementError::Url)?;
         let id = Uuid::new_v4();
         let url_secret_ref = CredentialRef::new(format!("subscription/{id}/url"))
             .map_err(SubscriptionManagementError::CredentialRef)?;
@@ -57,6 +58,63 @@ impl<'a, S: SecretStore + ?Sized> SubscriptionManagementService<'a, S> {
         exclude_keywords
             .trim()
             .clone_into(&mut subscription.exclude_keywords);
+        subscription.subconverter_url = normalize_optional_text(subconverter_url);
+
+        self.secret_store
+            .put(&url_secret_ref, &url_secret)
+            .map_err(|source| SubscriptionManagementError::SecretStore {
+                operation: SubscriptionManagementSecretOperation::SaveUrl,
+                source,
+            })?;
+        if let Err(transaction) = self.store.insert_subscription(&subscription) {
+            return match self.secret_store.delete(&url_secret_ref) {
+                Ok(()) => Err(transaction.into()),
+                Err(secret) => Err(SubscriptionManagementError::TransactionAndSecretRollback {
+                    transaction,
+                    secret,
+                }),
+            };
+        }
+        Ok(subscription)
+    }
+
+    /// Restores a subscription with a fixed identifier during profile import.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same typed errors as [`Self::create`].
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "restore mirrors the editable subscription fields one-for-one"
+    )]
+    pub fn restore(
+        &mut self,
+        id: Uuid,
+        name: &str,
+        url: &str,
+        update_interval_minutes: u32,
+        auto_update: bool,
+        enabled: bool,
+        user_agent: Option<&str>,
+        include_keywords: &str,
+        exclude_keywords: &str,
+        subconverter_url: Option<&str>,
+    ) -> Result<Subscription, SubscriptionManagementError> {
+        let url_secret = validated_url_secret(url).map_err(SubscriptionManagementError::Url)?;
+        let url_secret_ref = CredentialRef::new(format!("subscription/{id}/url"))
+            .map_err(SubscriptionManagementError::CredentialRef)?;
+        let mut subscription =
+            Subscription::new(id, name, url_secret_ref.clone(), update_interval_minutes)?;
+        subscription.auto_update = auto_update;
+        subscription.enabled = enabled;
+        subscription.user_agent = normalize_optional_text(user_agent);
+        include_keywords
+            .trim()
+            .clone_into(&mut subscription.include_keywords);
+        exclude_keywords
+            .trim()
+            .clone_into(&mut subscription.exclude_keywords);
+        subscription.subconverter_url = normalize_optional_text(subconverter_url);
 
         self.secret_store
             .put(&url_secret_ref, &url_secret)
@@ -106,6 +164,7 @@ impl<'a, S: SecretStore + ?Sized> SubscriptionManagementService<'a, S> {
         user_agent: Option<&str>,
         include_keywords: &str,
         exclude_keywords: &str,
+        subconverter_url: Option<&str>,
     ) -> Result<Subscription, SubscriptionManagementError> {
         let existing = self
             .store
@@ -129,9 +188,10 @@ impl<'a, S: SecretStore + ?Sized> SubscriptionManagementService<'a, S> {
         exclude_keywords
             .trim()
             .clone_into(&mut edited.exclude_keywords);
+        edited.subconverter_url = normalize_optional_text(subconverter_url);
 
         let previous_url = if let Some(new_url) = new_url {
-            let new_url = validated_url_secret(new_url)?;
+            let new_url = validated_url_secret(new_url).map_err(SubscriptionManagementError::Url)?;
             let previous_url = self
                 .secret_store
                 .get(&edited.url_secret_ref)
@@ -198,22 +258,6 @@ impl<'a, S: SecretStore + ?Sized> SubscriptionManagementService<'a, S> {
     }
 }
 
-fn validated_url_secret(url: &str) -> Result<SecretValue, SubscriptionManagementError> {
-    let parsed =
-        Url::parse(url).map_err(|source| SubscriptionManagementError::InvalidUrl { source })?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err(SubscriptionManagementError::UnsupportedScheme {
-            scheme: parsed.scheme().to_owned(),
-        });
-    }
-    SecretValue::new(url.as_bytes().to_vec()).map_err(|source| {
-        SubscriptionManagementError::SecretStore {
-            operation: SubscriptionManagementSecretOperation::SaveUrl,
-            source,
-        }
-    })
-}
-
 fn normalize_optional_text(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
@@ -242,10 +286,8 @@ impl Display for SubscriptionManagementSecretOperation {
 
 #[derive(Debug, Error)]
 pub enum SubscriptionManagementError {
-    #[error("invalid subscription URL")]
-    InvalidUrl { source: url::ParseError },
-    #[error("unsupported subscription URL scheme: {scheme}")]
-    UnsupportedScheme { scheme: String },
+    #[error(transparent)]
+    Url(#[from] SubscriptionUrlError),
     #[error("failed to build the subscription URL credential reference")]
     CredentialRef(#[source] NodeModelError),
     #[error(transparent)]

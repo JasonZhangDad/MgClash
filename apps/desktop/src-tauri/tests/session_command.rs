@@ -807,6 +807,18 @@ fn groups_manual_and_subscription_nodes_with_shared_names() {
         .unwrap();
     assert_eq!(service.status().node.unwrap().group_id, Some(group_id));
     assert_eq!(service.node_groups().unwrap()[0].name, "Work");
+    assert_eq!(
+        service.node_groups().unwrap()[0].strategy,
+        magies_profiles::NodeGroupStrategy::Select
+    );
+
+    let groups = service
+        .set_node_group_strategy(group_id, magies_profiles::NodeGroupStrategy::UrlTest)
+        .unwrap();
+    assert_eq!(
+        groups[0].strategy,
+        magies_profiles::NodeGroupStrategy::UrlTest
+    );
 
     let nodes = service.set_node_group(managed_id, Some("Work")).unwrap();
     assert!(nodes.iter().all(|node| node.group_id == Some(group_id)));
@@ -1284,6 +1296,7 @@ fn trojan_draft(name: &str, port: u32) -> ManualNodeDraft {
         credential: ManualCredentialDraft::Trojan {
             password: "runtime-secret".to_owned(),
         },
+        xray_finalmask_json: None,
     }
 }
 
@@ -1303,6 +1316,7 @@ fn creates_a_custom_node_and_selects_its_pinned_core() {
                 core: CoreType::Xray,
                 document: document.to_owned(),
             },
+            xray_finalmask_json: None,
         })
         .unwrap();
     let node = status.node.unwrap();

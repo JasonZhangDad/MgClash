@@ -17,6 +17,7 @@ export type DialogId =
   | "subscriptions"
   | "dns"
   | "routing"
+  | "geo"
   | "import"
   | "create"
   | "settings"
@@ -47,6 +48,8 @@ export const ROUTE_KIND_LABEL: Record<RouteRuleKind, string> = {
   geoSite: "GeoSite",
   port: "端口",
   network: "网络",
+  processName: "进程名",
+  processPath: "进程路径",
 };
 
 export function isGeoRule(kind: RouteRuleKind): boolean {

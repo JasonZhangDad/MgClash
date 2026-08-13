@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use magies_core_runtime::{
     CoreBinaryError, CoreBinaryRequirement, CoreOutput, Sha256Hash, Sha256HashParseError,
-    SingBoxAdapter, XrayAdapter, locate_core_binary,
+    SingBoxAdapter, SingBoxAdapterError, XrayAdapter, XrayAdapterError, locate_core_binary,
 };
 use magies_domain::CoreType;
 use magies_platform::{PlatformError, TargetPlatform};
@@ -125,6 +125,12 @@ impl LazySingBoxControl {
         }
     }
 
+    pub fn replace_settings(&mut self, settings: Result<CoreSettings, CoreSettingsError>) {
+        let _ = self.stop();
+        self.settings = settings;
+        self.control = None;
+    }
+
     /// Reads the pinned Core from the environment, deferring failures to the
     /// first connect.
     #[must_use]
@@ -210,6 +216,45 @@ impl HostCoreControl {
             current: CoreType::SingBox,
         }
     }
+
+    /// Builds Core controls from an optional user install store.
+    #[must_use]
+    pub fn from_install(
+        install: Option<&crate::core_install::CoreInstallStore>,
+        health_address: SocketAddr,
+        health_timeout: Duration,
+    ) -> Self {
+        Self {
+            sing_box: LazySingBoxControl::new(
+                crate::core_install::sing_box_settings_with_store(install),
+                health_address,
+                health_timeout,
+            ),
+            xray: LazyXrayControl::new(
+                crate::core_install::xray_settings_with_store(install),
+                health_address,
+                health_timeout,
+            ),
+            current: CoreType::SingBox,
+        }
+    }
+
+    /// Reloads Core paths after a user-triggered install.
+    pub fn apply_install_store(&mut self, install: &crate::core_install::CoreInstallStore) {
+        self.sing_box.replace_settings(crate::core_install::sing_box_settings_with_store(
+            Some(install),
+        ));
+        self.xray.replace_settings(crate::core_install::xray_settings_with_store(
+            Some(install),
+        ));
+    }
+
+    /// Points Xray at the desktop Geo assets directory.
+    #[must_use]
+    pub fn with_xray_asset_directory(mut self, directory: impl Into<PathBuf>) -> Self {
+        self.xray = self.xray.with_asset_directory(directory);
+        self
+    }
 }
 
 impl CoreSessionControl for HostCoreControl {
@@ -263,6 +308,7 @@ pub struct LazyXrayControl {
     settings: Result<CoreSettings, CoreSettingsError>,
     health_address: SocketAddr,
     health_timeout: Duration,
+    asset_directory: Option<PathBuf>,
     control: Option<XrayCoreControl>,
 }
 
@@ -277,8 +323,22 @@ impl LazyXrayControl {
             settings,
             health_address,
             health_timeout,
+            asset_directory: None,
             control: None,
         }
+    }
+
+    /// Points future Xray sessions at a Geo assets directory.
+    #[must_use]
+    pub fn with_asset_directory(mut self, directory: impl Into<PathBuf>) -> Self {
+        self.asset_directory = Some(directory.into());
+        self
+    }
+
+    pub fn replace_settings(&mut self, settings: Result<CoreSettings, CoreSettingsError>) {
+        let _ = self.stop();
+        self.settings = settings;
+        self.control = None;
     }
 
     /// Reads the Xray binary and digest from the environment.
@@ -311,8 +371,12 @@ impl LazyXrayControl {
             CoreBinaryRequirement::new(target.architecture(), settings.sha256),
         )
         .map_err(|source| LazyXrayError::Binary(Box::new(source)))?;
+        let mut adapter = XrayAdapter::new(binary);
+        if let Some(directory) = &self.asset_directory {
+            adapter = adapter.with_asset_directory(directory.clone());
+        }
         self.control = Some(XrayCoreControl::new(
-            XrayAdapter::new(binary),
+            adapter,
             self.health_address,
             self.health_timeout,
         ));
@@ -426,4 +490,99 @@ pub fn describe(error: &dyn Error) -> String {
         source = cause.source();
     }
     message
+}
+
+pub fn read_sing_box_version_from_settings_with_store(
+    install: Option<&crate::core_install::CoreInstallStore>,
+) -> Result<String, SingBoxVersionReadError> {
+    let settings = crate::core_install::sing_box_settings_with_store(install)
+        .map_err(SingBoxVersionReadError::Settings)?;
+    read_version_from_settings(&settings)
+}
+
+/// Reads sing-box's version from the validated binary when it is configured.
+///
+/// # Errors
+///
+/// Returns a typed error when settings, the binary pin, or `--version` fails.
+pub fn read_sing_box_version_from_settings() -> Result<String, SingBoxVersionReadError> {
+    read_sing_box_version_from_settings_with_store(None)
+}
+
+fn read_version_from_settings(
+    settings: &CoreSettings,
+) -> Result<String, SingBoxVersionReadError> {
+    let target = TargetPlatform::parse(std::env::consts::OS, std::env::consts::ARCH)
+        .map_err(SingBoxVersionReadError::Target)?;
+    let binary = locate_core_binary(
+        &settings.binary,
+        CoreBinaryRequirement::new(target.architecture(), settings.sha256),
+    )
+    .map_err(SingBoxVersionReadError::Binary)?;
+    SingBoxAdapter::new(binary)
+        .version()
+        .map(|version| version.as_str().to_owned())
+        .map_err(SingBoxVersionReadError::Version)
+}
+
+/// Reads Xray's version from the validated binary when it is configured.
+///
+/// # Errors
+///
+/// Returns a typed error when settings, the binary pin, or `version` fails.
+pub fn read_xray_version_from_settings_with_store(
+    install: Option<&crate::core_install::CoreInstallStore>,
+) -> Result<String, XrayVersionReadError> {
+    let settings = crate::core_install::xray_settings_with_store(install)
+        .map_err(XrayVersionReadError::Settings)?;
+    read_xray_version_from_core_settings(&settings)
+}
+
+/// Reads Xray's version from the validated binary when it is configured.
+///
+/// # Errors
+///
+/// Returns a typed error when settings, the binary pin, or `version` fails.
+pub fn read_xray_version_from_settings() -> Result<String, XrayVersionReadError> {
+    read_xray_version_from_settings_with_store(None)
+}
+
+fn read_xray_version_from_core_settings(
+    settings: &CoreSettings,
+) -> Result<String, XrayVersionReadError> {
+    let target = TargetPlatform::parse(std::env::consts::OS, std::env::consts::ARCH)
+        .map_err(XrayVersionReadError::Target)?;
+    let binary = locate_core_binary(
+        &settings.binary,
+        CoreBinaryRequirement::new(target.architecture(), settings.sha256),
+    )
+    .map_err(XrayVersionReadError::Binary)?;
+    XrayAdapter::new(binary)
+        .version()
+        .map(|version| version.as_str().to_owned())
+        .map_err(XrayVersionReadError::Version)
+}
+
+#[derive(Debug, Error)]
+pub enum SingBoxVersionReadError {
+    #[error(transparent)]
+    Settings(#[from] CoreSettingsError),
+    #[error(transparent)]
+    Target(#[from] PlatformError),
+    #[error(transparent)]
+    Binary(#[from] CoreBinaryError),
+    #[error(transparent)]
+    Version(#[from] SingBoxAdapterError),
+}
+
+#[derive(Debug, Error)]
+pub enum XrayVersionReadError {
+    #[error(transparent)]
+    Settings(#[from] CoreSettingsError),
+    #[error(transparent)]
+    Target(#[from] PlatformError),
+    #[error(transparent)]
+    Binary(#[from] CoreBinaryError),
+    #[error(transparent)]
+    Version(#[from] XrayAdapterError),
 }

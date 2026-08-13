@@ -198,6 +198,43 @@ impl SqliteManualNodeStore {
         Ok(node.clone())
     }
 
+    /// Atomically replaces every manual node and its selection flags.
+    ///
+    /// At most one row may be marked selected. Passing an empty slice clears
+    /// the table entirely.
+    ///
+    /// # Errors
+    ///
+    /// Rejects subscription-owned nodes, more than one selected row, and
+    /// returns serialization or database errors without a partial write.
+    pub fn replace_all(
+        &mut self,
+        nodes: &[(ProxyNode, bool)],
+    ) -> Result<(), ManualNodeStoreError> {
+        let selected = nodes.iter().filter(|(_, selected)| *selected).count();
+        if selected > 1 {
+            return Err(ManualNodeStoreError::MultipleSelected { count: selected });
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute("DELETE FROM manual_nodes", [])?;
+        for (node, selected) in nodes {
+            if node.subscription_id.is_some() {
+                return Err(ManualNodeStoreError::SubscriptionNode { id: node.id });
+            }
+            let json = serde_json::to_string(node)
+                .map_err(|source| ManualNodeStoreError::SerializeNode { source })?;
+            transaction.execute(
+                "INSERT INTO manual_nodes (id, node_json, selected)
+                 VALUES (?1, ?2, ?3)",
+                params![node.id.to_string(), json, i32::from(*selected)],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
     /// Clears the persisted manual-node selection without deleting any node.
     ///
     /// # Errors
@@ -263,4 +300,6 @@ pub enum ManualNodeStoreError {
     SubscriptionNode { id: Uuid },
     #[error("manual node {id} was not found")]
     NodeNotFound { id: Uuid },
+    #[error("only one manual node may be selected, but {count} were marked selected")]
+    MultipleSelected { count: usize },
 }

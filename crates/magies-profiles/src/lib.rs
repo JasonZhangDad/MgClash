@@ -29,6 +29,7 @@ mod subscription_content;
 mod subscription_management;
 mod subscription_service;
 mod subscription_transaction;
+mod subscription_url;
 mod trojan;
 mod tuic;
 mod tun_config;
@@ -74,7 +75,9 @@ pub use node_dedup::{
     CredentialIdentity, NodeDedupCandidate, NodeDedupResult, NodeDedupSummary, NodeDeduplicator,
     NodeFingerprint,
 };
-pub use node_group_store::{NodeGroup, NodeGroupStoreError, SqliteNodeGroupStore};
+pub use node_group_store::{
+    NodeGroup, NodeGroupSnapshot, NodeGroupStoreError, NodeGroupStrategy, SqliteNodeGroupStore,
+};
 pub use node_order_store::{NodeOrderStoreError, SqliteNodeOrderStore};
 pub use shadowsocks::{
     ParsedShadowsocksNode, ShadowsocksCredential, ShadowsocksParseError, ShadowsocksParser,
@@ -86,7 +89,7 @@ pub use share_link_qr::{
 pub use share_link_serializer::{ShareLinkSerializer, ShareLinkSerializerError};
 pub use sing_box_outbound::{
     GeneratedSingBoxOutbound, NodeCredential, OutboundConfigError, SingBoxOutboundConfigGenerator,
-    apply_sing_box_fragment, apply_sing_box_multiplex,
+    apply_sing_box_fragment, apply_sing_box_multiplex, node_outbound_tag,
 };
 pub use sing_box_runtime_config::{
     RuntimeConfigError, SingBoxRuntimeConfigGenerator, SingBoxRuntimeProfile,
@@ -111,6 +114,10 @@ pub use subscription_transaction::{
     DeletedSubscription, SqliteSubscriptionStore, SubscriptionCommit, SubscriptionState,
     SubscriptionTransactionError, SubscriptionUpdate,
 };
+pub use subscription_url::{
+    SubscriptionUrlError, effective_fetch_urls, split_subscription_urls, validated_url_secret,
+    wrap_subconverter,
+};
 pub use trojan::{ParsedTrojanNode, TrojanCredential, TrojanParseError, TrojanParser};
 pub use tuic::{
     ParsedTuicNode, TuicCongestionControl, TuicCredential, TuicParseError, TuicParser,
@@ -124,7 +131,9 @@ pub use wireguard::{
 pub use xray_dns_config::{FAKE_DNS_SERVER, XrayDnsConfigGenerator};
 pub use xray_outbound::{
     FRAGMENT_OUTBOUND_TAG, GeneratedXrayOutbound, XrayOutboundConfigGenerator, XrayOutboundError,
-    apply_xray_fragment, apply_xray_mux, xray_fragment_outbound,
+    apply_xray_fragment, apply_xray_final_fragment, apply_xray_mux, normalize_xray_finalmask_tcp,
+    xray_finalmask_fragment_mask, XrayFinalmaskError,
+    xray_fragment_outbound,
     xray_fragment_outbound_with_options,
 };
 pub use xray_runtime_config::{

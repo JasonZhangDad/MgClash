@@ -33,6 +33,11 @@ fn status() -> SessionStatus {
         dns: DnsSettings::default(),
         mode: "global",
         route: RouteSettings::default(),
+        route_scheme_id: "default".to_owned(),
+        route_schemes: vec![magies_desktop_lib::session::RouteSchemeSummary {
+            id: "default".to_owned(),
+            name: "默认".to_owned(),
+        }],
         system_proxy: true,
         system_proxy_mode: "managed",
         socks_port: 10_808,
