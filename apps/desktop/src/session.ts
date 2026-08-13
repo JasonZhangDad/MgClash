@@ -333,8 +333,20 @@ export interface RouteRuleSetting {
   value: string;
 }
 
+export type RuleProviderFormat = "binary" | "source";
+
+/** A remote rule set the Core downloads and routes by. */
+export interface RuleProviderSetting {
+  enabled: boolean;
+  format: RuleProviderFormat;
+  name: string;
+  outbound: RouteOutbound;
+  url: string;
+}
+
 export interface RouteSettings {
   finalOutbound: RouteOutbound;
+  providers: RuleProviderSetting[];
   rules: RouteRuleSetting[];
 }
 

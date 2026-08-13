@@ -4,6 +4,7 @@ use std::path::Path;
 
 use magies_routing::{
     Network, RouteConfigError, RouteOutbound, RouteProfile, RoutingMode, RoutingRule,
+    RuleProviderFormat,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -252,10 +253,56 @@ impl RouteRuleSetting {
     }
 }
 
+/// How a remote rule set is encoded, as the window spells it.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RuleProviderFormatSetting {
+    #[default]
+    Binary,
+    Source,
+}
+
+impl From<RuleProviderFormatSetting> for RuleProviderFormat {
+    fn from(format: RuleProviderFormatSetting) -> Self {
+        match format {
+            RuleProviderFormatSetting::Binary => Self::Binary,
+            RuleProviderFormatSetting::Source => Self::Source,
+        }
+    }
+}
+
+/// A remote rule set the Core downloads and routes by, the way Clash clients
+/// call a rule provider.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleProviderSetting {
+    pub name: String,
+    pub url: String,
+    pub format: RuleProviderFormatSetting,
+    pub outbound: DesktopRouteOutbound,
+    pub enabled: bool,
+}
+
+impl RuleProviderSetting {
+    fn rule(&self, priority: i32) -> Result<RoutingRule, RouteSettingsError> {
+        Ok(RoutingRule::rule_provider(
+            &self.name,
+            &self.url,
+            self.format.into(),
+            self.outbound.into(),
+            priority,
+            self.enabled,
+        )?)
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RouteSettings {
     pub rules: Vec<RouteRuleSetting>,
+    /// Stored settings written before rule providers existed have none.
+    #[serde(default)]
+    pub providers: Vec<RuleProviderSetting>,
     pub final_outbound: DesktopRouteOutbound,
 }
 
@@ -270,12 +317,18 @@ impl RouteSettings {
             RoutingMode::Global => Ok(RouteProfile::new(mode, Vec::new(), RouteOutbound::Proxy)?),
             RoutingMode::Direct => Ok(RouteProfile::new(mode, Vec::new(), RouteOutbound::Direct)?),
             RoutingMode::Rule => {
-                let rules = self
+                let mut rules = self
                     .rules
                     .iter()
                     .zip(0_i32..)
                     .map(|(rule, priority)| rule.rule(priority))
                     .collect::<Result<Vec<_>, _>>()?;
+                // Providers are matched after the hand-written rules: a
+                // downloaded list must not shadow a rule the user typed.
+                let offset = i32::try_from(rules.len()).unwrap_or(i32::MAX);
+                for (provider, priority) in self.providers.iter().zip(offset..) {
+                    rules.push(provider.rule(priority)?);
+                }
                 Ok(RouteProfile::new(mode, rules, self.final_outbound.into())?)
             }
         }

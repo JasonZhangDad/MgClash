@@ -19,6 +19,7 @@ fn preferences_round_trip_through_a_file() {
             ..AppSettings::default()
         },
         RouteSettings {
+            providers: Vec::new(),
             final_outbound: DesktopRouteOutbound::Direct,
             rules: vec![RouteRuleSetting {
                 kind: RouteRuleKind::DomainSuffix,
@@ -34,10 +35,11 @@ fn preferences_round_trip_through_a_file() {
     );
 
     let path = bundle.write_to(directory.path()).unwrap();
-    assert!(path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with("mgclash-preferences-")));
+    assert!(
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("mgclash-preferences-"))
+    );
 
     let restored = PreferencesBundle::read_from(&path).unwrap();
     assert_eq!(restored, bundle);

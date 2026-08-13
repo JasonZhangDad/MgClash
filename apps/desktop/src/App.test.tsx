@@ -161,9 +161,7 @@ const IDLE: SessionStatus = {
   },
   httpPort: 10809,
   mode: "global",
-  route: {
-    finalOutbound: "proxy",
-    rules: [],
+  route: { finalOutbound: "proxy", providers: [], rules: [],
   },
   routeSchemeId: "default",
   routeSchemes: [{ id: "default", name: "默认" }],
@@ -3082,7 +3080,7 @@ describe("App", () => {
     ];
     const saved: SessionStatus = {
       ...IDLE,
-      route: { finalOutbound: "direct", rules },
+      route: { finalOutbound: "direct", providers: [], rules },
     };
     setRouteSettingsMock.mockResolvedValue(saved);
     await render();
@@ -3122,8 +3120,56 @@ describe("App", () => {
 
     expect(setRouteSettingsMock).toHaveBeenCalledWith({
       finalOutbound: "direct",
+      providers: [],
       rules,
     });
+  });
+
+  it("says Xray ignores remote rule sets", async () => {
+    loadSessionStatusMock.mockResolvedValue({ ...IDLE, core: "xray" });
+    await render();
+
+    expect(container.textContent).toContain("Xray 会忽略远程规则集");
+  });
+
+  it("adds a remote rule provider and saves it with the route", async () => {
+    setRouteSettingsMock.mockResolvedValue(IDLE);
+    await render();
+
+    const name = container.querySelector<HTMLInputElement>(
+      "input[aria-label='规则集名称']",
+    );
+    const url = container.querySelector<HTMLInputElement>(
+      "input[aria-label='规则集地址']",
+    );
+    if (!name || !url) {
+      throw new Error("the rule provider form is missing");
+    }
+    await act(async () => {
+      typeInput("ads", name);
+      typeInput("https://example.com/ads.srs", url);
+    });
+    await act(async () => button("添加规则集").click());
+
+    expect(
+      container.querySelectorAll("[aria-label='规则集列表'] tbody tr"),
+    ).toHaveLength(1);
+
+    await act(async () => button("保存路由").click());
+
+    expect(setRouteSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providers: [
+          {
+            enabled: true,
+            format: "binary",
+            name: "ads",
+            outbound: "direct",
+            url: "https://example.com/ads.srs",
+          },
+        ],
+      }),
+    );
   });
 
   it("saves route settings while connected", async () => {

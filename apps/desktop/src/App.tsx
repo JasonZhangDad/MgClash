@@ -91,6 +91,7 @@ import {
   type DnsStrategy,
   type DnsTemplate,
   type RouteOutbound,
+  type RuleProviderFormat,
   type RouteRuleKind,
   type RouteSettings,
   type SessionStatus,
@@ -196,6 +197,12 @@ export default function App() {
   const [dnsDraft, setDnsDraft] = useState<DnsSettings | null>(null);
   const [dnsDirty, setDnsDirty] = useState(false);
   const [routeDraft, setRouteDraft] = useState<RouteSettings | null>(null);
+  const [providerName, setProviderName] = useState("");
+  const [providerUrl, setProviderUrl] = useState("");
+  const [providerFormat, setProviderFormat] =
+    useState<RuleProviderFormat>("binary");
+  const [providerOutbound, setProviderOutbound] =
+    useState<RouteOutbound>("direct");
   const [routeDirty, setRouteDirty] = useState(false);
   const [routeRuleKind, setRouteRuleKind] = useState<RouteRuleKind>("domainSuffix");
   const [routeRuleValue, setRouteRuleValue] = useState("");
@@ -527,6 +534,30 @@ export default function App() {
       setBusy(false);
     }
   }, [dnsDraft]);
+
+  const onAddRuleProvider = useCallback(() => {
+    const name = providerName.trim();
+    const url = providerUrl.trim();
+    if (routeDraft === null || name === "" || url === "") {
+      return;
+    }
+    setRouteDraft({
+      ...routeDraft,
+      providers: [
+        ...routeDraft.providers,
+        {
+          enabled: true,
+          format: providerFormat,
+          name,
+          outbound: providerOutbound,
+          url,
+        },
+      ],
+    });
+    setProviderName("");
+    setProviderUrl("");
+    setRouteDirty(true);
+  }, [providerFormat, providerName, providerOutbound, providerUrl, routeDraft]);
 
   const onAddRouteRule = useCallback(() => {
     const value = routeRuleValue.trim();
@@ -4390,6 +4421,127 @@ export default function App() {
                               ...routeDraft,
                               rules: routeDraft.rules.filter(
                                 (_, ruleIndex) => ruleIndex !== index,
+                              ),
+                            });
+                            setRouteDirty(true);
+                          }}
+                        >
+                          {t("删除")}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+
+            {status.core === "xray" ? (
+              <p className="hint">{t("Xray 会忽略远程规则集，改用 sing-box 才会生效。")}</p>
+            ) : null}
+            <div className="settings-form" aria-label={t("规则集")}>
+              <label>
+                {t("规则集名称")}
+                <input
+                  aria-label={t("规则集名称")}
+                  disabled={busy}
+                  placeholder="ads"
+                  value={providerName}
+                  onChange={(event) => setProviderName(event.target.value)}
+                />
+              </label>
+              <label>
+                {t("规则集地址")}
+                <input
+                  aria-label={t("规则集地址")}
+                  disabled={busy}
+                  placeholder="https://example.com/ads.srs"
+                  value={providerUrl}
+                  onChange={(event) => setProviderUrl(event.target.value)}
+                />
+              </label>
+              <label>
+                {t("格式")}
+                <select
+                  aria-label={t("规则集格式")}
+                  disabled={busy}
+                  value={providerFormat}
+                  onChange={(event) =>
+                    setProviderFormat(event.target.value as RuleProviderFormat)
+                  }
+                >
+                  <option value="binary">binary (.srs)</option>
+                  <option value="source">source (.json)</option>
+                </select>
+              </label>
+              <label>
+                {t("出口")}
+                <select
+                  aria-label={t("规则集出口")}
+                  disabled={busy}
+                  value={providerOutbound}
+                  onChange={(event) =>
+                    setProviderOutbound(event.target.value as RouteOutbound)
+                  }
+                >
+                  <option value="proxy">{t("代理")}</option>
+                  <option value="direct">{t("直连")}</option>
+                </select>
+              </label>
+            </div>
+            <div className="actions">
+              <button type="button" disabled={busy} onClick={onAddRuleProvider}>
+                {t("添加规则集")}
+              </button>
+            </div>
+
+            {routeDraft.providers.length === 0 ? (
+              <p className="hint">{t("尚未添加规则集")}</p>
+            ) : (
+              <table className="node-list" aria-label={t("规则集列表")}>
+                <thead>
+                  <tr>
+                    <th>{t("名称")}</th>
+                    <th>{t("地址")}</th>
+                    <th>{t("格式")}</th>
+                    <th>{t("出口")}</th>
+                    <th>{t("启用")}</th>
+                    <th>{t("操作")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {routeDraft.providers.map((provider, index) => (
+                    <tr key={`${provider.name}-${index}`}>
+                      <td>{provider.name}</td>
+                      <td>{provider.url}</td>
+                      <td>{provider.format}</td>
+                      <td>{provider.outbound === "proxy" ? t("代理") : t("直连")}</td>
+                      <td>
+                        <input
+                          aria-label={`${t("启用规则集")} ${provider.name}`}
+                          checked={provider.enabled}
+                          disabled={busy}
+                          type="checkbox"
+                          onChange={(event) => {
+                            const providers = [...routeDraft.providers];
+                            providers[index] = {
+                              ...provider,
+                              enabled: event.target.checked,
+                            };
+                            setRouteDraft({ ...routeDraft, providers });
+                            setRouteDirty(true);
+                          }}
+                        />
+                      </td>
+                      <td className="node-actions">
+                        <button
+                          type="button"
+                          aria-label={`${t("删除规则集")} ${provider.name}`}
+                          disabled={busy}
+                          onClick={() => {
+                            setRouteDraft({
+                              ...routeDraft,
+                              providers: routeDraft.providers.filter(
+                                (_, providerIndex) => providerIndex !== index,
                               ),
                             });
                             setRouteDirty(true);

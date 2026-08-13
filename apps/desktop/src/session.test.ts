@@ -55,9 +55,7 @@ const IDLE: SessionStatus = {
   },
   httpPort: 10809,
   mode: "global",
-  route: {
-    finalOutbound: "proxy",
-    rules: [],
+  route: { finalOutbound: "proxy", providers: [], rules: [],
   },
   routeSchemeId: "default",
   routeSchemes: [{ id: "default", name: "默认" }],
@@ -316,6 +314,7 @@ describe("session commands", () => {
   it("saves ordered route settings through their own command", async () => {
     const settings = {
       finalOutbound: "proxy" as const,
+      providers: [],
       rules: [
         {
           enabled: true,

@@ -1152,6 +1152,7 @@ fn changes_route_rules_and_uses_them_for_the_next_connection() {
             outbound: DesktopRouteOutbound::Direct,
             enabled: true,
         }],
+        providers: Vec::new(),
         final_outbound: DesktopRouteOutbound::Proxy,
     };
 
