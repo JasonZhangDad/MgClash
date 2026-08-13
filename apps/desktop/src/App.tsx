@@ -15,6 +15,7 @@ import {
   createNode,
   cloneNode,
   deleteNode,
+  checkUpdate,
   nodeQrCode,
   readQrCode,
   exportNodeLink,
@@ -68,6 +69,7 @@ import {
   type RoutingMode,
   type SystemProxyStartupStatus,
   type NodeTraffic,
+  type UpdateCheck,
   type SystemProxyMode,
   type TrafficSnapshot,
 } from "./session";
@@ -228,6 +230,7 @@ export default function App() {
   const [qrCode, setQrCode] = useState<{ name: string; svg: string } | null>(
     null,
   );
+  const [update, setUpdate] = useState<UpdateCheck | null>(null);
   const toggleCheckedNode = (id: string) =>
     setCheckedNodes((current) => {
       const next = new Set(current);
@@ -832,6 +835,20 @@ export default function App() {
     }
   }, []);
 
+  const onCheckUpdate = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    setExportedTo(null);
+    setUpdate(null);
+    try {
+      setUpdate(await checkUpdate());
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
   const onShowNodeQrCode = useCallback(async (candidate: NodeSummary) => {
     setBusy(true);
     setError(null);
@@ -1228,6 +1245,14 @@ export default function App() {
               {entry.label}
             </button>
           ))}
+          <button
+            type="button"
+            className="menu-item"
+            disabled={busy}
+            onClick={() => void onCheckUpdate()}
+          >
+            检查更新
+          </button>
         </nav>
         <button
           type="button"
@@ -1756,6 +1781,31 @@ export default function App() {
         )}
 
         </div>
+        {update !== null && (
+          <div className="dialog-backdrop" onClick={() => setUpdate(null)}>
+            <div
+              className="dialog qr-dialog"
+              role="dialog"
+              aria-label="检查更新结果"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <header className="dialog-head">
+                <strong>检查更新</strong>
+                <button type="button" onClick={() => setUpdate(null)}>
+                  关闭
+                </button>
+              </header>
+              <p>
+                {update.updateAvailable
+                  ? `有新版本 ${update.latest}，当前 ${update.current}`
+                  : `已是最新版本 ${update.current}`}
+              </p>
+              {/* A link rather than an in-app download: the artifacts are
+                  unsigned, so the user has to see what they are fetching. */}
+              <p className="hint">{update.url}</p>
+            </div>
+          </div>
+        )}
         {qrCode !== null && (
           <div className="dialog-backdrop" onClick={() => setQrCode(null)}>
             <div
