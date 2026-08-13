@@ -33,9 +33,12 @@ export interface NodeSummary {
   server: string;
 }
 
+export type NodeGroupStrategy = "select" | "urlTest" | "fallback" | "loadBalance";
+
 export interface NodeGroupSummary {
   id: string;
   name: string;
+  strategy: NodeGroupStrategy;
 }
 
 export interface NodeEdit {
@@ -83,6 +86,7 @@ export interface AppSettings {
   clashApiPort: number;
   muxEnabled: boolean;
   fragmentEnabled: boolean;
+  finalFragmentEnabled: boolean;
   udpNoiseEnabled: boolean;
   autoSelectLowestLatency: boolean;
   urlTestAddress: string;
@@ -240,6 +244,8 @@ export interface ManualNodeDraft {
   tls: TlsDraft | null;
   transport: TransportDraft | null;
   udpEnabled: boolean;
+  /** Optional Xray finalmask JSON (mask entry or `{tcp:[...]}`). */
+  xrayFinalmaskJson?: string | null;
 }
 
 export type NodeTestStatus = "failed" | "success" | "timeout";
@@ -258,6 +264,11 @@ export interface TrafficSnapshot {
   uploadBytesPerSecond: number;
 }
 
+export interface RouteSchemeSummary {
+  id: string;
+  name: string;
+}
+
 export interface SessionStatus {
   connected: boolean;
   core: string;
@@ -267,6 +278,8 @@ export interface SessionStatus {
   mode: RoutingMode;
   node: NodeSummary | null;
   route: RouteSettings;
+  routeSchemeId: string;
+  routeSchemes: RouteSchemeSummary[];
   socksPort: number;
   systemProxy: boolean;
   systemProxyMode: SystemProxyMode;
@@ -282,15 +295,20 @@ export type DnsStrategy =
   | "ipv4Only"
   | "ipv6Only";
 
+export type DnsTemplate = "simple" | "advanced";
+
 export interface DnsSettings {
+  bootstrap: string;
   dohPath: string;
   fakeIpEnabled: boolean;
+  hosts: string;
   ipv6Enabled: boolean;
   mode: DnsMode;
   port: number;
   server: string;
   strategy: DnsStrategy;
   systemDomains: string[];
+  template: DnsTemplate;
 }
 
 export type RouteRuleKind =
@@ -302,7 +320,9 @@ export type RouteRuleKind =
   | "geoIp"
   | "geoSite"
   | "port"
-  | "network";
+  | "network"
+  | "processName"
+  | "processPath";
 
 export type RouteOutbound = "proxy" | "direct";
 
@@ -345,6 +365,18 @@ export function setRoutingMode(mode: RoutingMode): Promise<SessionStatus> {
 
 export function setRouteSettings(settings: RouteSettings): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_set_route_settings", { settings });
+}
+
+export function setRouteScheme(schemeId: string): Promise<SessionStatus> {
+  return invoke<SessionStatus>("session_set_route_scheme", { schemeId });
+}
+
+export function createRouteScheme(name: string): Promise<SessionStatus> {
+  return invoke<SessionStatus>("session_create_route_scheme", { name });
+}
+
+export function deleteRouteScheme(schemeId: string): Promise<SessionStatus> {
+  return invoke<SessionStatus>("session_delete_route_scheme", { schemeId });
 }
 
 export function setDnsSettings(settings: DnsSettings): Promise<SessionStatus> {
@@ -501,6 +533,16 @@ export function setNodeGroup(
   return invoke<NodeSummary[]>("session_set_node_group", { groupName, id });
 }
 
+export function setNodeGroupStrategy(
+  id: string,
+  strategy: NodeGroupStrategy,
+): Promise<NodeGroupSummary[]> {
+  return invoke<NodeGroupSummary[]>("session_set_node_group_strategy", {
+    id,
+    strategy,
+  });
+}
+
 export function deleteNode(id: string): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_delete_node", { id });
 }
@@ -530,6 +572,66 @@ export interface UpdateCheck {
  * the app contacts nothing on its own. */
 export function checkUpdate(): Promise<UpdateCheck> {
   return invoke<UpdateCheck>("session_check_update");
+}
+
+export interface CoreVersionCheck {
+  name: string;
+  current: string;
+  latest: string;
+  url: string;
+  updateAvailable: boolean;
+  fromBinary: boolean;
+}
+
+export interface CoreUpdateCheck {
+  singBox: CoreVersionCheck;
+  xray: CoreVersionCheck;
+  install: CoreInstallStatus;
+}
+
+/** Asks GitHub whether newer sing-box / Xray releases exist. Menu-only. */
+export function checkCoreUpdate(): Promise<CoreUpdateCheck> {
+  return invoke<CoreUpdateCheck>("core_check_update");
+}
+
+export interface InstalledCoreEntry {
+  version: string;
+  sha256: string;
+  binary: string;
+  previousVersion?: string;
+}
+
+export interface CoreInstallStatus {
+  directory: string;
+  singBox?: InstalledCoreEntry;
+  xray?: InstalledCoreEntry;
+}
+
+/** Downloads and installs one Core from GitHub. Requires disconnect first. */
+export function downloadCoreUpdate(core: "sing-box" | "xray"): Promise<CoreInstallStatus> {
+  return invoke<CoreInstallStatus>("core_download_update", { core });
+}
+
+export interface GeoFileStatus {
+  name: string;
+  present: boolean;
+  bytes: number;
+  modifiedAt: number | null;
+}
+
+export interface GeoAssetsStatus {
+  directory: string;
+  geoip: GeoFileStatus;
+  geosite: GeoFileStatus;
+  assetEnvApplied: boolean;
+}
+
+export function loadGeoAssetsStatus(): Promise<GeoAssetsStatus> {
+  return invoke<GeoAssetsStatus>("geo_assets_status");
+}
+
+export function updateGeoAssets(): Promise<GeoAssetsStatus> {
+  return invoke<GeoAssetsStatus>("geo_assets_update");
 }
 
 /** Reads a sharing link out of a QR code image the user picked. */
@@ -590,4 +692,18 @@ export function exportPreferences(): Promise<string> {
 
 export function importPreferences(path: string): Promise<AppSettings> {
   return invoke<AppSettings>("import_preferences", { path });
+}
+
+export interface ProfileImportResult {
+  app: AppSettings;
+  manualNodeCount: number;
+  subscriptionCount: number;
+}
+
+export function exportProfile(): Promise<string> {
+  return invoke<string>("export_profile");
+}
+
+export function importProfile(path: string): Promise<ProfileImportResult> {
+  return invoke<ProfileImportResult>("import_profile", { path });
 }

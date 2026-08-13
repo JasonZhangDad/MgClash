@@ -85,7 +85,11 @@ fn enabled_rules(profile: &RouteProfile, geo: bool) -> Vec<&RoutingRule> {
     profile
         .rules
         .iter()
-        .filter(|rule| rule.enabled && rule.matcher.is_geo() == geo)
+        .filter(|rule| {
+            rule.enabled
+                && rule.matcher.is_geo() == geo
+                && !matches!(&rule.matcher, RuleMatcher::ProcessPath(_))
+        })
         .collect()
 }
 
@@ -104,6 +108,8 @@ fn xray_rule(rule: &RoutingRule) -> Value {
         // Xray takes a port list as a string, which also covers ranges.
         RuleMatcher::Port(port) => json!({ "port": port.get().to_string() }),
         RuleMatcher::Network(network) => json!({ "network": network.as_str() }),
+        RuleMatcher::ProcessName(name) => json!({ "process": [name] }),
+        RuleMatcher::ProcessPath(_) => unreachable!("process_path rules are omitted for Xray"),
         RuleMatcher::Geo { kind, code } => match kind {
             GeoKind::Ip => json!({ "ip": [format!("geoip:{code}")] }),
             GeoKind::Site => json!({ "domain": [format!("geosite:{code}")] }),

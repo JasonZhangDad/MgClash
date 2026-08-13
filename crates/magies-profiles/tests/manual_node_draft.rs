@@ -35,6 +35,7 @@ fn draft(credential: ManualCredentialDraft) -> ManualNodeDraft {
         udp_enabled: true,
         transport: None,
         tls: None,
+        xray_finalmask_json: None,
         credential,
     }
 }
@@ -976,6 +977,7 @@ fn builds_a_custom_node_with_placeholder_endpoint() {
         udp_enabled: true,
         transport: None,
         tls: None,
+        xray_finalmask_json: None,
         credential: ManualCredentialDraft::Custom {
             core: magies_domain::CoreType::SingBox,
             document: document.to_owned(),
@@ -1003,6 +1005,7 @@ fn rejects_custom_without_document() {
         udp_enabled: false,
         transport: None,
         tls: None,
+        xray_finalmask_json: None,
         credential: ManualCredentialDraft::Custom {
             core: magies_domain::CoreType::Xray,
             document: "   ".to_owned(),
@@ -1023,6 +1026,7 @@ fn rejects_custom_with_invalid_json() {
         udp_enabled: false,
         transport: None,
         tls: None,
+        xray_finalmask_json: None,
         credential: ManualCredentialDraft::Custom {
             core: magies_domain::CoreType::SingBox,
             document: "{not json".to_owned(),
@@ -1043,6 +1047,7 @@ fn rejects_custom_with_non_object_json() {
         udp_enabled: false,
         transport: None,
         tls: None,
+        xray_finalmask_json: None,
         credential: ManualCredentialDraft::Custom {
             core: magies_domain::CoreType::SingBox,
             document: "[]".to_owned(),
@@ -1063,6 +1068,7 @@ fn rejects_transport_and_tls_for_custom() {
         udp_enabled: false,
         transport: None,
         tls: None,
+        xray_finalmask_json: None,
         credential: ManualCredentialDraft::Custom {
             core: magies_domain::CoreType::SingBox,
             document: r#"{"outbounds":[]}"#.to_owned(),
@@ -1079,6 +1085,27 @@ fn rejects_transport_and_tls_for_custom() {
         value.build(node_id(), credential_ref()).unwrap_err(),
         ManualNodeDraftError::CustomRejectsTls
     );
+}
+
+#[test]
+fn accepts_and_persists_a_valid_xray_finalmask_json_override() {
+    let mut value = draft(vless());
+    value.xray_finalmask_json = Some(
+        r#"{"type":"fragment","settings":{"packets":"tlshello","lengths":["80-120"]}}"#
+            .to_owned(),
+    );
+    let (node, _) = value.build(node_id(), credential_ref()).unwrap();
+    assert!(node.xray_finalmask_json.is_some());
+}
+
+#[test]
+fn rejects_malformed_xray_finalmask_json() {
+    let mut value = draft(vless());
+    value.xray_finalmask_json = Some("{not json".to_owned());
+    assert!(matches!(
+        value.build(node_id(), credential_ref()).unwrap_err(),
+        ManualNodeDraftError::InvalidXrayFinalmaskJson { .. }
+    ));
 }
 
 #[test]

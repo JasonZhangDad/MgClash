@@ -43,6 +43,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(5);
 pub struct CoreProcessSpec {
     binary: ValidatedCoreBinary,
     arguments: Vec<OsString>,
+    environment: Vec<(OsString, OsString)>,
 }
 
 impl CoreProcessSpec {
@@ -55,7 +56,23 @@ impl CoreProcessSpec {
         Self {
             binary: binary.clone(),
             arguments: arguments.into_iter().map(Into::into).collect(),
+            environment: Vec::new(),
         }
+    }
+
+    /// Adds process-local environment variables for the Core spawn.
+    #[must_use]
+    pub fn with_environment<I, K, V>(mut self, environment: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<OsString>,
+        V: Into<OsString>,
+    {
+        self.environment = environment
+            .into_iter()
+            .map(|(key, value)| (key.into(), value.into()))
+            .collect();
+        self
     }
 }
 
@@ -204,16 +221,19 @@ impl CoreRuntime {
             .binary
             .revalidate()
             .map_err(CoreRuntimeError::BinaryValidationFailed)?;
-        let mut child = Command::new(binary.path())
+        let mut child = Command::new(binary.path());
+        child
             .args(&spec.arguments)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|source| CoreRuntimeError::SpawnFailed {
-                executable: binary.path().to_path_buf(),
-                source,
-            })?;
+            .stderr(Stdio::piped());
+        for (key, value) in &spec.environment {
+            child.env(key, value);
+        }
+        let mut child = child.spawn().map_err(|source| CoreRuntimeError::SpawnFailed {
+            executable: binary.path().to_path_buf(),
+            source,
+        })?;
         let stdout = child.stdout.take().ok_or_else(|| {
             cleanup_started_child(&mut child, Vec::new());
             CoreRuntimeError::OutputPipeUnavailable(CoreOutputStream::Stdout)

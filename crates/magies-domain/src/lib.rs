@@ -208,6 +208,9 @@ pub struct Subscription {
     /// Drop nodes whose names contain one of these keywords (`|`/`\n` separated).
     #[serde(default)]
     pub exclude_keywords: String,
+    /// When set, each source URL is fetched through this subconverter `/sub` base.
+    #[serde(default)]
+    pub subconverter_url: Option<String>,
 }
 
 impl Subscription {
@@ -241,6 +244,7 @@ impl Subscription {
             user_agent: None,
             include_keywords: String::new(),
             exclude_keywords: String::new(),
+            subconverter_url: None,
         })
     }
 
@@ -475,6 +479,10 @@ pub struct ProxyNode {
     pub latency_ms: Option<u32>,
     pub last_tested_at: Option<TimestampMillis>,
     pub enabled: bool,
+    /// Per-node Xray finalmask JSON override (v2rayN advanced). Used only when
+    /// Final Fragment is enabled globally. Stores a mask entry or `{tcp:[...]}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xray_finalmask_json: Option<String>,
 }
 
 impl ProxyNode {
@@ -515,6 +523,7 @@ impl ProxyNode {
             latency_ms: None,
             last_tested_at: None,
             enabled: true,
+            xray_finalmask_json: None,
         })
     }
 }

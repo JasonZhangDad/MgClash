@@ -323,6 +323,7 @@ fn custom_nodes_cannot_be_exported_as_sharing_links() {
         latency_ms: None,
         last_tested_at: None,
         enabled: true,
+        xray_finalmask_json: None,
     };
     let credential = StoredNodeCredential::Custom(CustomCredential {
         core: magies_domain::CoreType::SingBox,

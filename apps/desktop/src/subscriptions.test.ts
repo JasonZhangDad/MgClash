@@ -26,6 +26,7 @@ describe("subscription commands", () => {
       updateIntervalMinutes: 60,
       url: "https://example.com/list?token=secret",
       userAgent: null,
+      subconverterUrl: null,
     });
 
     expect(invokeMock).toHaveBeenNthCalledWith(1, "subscription_list");
@@ -37,6 +38,7 @@ describe("subscription commands", () => {
       updateIntervalMinutes: 60,
       url: "https://example.com/list?token=secret",
       userAgent: null,
+      subconverterUrl: null,
     });
   });
 
@@ -52,6 +54,7 @@ describe("subscription commands", () => {
       updateIntervalMinutes: 120,
       url: null,
       userAgent: "MgClash-Test",
+      subconverterUrl: null,
     });
     await refreshSubscription(id);
     await refreshAllSubscriptions();
@@ -67,6 +70,7 @@ describe("subscription commands", () => {
       updateIntervalMinutes: 120,
       url: null,
       userAgent: "MgClash-Test",
+      subconverterUrl: null,
     });
     expect(invokeMock).toHaveBeenNthCalledWith(2, "subscription_refresh", {
       id,

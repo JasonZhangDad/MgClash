@@ -15,6 +15,7 @@ use std::fmt::{Debug, Formatter};
 
 use magies_domain::{CredentialRef, CoreType, NodeModelError, ProxyNode, TlsConfig, TransportConfig};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -29,6 +30,7 @@ use crate::trojan::TrojanCredential;
 use crate::tuic::{TuicCongestionControl, TuicCredential, TuicUdpRelayMode};
 use crate::vmess::{VmessCredential, VmessSecurity};
 use crate::wireguard::WireGuardCredential;
+use crate::xray_outbound::normalize_xray_finalmask_tcp;
 use crate::{StoredNodeCredential, VlessCredential};
 
 /// VLESS negotiates encryption at the TLS layer; the outbound generator accepts
@@ -50,6 +52,9 @@ pub struct ManualNodeDraft {
     pub transport: Option<TransportConfig>,
     #[serde(default)]
     pub tls: Option<TlsConfig>,
+    /// Optional Xray finalmask JSON for this node (mask entry or `{tcp:[...]}`).
+    #[serde(default, rename = "xrayFinalmaskJson")]
+    pub xray_finalmask_json: Option<String>,
     pub credential: ManualCredentialDraft,
 }
 
@@ -67,6 +72,7 @@ impl ManualNodeDraft {
             udp_enabled: node.udp_enabled,
             transport: node.transport.clone(),
             tls: node.tls.clone(),
+            xray_finalmask_json: node.xray_finalmask_json.clone(),
             credential: ManualCredentialDraft::from_stored(credential),
         }
     }
@@ -104,6 +110,7 @@ impl ManualNodeDraft {
         node.transport = transport;
         node.tls = tls;
         node.udp_enabled = self.udp_enabled;
+        node.xray_finalmask_json = parse_xray_finalmask_json(&credential, self.xray_finalmask_json)?;
         Ok((node, credential))
     }
 }
@@ -691,6 +698,34 @@ pub enum ManualNodeDraftError {
     CustomRejectsTransport,
     #[error("custom nodes carry a full Core document and accept no TLS setting")]
     CustomRejectsTls,
+    #[error("custom nodes carry a full Core document and accept no Xray finalmask override")]
+    CustomRejectsFinalmask,
+    #[error("Xray finalmask JSON is malformed: {message}")]
+    InvalidXrayFinalmaskJson { message: String },
+    #[error(transparent)]
+    InvalidXrayFinalmask(#[from] crate::xray_outbound::XrayFinalmaskError),
+}
+
+fn parse_xray_finalmask_json(
+    credential: &StoredNodeCredential,
+    json: Option<String>,
+) -> Result<Option<String>, ManualNodeDraftError> {
+    let Some(text) = json.map(|value| value.trim().to_owned()) else {
+        return Ok(None);
+    };
+    if text.is_empty() {
+        return Ok(None);
+    }
+    if matches!(credential, StoredNodeCredential::Custom(_)) {
+        return Err(ManualNodeDraftError::CustomRejectsFinalmask);
+    }
+    let value: Value = serde_json::from_str(&text).map_err(|source| {
+        ManualNodeDraftError::InvalidXrayFinalmaskJson {
+            message: source.to_string(),
+        }
+    })?;
+    normalize_xray_finalmask_tcp(&value)?;
+    Ok(Some(text))
 }
 
 const fn enabled_by_default() -> bool {

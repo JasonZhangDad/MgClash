@@ -88,6 +88,8 @@ export interface ManualNodeForm {
   customCore: "sing-box" | "xray";
   /** Full sing-box or Xray runtime JSON; only used when `protocol === "custom"`. */
   customDocument: string;
+  /** Optional Xray finalmask JSON; used with global Final Fragment (Xray only). */
+  xrayFinalmaskJson: string;
 }
 
 export const emptyManualNodeForm: ManualNodeForm = {
@@ -145,6 +147,7 @@ export const emptyManualNodeForm: ManualNodeForm = {
   zeroRttHandshake: false,
   customCore: "sing-box",
   customDocument: "",
+  xrayFinalmaskJson: "",
 };
 
 /** Seeds a blank form, optionally applying saved create-node TLS defaults. */
@@ -613,6 +616,7 @@ export function buildManualNodeDraft(
         tls: null,
         transport: null,
         udpEnabled: false,
+        xrayFinalmaskJson: null,
       },
     };
   }
@@ -638,6 +642,10 @@ export function buildManualNodeDraft(
   if (hasError(tls)) {
     return tls;
   }
+  const xrayFinalmaskJson = parseXrayFinalmaskJson(form.xrayFinalmaskJson);
+  if (hasError(xrayFinalmaskJson)) {
+    return xrayFinalmaskJson;
+  }
 
   return {
     draft: {
@@ -648,8 +656,33 @@ export function buildManualNodeDraft(
       tls,
       transport,
       udpEnabled: form.udpEnabled,
+      xrayFinalmaskJson,
     },
   };
+}
+
+function parseXrayFinalmaskJson(
+  raw: string,
+): string | null | { error: string } {
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { error: "Xray finalmask 必须是 JSON 对象" };
+    }
+    const object = parsed as Record<string, unknown>;
+    if (!("type" in object) && !("tcp" in object)) {
+      return {
+        error: "Xray finalmask 需为 mask 条目（含 type）或 {tcp:[...]} 对象",
+      };
+    }
+    return trimmed;
+  } catch {
+    return { error: "Xray finalmask JSON 格式无效" };
+  }
 }
 
 /** Fills the editable form from a draft returned by `session_node_draft`. */
@@ -793,6 +826,8 @@ export function formFromManualNodeDraft(draft: ManualNodeDraft): ManualNodeForm 
     form.pinnedSha256 = draft.tls.pinnedSha256 ?? "";
     form.alpn = draft.tls.alpn.join(",");
   }
+
+  form.xrayFinalmaskJson = draft.xrayFinalmaskJson ?? "";
 
   return form;
 }

@@ -6,6 +6,8 @@
 //! `streamSettings`. This mirrors [`crate::SingBoxOutboundConfigGenerator`] in
 //! responsibility, and the capability matrix decides which of the two runs.
 
+use std::collections::HashMap;
+
 use magies_domain::{GrpcMode, ProxyNode, ProxyProtocol, TlsConfig, TransportConfig};
 use serde_json::{Value, json};
 
@@ -223,6 +225,103 @@ pub fn apply_xray_fragment(outbound: &mut Value) {
         stream.insert("sockopt".to_owned(), json!({}));
     }
     stream["sockopt"]["dialerProxy"] = Value::String(FRAGMENT_OUTBOUND_TAG.to_owned());
+}
+
+/// v2rayN's default Final (tail) fragment mask for Xray `streamSettings.finalmask`.
+#[must_use]
+pub fn xray_finalmask_fragment_mask() -> Value {
+    json!({
+        "type": "fragment",
+        "settings": {
+            "packets": "tlshello",
+            "lengths": ["50-100"],
+            "delays": ["10-20"],
+            "maxSplit": 0
+        }
+    })
+}
+
+/// Wraps proxy and group-member outbounds with a freedom detour that applies
+/// `finalmask` TCP fragmentation, matching v2rayN's `ApplyFinalFragment`.
+///
+/// `overrides` maps outbound tag to a mask entry; tags without an entry use
+/// [`xray_finalmask_fragment_mask`].
+pub fn apply_xray_final_fragment(
+    outbounds: &mut Vec<Value>,
+    overrides: &HashMap<String, Value>,
+) {
+    let default_mask = xray_finalmask_fragment_mask();
+    let mut index = 0;
+    while index < outbounds.len() {
+        let Some(tag) = outbounds[index]["tag"].as_str() else {
+            index += 1;
+            continue;
+        };
+        if tag == "direct" || tag == FRAGMENT_OUTBOUND_TAG || tag == "api-in" {
+            index += 1;
+            continue;
+        }
+        if !tag.starts_with("proxy") && !tag.starts_with("node-") {
+            index += 1;
+            continue;
+        }
+        if outbounds[index]["protocol"].as_str() == Some("freedom") {
+            index += 1;
+            continue;
+        }
+        let wrapped_tag = format!("fragment-{tag}");
+        let mut proxy_outbound = outbounds[index].clone();
+        proxy_outbound["tag"] = Value::String(wrapped_tag.clone());
+        let mask = overrides
+            .get(tag)
+            .cloned()
+            .unwrap_or_else(|| default_mask.clone());
+        let freedom = json!({
+            "tag": tag,
+            "protocol": "freedom",
+            "streamSettings": {
+                "finalmask": {
+                    "tcp": [mask]
+                },
+                "sockopt": {
+                    "dialerProxy": wrapped_tag
+                }
+            }
+        });
+        outbounds[index] = freedom;
+        outbounds.insert(index + 1, proxy_outbound);
+        index += 2;
+    }
+}
+
+/// Normalizes v2rayN-style finalmask JSON to one `tcp` mask entry.
+///
+/// Accepts either a full `{ "tcp": [ ... ] }` object or a single mask entry
+/// with a top-level `"type"` field.
+///
+/// # Errors
+///
+/// Returns a typed error when the value is neither shape.
+pub fn normalize_xray_finalmask_tcp(value: &Value) -> Result<Value, XrayFinalmaskError> {
+    if let Some(array) = value.get("tcp").and_then(Value::as_array) {
+        let first = array
+            .first()
+            .ok_or(XrayFinalmaskError::EmptyTcpArray)?
+            .clone();
+        return Ok(first);
+    }
+    if value.get("type").is_some() {
+        return Ok(value.clone());
+    }
+    Err(XrayFinalmaskError::InvalidShape)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum XrayFinalmaskError {
+    #[error("Xray finalmask tcp array must not be empty")]
+    EmptyTcpArray,
+    #[error("Xray finalmask JSON must be a mask entry or an object with a tcp array")]
+    InvalidShape,
 }
 
 fn vless_settings(node: &ProxyNode, credential: &VlessCredential) -> Value {

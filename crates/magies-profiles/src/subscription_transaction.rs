@@ -116,8 +116,8 @@ impl SqliteSubscriptionStore {
             "INSERT INTO subscriptions (
                 id, name, url_secret_ref, auto_update, update_interval,
                 etag, last_modified, last_updated_at, enabled,
-                user_agent, include_keywords, exclude_keywords
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                user_agent, include_keywords, exclude_keywords, subconverter_url
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 subscription.id.to_string(),
                 subscription.name.as_str(),
@@ -131,6 +131,7 @@ impl SqliteSubscriptionStore {
                 subscription.user_agent,
                 subscription.include_keywords,
                 subscription.exclude_keywords,
+                subscription.subconverter_url,
             ],
         )?;
         Ok(())
@@ -145,7 +146,7 @@ impl SqliteSubscriptionStore {
         let mut statement = self.connection.prepare(
             "SELECT id, name, url_secret_ref, auto_update, update_interval,
                     etag, last_modified, last_updated_at, enabled,
-                    user_agent, include_keywords, exclude_keywords
+                    user_agent, include_keywords, exclude_keywords, subconverter_url
              FROM subscriptions ORDER BY rowid",
         )?;
         let mut rows = statement.query([])?;
@@ -168,7 +169,7 @@ impl SqliteSubscriptionStore {
         let mut statement = self.connection.prepare(
             "SELECT id, name, url_secret_ref, auto_update, update_interval,
                     etag, last_modified, last_updated_at, enabled,
-                    user_agent, include_keywords, exclude_keywords
+                    user_agent, include_keywords, exclude_keywords, subconverter_url
              FROM subscriptions WHERE id = ?1",
         )?;
         let mut rows = statement.query([id.to_string()])?;
@@ -188,8 +189,9 @@ impl SqliteSubscriptionStore {
         let updated = self.connection.execute(
             "UPDATE subscriptions
              SET name = ?1, auto_update = ?2, update_interval = ?3, enabled = ?4,
-                 user_agent = ?5, include_keywords = ?6, exclude_keywords = ?7
-             WHERE id = ?8",
+                 user_agent = ?5, include_keywords = ?6, exclude_keywords = ?7,
+                 subconverter_url = ?8
+             WHERE id = ?9",
             params![
                 subscription.name.as_str(),
                 subscription.auto_update,
@@ -198,6 +200,7 @@ impl SqliteSubscriptionStore {
                 subscription.user_agent,
                 subscription.include_keywords,
                 subscription.exclude_keywords,
+                subscription.subconverter_url,
                 subscription.id.to_string(),
             ],
         )?;
@@ -247,7 +250,7 @@ impl SqliteSubscriptionStore {
             let mut statement = transaction.prepare(
                 "SELECT id, name, url_secret_ref, auto_update, update_interval,
                         etag, last_modified, last_updated_at, enabled,
-                        user_agent, include_keywords, exclude_keywords
+                        user_agent, include_keywords, exclude_keywords, subconverter_url
                  FROM subscriptions WHERE id = ?1",
             )?;
             let mut rows = statement.query([id.to_string()])?;
@@ -603,7 +606,8 @@ impl SqliteSubscriptionStore {
                 enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
                 user_agent TEXT,
                 include_keywords TEXT NOT NULL DEFAULT '',
-                exclude_keywords TEXT NOT NULL DEFAULT ''
+                exclude_keywords TEXT NOT NULL DEFAULT '',
+                subconverter_url TEXT
              );
              CREATE TABLE IF NOT EXISTS nodes (
                 id TEXT PRIMARY KEY NOT NULL,
@@ -636,6 +640,7 @@ impl SqliteSubscriptionStore {
             "ALTER TABLE subscriptions ADD COLUMN user_agent TEXT;",
             "ALTER TABLE subscriptions ADD COLUMN include_keywords TEXT NOT NULL DEFAULT '';",
             "ALTER TABLE subscriptions ADD COLUMN exclude_keywords TEXT NOT NULL DEFAULT '';",
+            "ALTER TABLE subscriptions ADD COLUMN subconverter_url TEXT;",
         ] {
             if let Err(error) = connection.execute_batch(migration)
                 && !error.to_string().contains("duplicate column")
@@ -718,6 +723,7 @@ fn decode_subscription(row: &Row<'_>) -> Result<Subscription, SubscriptionTransa
     subscription.user_agent = row.get(9)?;
     subscription.include_keywords = row.get::<_, Option<String>>(10)?.unwrap_or_default();
     subscription.exclude_keywords = row.get::<_, Option<String>>(11)?.unwrap_or_default();
+    subscription.subconverter_url = row.get(12)?;
     Ok(subscription)
 }
 

@@ -36,6 +36,7 @@ fn build_node(
         udp_enabled: true,
         transport: None,
         tls,
+        xray_finalmask_json: None,
         credential,
     }
     .build(Uuid::new_v4(), CredentialRef::new("node/test").unwrap())
@@ -535,6 +536,7 @@ fn anytls_node() -> (ProxyNode, StoredNodeCredential) {
         udp_enabled: true,
         transport: None,
         tls: Some(plain_tls()),
+        xray_finalmask_json: None,
         credential: ManualCredentialDraft::AnyTls {
             password: "hunter2".to_owned(),
         },
@@ -557,6 +559,7 @@ fn naive_node() -> (ProxyNode, StoredNodeCredential) {
             fingerprint: None,
             pinned_sha256: None,
         }),
+        xray_finalmask_json: None,
         credential: ManualCredentialDraft::Naive {
             username: Some("alice".to_owned()),
             password: Some("hunter2".to_owned()),
@@ -576,6 +579,7 @@ fn hysteria2_node() -> (ProxyNode, StoredNodeCredential) {
         udp_enabled: true,
         transport: None,
         tls: Some(plain_tls()),
+        xray_finalmask_json: None,
         credential: ManualCredentialDraft::Hysteria2 {
             authentication: Some("token".to_owned()),
             obfuscation: None,

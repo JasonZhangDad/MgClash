@@ -3,6 +3,15 @@ use std::fmt::{Debug, Formatter};
 use magies_domain::{GrpcMode, ProxyNode, ProxyProtocol, TlsConfig, TransportConfig};
 use serde_json::{Value, json};
 
+/// Tag used when the selected node is the only proxy outbound.
+const PROXY_TAG: &str = "proxy";
+
+/// Tag for one member of a URL-TEST / balancer group.
+#[must_use]
+pub fn node_outbound_tag(node: &ProxyNode) -> String {
+    format!("node-{}", node.id)
+}
+
 use crate::{
     AnyTlsCredential, CustomCredential, HttpCredential, Hysteria2Credential,
     Hysteria2ObfuscationMethod, NaiveCredential, ShadowsocksCredential, SocksCredential,
@@ -254,7 +263,7 @@ pub fn apply_sing_box_fragment(outbound: &mut Value) {
 fn base_outbound(node: &ProxyNode) -> Value {
     json!({
         "type": protocol_name(node.protocol_type),
-        "tag": "proxy",
+        "tag": PROXY_TAG,
         "server": node.server.as_str(),
         "server_port": node.port.get()
     })
