@@ -181,10 +181,10 @@ const fn system_proxy_mode_name(mode: &SystemProxyMode) -> &'static str {
     }
 }
 
-/// Hysteria2 and TUIC carry their own QUIC transport, WireGuard is its own
-/// tunnel, AnyTLS is TLS from the first byte, and Naive tunnels over HTTP/2 or
-/// QUIC; the model stores `None` for all of them, so the protocol decides which
-/// label a missing transport gets.
+/// Hysteria2 and TUIC carry their own QUIC transport, `WireGuard` is its own
+/// tunnel, `AnyTLS` is TLS from the first byte, and `Naive` tunnels over HTTP/2
+/// or QUIC; the model stores `None` for all of them, so the protocol decides
+/// which label a missing transport gets.
 const fn transport_name(protocol: ProxyProtocol, transport: Option<&TransportConfig>) -> &'static str {
     match transport {
         Some(TransportConfig::Tcp) => "tcp",
@@ -996,7 +996,7 @@ where
     /// contains unknowns, or cannot be persisted.
     pub fn reorder_nodes(
         &mut self,
-        ids: Vec<Uuid>,
+        ids: &[Uuid],
     ) -> Result<Vec<NodeSummary>, SessionCommandError<C::Error, P::Error>> {
         let current = self.nodes()?;
         if ids.len() != current.len() {
@@ -1008,7 +1008,7 @@ where
             ));
         }
         let mut seen = HashSet::with_capacity(ids.len());
-        for id in &ids {
+        for id in ids {
             if !seen.insert(*id) {
                 return Err(SessionCommandError::NodeOrderStore(
                     NodeOrderStoreError::DuplicateNode { id: *id },
@@ -1021,7 +1021,7 @@ where
             }
         }
         self.node_order
-            .save(&ids)
+            .save(ids)
             .map_err(SessionCommandError::NodeOrderStore)?;
         self.nodes()
     }

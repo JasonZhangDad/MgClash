@@ -298,6 +298,7 @@ const DICTIONARY: Dictionary = {
   "热键：连接/断开": "Hotkey: connect/disconnect",
   "热键：上一节点": "Hotkey: previous server",
   "热键：下一节点": "Hotkey: next server",
+  "热键在系统全局生效；窗口未聚焦时也可使用。留空表示禁用。": "Hotkeys work system-wide, even when the window is unfocused. Leave empty to disable.",
   "窗口内生效；留空表示禁用。输入框获得焦点时不触发。": "Active in the window; leave empty to disable. Ignored while typing in fields.",
   "私钥": "Private key",
   "WireGuard 私钥": "WireGuard private key",

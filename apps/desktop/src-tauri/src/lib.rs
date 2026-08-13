@@ -1035,7 +1035,7 @@ fn session_reorder_nodes(
         .collect::<Result<Vec<_>, _>>()?;
     state
         .service()
-        .reorder_nodes(ids)
+        .reorder_nodes(&ids)
         .map_err(|error| command_error(&error))
 }
 
@@ -1869,6 +1869,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(setup_app)
         .on_window_event(|window, event| {
             if window.label() == "main" {

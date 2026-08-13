@@ -297,6 +297,7 @@ const DICTIONARY: Dictionary = {
   "热键：连接/断开": "Raccourci : connecter/déconnecter",
   "热键：上一节点": "Raccourci : serveur précédent",
   "热键：下一节点": "Raccourci : serveur suivant",
+  "热键在系统全局生效；窗口未聚焦时也可使用。留空表示禁用。": "Les raccourcis fonctionnent au niveau système, même sans focus sur la fenêtre. Laisser vide pour désactiver.",
   "窗口内生效；留空表示禁用。输入框获得焦点时不触发。": "Actif dans la fenêtre ; vide = désactivé. Ignoré dans les champs.",
   "私钥": "Clé privée",
   "WireGuard 私钥": "Clé privée WireGuard",

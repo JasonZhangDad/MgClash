@@ -297,6 +297,7 @@ const DICTIONARY: Dictionary = {
   "热键：连接/断开": "Scorciatoia: connetti/disconnetti",
   "热键：上一节点": "Scorciatoia: server precedente",
   "热键：下一节点": "Scorciatoia: server successivo",
+  "热键在系统全局生效；窗口未聚焦时也可使用。留空表示禁用。": "Le scorciatoie funzionano a livello di sistema, anche senza focus sulla finestra. Lascia vuoto per disabilitare.",
   "窗口内生效；留空表示禁用。输入框获得焦点时不触发。": "Attivo nella finestra; vuoto = disattivo. Ignorato nei campi di testo.",
   "私钥": "Chiave privata",
   "WireGuard 私钥": "Chiave privata WireGuard",

@@ -153,7 +153,11 @@ pub async fn probe_download_speed(
     let elapsed = started.elapsed();
     let elapsed_ms = u32::try_from(elapsed.as_millis()).unwrap_or(u32::MAX);
     let elapsed_secs = elapsed.as_secs_f64().max(0.001);
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss
+    )]
     let bytes_per_second = (bytes_read as f64 / elapsed_secs).round() as u64;
     Ok(SpeedTestOutcome {
         bytes_per_second,
