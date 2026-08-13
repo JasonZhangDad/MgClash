@@ -108,6 +108,13 @@ impl XrayOutboundConfigGenerator {
                     protocol: ProxyProtocol::AnyTls,
                 });
             }
+            NodeCredential::Naive(_) => {
+                // Xray ships no Naive outbound at all. Unreachable through
+                // the matrix, but the generator is public.
+                return Err(XrayOutboundError::ProtocolUnsupported {
+                    protocol: ProxyProtocol::Naive,
+                });
+            }
             NodeCredential::Socks(credential) => {
                 user_pass_settings(node, credential.username(), credential.password())
             }
@@ -136,6 +143,7 @@ pub fn apply_xray_mux(outbound: &mut Value, credential: NodeCredential<'_>) {
             | ProxyProtocol::Tuic
             | ProxyProtocol::WireGuard
             | ProxyProtocol::AnyTls
+            | ProxyProtocol::Naive
     ) {
         return;
     }
@@ -327,7 +335,8 @@ fn protocol_name(protocol: ProxyProtocol) -> Result<&'static str, XrayOutboundEr
         ProxyProtocol::Hysteria2
         | ProxyProtocol::Tuic
         | ProxyProtocol::WireGuard
-        | ProxyProtocol::AnyTls => Err(XrayOutboundError::ProtocolUnsupported { protocol }),
+        | ProxyProtocol::AnyTls
+        | ProxyProtocol::Naive => Err(XrayOutboundError::ProtocolUnsupported { protocol }),
     }
 }
 

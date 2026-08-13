@@ -1142,7 +1142,7 @@ fn rejects_an_unsupported_share_link_without_selecting_a_node() {
     let (mut service, _runtime, _fail_start) = service();
 
     assert!(matches!(
-        service.import_node("naive://token@edge.example.com:443"),
+        service.import_node("ssr://token@edge.example.com:443"),
         Err(SessionCommandError::ShareLink(_))
     ));
     assert!(service.status().node.is_none());
@@ -1483,7 +1483,7 @@ fn every_session_failure_carries_a_stable_code_for_the_ui() {
     assert_eq!(service.connect().unwrap_err().code(), "no_selected_node");
     assert_eq!(
         service
-            .import_node("naive://token@edge.example.com")
+            .import_node("ssr://token@edge.example.com")
             .unwrap_err()
             .code(),
         "invalid_share_link"

@@ -55,6 +55,8 @@ fn serializes_all_p0_protocol_names_stably() {
         (ProxyProtocol::Socks, "socks"),
         (ProxyProtocol::Http, "http"),
         (ProxyProtocol::WireGuard, "wireguard"),
+        (ProxyProtocol::AnyTls, "anytls"),
+        (ProxyProtocol::Naive, "naive"),
     ];
 
     for (protocol, expected) in cases {

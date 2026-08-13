@@ -460,6 +460,22 @@ fn anytls_is_refused_the_same_way_the_matrix_refuses_it() {
     );
 }
 
+#[test]
+fn naive_is_refused_the_same_way_the_matrix_refuses_it() {
+    let (mut node, _) = build_node(vless(), None);
+    node.protocol_type = ProxyProtocol::Naive;
+    node.port = NonZeroU16::new(443).unwrap();
+
+    let (_, credential) = naive_node();
+
+    assert_eq!(
+        XrayOutboundConfigGenerator::generate(&node, credential.as_node_credential()).unwrap_err(),
+        XrayOutboundError::ProtocolUnsupported {
+            protocol: ProxyProtocol::Naive,
+        }
+    );
+}
+
 fn anytls_node() -> (ProxyNode, StoredNodeCredential) {
     ManualNodeDraft {
         name: "Tokyo".to_owned(),
@@ -473,6 +489,31 @@ fn anytls_node() -> (ProxyNode, StoredNodeCredential) {
         },
     }
     .build(Uuid::new_v4(), CredentialRef::new("node/anytls").unwrap())
+    .unwrap()
+}
+
+fn naive_node() -> (ProxyNode, StoredNodeCredential) {
+    ManualNodeDraft {
+        name: "Tokyo".to_owned(),
+        server: "edge.example.com".to_owned(),
+        port: 443,
+        udp_enabled: true,
+        transport: None,
+        tls: Some(TlsConfig::Tls {
+            server_name: Some("sni.example.com".to_owned()),
+            allow_insecure: false,
+            alpn: Vec::new(),
+            fingerprint: None,
+            pinned_sha256: None,
+        }),
+        credential: ManualCredentialDraft::Naive {
+            username: Some("alice".to_owned()),
+            password: Some("hunter2".to_owned()),
+            quic: true,
+            quic_congestion_control: None,
+        },
+    }
+    .build(Uuid::new_v4(), CredentialRef::new("node/naive").unwrap())
     .unwrap()
 }
 
@@ -551,7 +592,11 @@ fn the_generator_agrees_with_the_capability_matrix() {
     }
 
     // Protocols the matrix excludes entirely.
-    for excluded in [ProxyProtocol::Hysteria2, ProxyProtocol::AnyTls] {
+    for excluded in [
+        ProxyProtocol::Hysteria2,
+        ProxyProtocol::AnyTls,
+        ProxyProtocol::Naive,
+    ] {
         assert!(!CoreCapabilityMatrix::supports(
             CoreType::Xray,
             CoreRequirements::new(excluded, false, CpuArchitecture::Aarch64)

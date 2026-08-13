@@ -2,9 +2,9 @@ use magies_domain::{
     CertificatePin, CredentialRef, GrpcMode, ProxyNode, ProxyProtocol, TlsConfig, TransportConfig,
 };
 use magies_profiles::{
-    AnyTlsParser, HttpProxyParser, Hysteria2Parser, NodeCredential, OutboundConfigError,
-    ShadowsocksParser, SingBoxOutboundConfigGenerator, SocksParser, TrojanParser, VlessParser,
-    VmessParser,
+    AnyTlsParser, HttpProxyParser, Hysteria2Parser, NaiveParser, NodeCredential,
+    OutboundConfigError, ShadowsocksParser, SingBoxOutboundConfigGenerator, SocksParser,
+    TrojanParser, VlessParser, VmessParser,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -317,6 +317,77 @@ fn rejects_an_anytls_node_missing_tls_or_carrying_a_transport() {
         ),
         Err(OutboundConfigError::UnsupportedTransport {
             protocol: ProxyProtocol::AnyTls
+        })
+    );
+}
+
+#[test]
+fn generates_a_naive_outbound_with_sni_only_tls() {
+    let naive = NaiveParser
+        .parse(
+            "naive+quic://alice:secret@edge.example.com:443?\
+             sni=cdn.example.com&congestion_control=reno",
+        )
+        .unwrap();
+    let mut naive_node = node(ProxyProtocol::Naive);
+    naive_node.transport = None;
+    naive_node.tls = naive.tls().cloned();
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &naive_node,
+            NodeCredential::from(naive.credential())
+        )
+        .unwrap()
+        .json(),
+        &json!({
+            "type": "naive",
+            "tag": "proxy",
+            "server": "edge.example.com",
+            "server_port": 443,
+            "username": "alice",
+            "password": "secret",
+            "quic": true,
+            "quic_congestion_control": "reno",
+            "tls": {
+                "enabled": true,
+                "server_name": "cdn.example.com"
+            }
+        })
+    );
+}
+
+#[test]
+fn rejects_naive_tls_extras_and_transport() {
+    let naive = NaiveParser.parse("naive://edge.example.com").unwrap();
+    let mut extras = node(ProxyProtocol::Naive);
+    extras.transport = None;
+    extras.tls = Some(TlsConfig::Tls {
+        server_name: None,
+        allow_insecure: true,
+        alpn: Vec::new(),
+        fingerprint: None,
+        pinned_sha256: None,
+    });
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &extras,
+            NodeCredential::from(naive.credential())
+        ),
+        Err(OutboundConfigError::UnsupportedTls {
+            protocol: ProxyProtocol::Naive
+        })
+    );
+
+    let mut transported = node(ProxyProtocol::Naive);
+    transported.transport = Some(TransportConfig::Tcp);
+    transported.tls = naive.tls().cloned();
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &transported,
+            NodeCredential::from(naive.credential())
+        ),
+        Err(OutboundConfigError::UnsupportedTransport {
+            protocol: ProxyProtocol::Naive
         })
     );
 }

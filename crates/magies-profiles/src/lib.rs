@@ -11,6 +11,7 @@ mod hysteria2;
 mod local_proxy_config;
 mod manual_node_draft;
 mod manual_node_store;
+mod naive;
 mod node_dedup;
 mod node_group_store;
 mod node_list_text;
@@ -64,6 +65,9 @@ pub use manual_node_draft::{
     ManualCredentialDraft, ManualNodeDraft, ManualNodeDraftError, ManualObfuscationDraft,
 };
 pub use manual_node_store::{ManualNodeStoreError, SqliteManualNodeStore};
+pub use naive::{
+    NaiveCongestionControl, NaiveCredential, NaiveParseError, NaiveParser, ParsedNaiveNode,
+};
 pub use node_dedup::{
     CredentialIdentity, NodeDedupCandidate, NodeDedupResult, NodeDedupSummary, NodeDeduplicator,
     NodeFingerprint,

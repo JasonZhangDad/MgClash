@@ -46,6 +46,8 @@ export interface ManualNodeForm {
   privateKey: string;
   protocol: ProxyProtocol;
   publicKey: string;
+  quic: boolean;
+  quicCongestionControl: "" | "bbr" | "bbr2" | "cubic" | "reno";
   realityEnabled: boolean;
   reserved: string;
   security: VmessSecurity;
@@ -92,6 +94,8 @@ export const emptyManualNodeForm: ManualNodeForm = {
   privateKey: "",
   protocol: "vless",
   publicKey: "",
+  quic: false,
+  quicCongestionControl: "",
   realityEnabled: false,
   reserved: "",
   security: "Auto",
@@ -157,15 +161,16 @@ const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 /**
- * Hysteria2 / TUIC / WireGuard / AnyTLS carry their own tunnel and do not use
- * a selectable stream transport.
+ * Hysteria2 / TUIC / WireGuard / AnyTLS / Naive carry their own tunnel and do
+ * not use a selectable stream transport.
  */
 export function usesStreamTransport(protocol: ProxyProtocol): boolean {
   return (
     protocol !== "hysteria2" &&
     protocol !== "tuic" &&
     protocol !== "wireguard" &&
-    protocol !== "anytls"
+    protocol !== "anytls" &&
+    protocol !== "naive"
   );
 }
 
@@ -311,6 +316,23 @@ function buildCredential(
       }
       return { password: form.password.trim(), protocol: "anytls" };
     }
+    case "naive": {
+      const username = optional(form.username);
+      const password = optional(form.password);
+      if (password !== null && username === null) {
+        return { error: "填写密码时必须同时填写用户名" };
+      }
+      return {
+        password,
+        protocol: "naive",
+        quic: form.quic,
+        quicCongestionControl:
+          form.quic && form.quicCongestionControl !== ""
+            ? form.quicCongestionControl
+            : null,
+        username,
+      };
+    }
   }
 }
 
@@ -403,6 +425,31 @@ function buildTls(form: ManualNodeForm): TlsDraft | null | { error: string } {
     form.protocol === "wireguard"
   ) {
     return null;
+  }
+  if (form.protocol === "naive") {
+    if (form.realityEnabled) {
+      return { error: "Naive 不支持 Reality" };
+    }
+    if (form.allowInsecure) {
+      return { error: "Naive 不支持跳过证书校验" };
+    }
+    if (form.alpn.trim() !== "") {
+      return { error: "Naive 不支持 ALPN" };
+    }
+    if (form.fingerprint.trim() !== "") {
+      return { error: "Naive 不支持 TLS 指纹" };
+    }
+    if (form.pinnedSha256.trim() !== "") {
+      return { error: "Naive 不支持证书固定" };
+    }
+    return {
+      allowInsecure: false,
+      alpn: [],
+      fingerprint: null,
+      pinnedSha256: null,
+      serverName: optional(form.serverName),
+      type: "tls",
+    };
   }
   if (form.realityEnabled) {
     if (form.protocol === "http") {
@@ -564,6 +611,13 @@ export function formFromManualNodeDraft(draft: ManualNodeDraft): ManualNodeForm 
     case "anytls":
       form.protocol = "anytls";
       form.password = draft.credential.password;
+      break;
+    case "naive":
+      form.protocol = "naive";
+      form.username = draft.credential.username ?? "";
+      form.password = draft.credential.password ?? "";
+      form.quic = draft.credential.quic;
+      form.quicCongestionControl = draft.credential.quicCongestionControl ?? "";
       break;
   }
 

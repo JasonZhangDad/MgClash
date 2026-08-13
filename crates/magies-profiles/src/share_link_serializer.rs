@@ -94,6 +94,12 @@ impl ShareLinkSerializer {
             }
             StoredNodeCredential::WireGuard(value) => wireguard_authority(value, &mut query),
             StoredNodeCredential::AnyTls(value) => encode(value.password()),
+            StoredNodeCredential::Naive(value) => {
+                if let Some(control) = value.quic_congestion_control() {
+                    query.set("congestion_control", control.as_str());
+                }
+                user_pass_authority(value.username(), value.password())
+            }
         };
         // Only VLESS and Trojan read a `type` parameter. Shadowsocks rejects
         // unknown parameters outright, and Hysteria2/TUIC carry their own QUIC
@@ -116,7 +122,10 @@ impl ShareLinkSerializer {
         // carries TLS either, HTTP signals it through the `https` scheme
         // rather than a query parameter, and `WireGuard` authenticates peers by
         // key instead of certificate, so none of the four write TLS fields here.
-        if let Some(tls) = node.tls.as_ref()
+        // Naive TLS may only carry `sni` — sing-box rejects the rest.
+        if node.protocol_type == ProxyProtocol::Naive {
+            write_naive_tls(node.tls.as_ref(), &mut query)?;
+        } else if let Some(tls) = node.tls.as_ref()
             && !matches!(
                 node.protocol_type,
                 ProxyProtocol::Shadowsocks
@@ -128,9 +137,13 @@ impl ShareLinkSerializer {
             write_tls(node.protocol_type, tls, &mut query);
         }
 
+        let scheme = match credential {
+            StoredNodeCredential::Naive(value) if value.quic() => "naive+quic",
+            StoredNodeCredential::Naive(_) => "naive",
+            _ => scheme(node.protocol_type, node.tls.is_some()),
+        };
         let mut link = format!(
-            "{}://{authority}@{}:{}",
-            scheme(node.protocol_type, node.tls.is_some()),
+            "{scheme}://{authority}@{}:{}",
             node.server.as_str(),
             node.port.get()
         );
@@ -191,6 +204,9 @@ const fn scheme(protocol: ProxyProtocol, has_tls: bool) -> &'static str {
         ProxyProtocol::Http => "http",
         ProxyProtocol::WireGuard => "wireguard",
         ProxyProtocol::AnyTls => "anytls",
+        // Naive's scheme also encodes QUIC vs HTTP/2; callers that know the
+        // credential pick `naive` / `naive+quic` themselves before this runs.
+        ProxyProtocol::Naive => "naive",
     }
 }
 
@@ -524,6 +540,39 @@ fn write_tls(protocol: ProxyProtocol, tls: &TlsConfig, query: &mut Query) {
     }
 }
 
+/// Naive TLS may only carry `sni`. sing-box rejects fingerprint / ALPN /
+/// insecure / pin / Reality for this outbound, so anything else refuses export
+/// rather than producing a link that would parse back differently.
+fn write_naive_tls(
+    tls: Option<&TlsConfig>,
+    query: &mut Query,
+) -> Result<(), ShareLinkSerializerError> {
+    match tls {
+        Some(TlsConfig::Tls {
+            server_name,
+            allow_insecure,
+            alpn,
+            fingerprint,
+            pinned_sha256,
+        }) => {
+            if *allow_insecure
+                || !alpn.is_empty()
+                || fingerprint.is_some()
+                || pinned_sha256.is_some()
+            {
+                return Err(ShareLinkSerializerError::UnrepresentableNaiveTls);
+            }
+            if let Some(server_name) = server_name {
+                query.set("sni", server_name);
+            }
+            Ok(())
+        }
+        Some(TlsConfig::Reality { .. }) | None => {
+            Err(ShareLinkSerializerError::UnrepresentableNaiveTls)
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum ShareLinkSerializerError {
     #[error("credential protocol {actual:?} does not match node protocol {expected:?}")]
@@ -537,4 +586,6 @@ pub enum ShareLinkSerializerError {
     UnrepresentableVmessTransport,
     #[error("the VMess sharing document cannot carry this TLS configuration")]
     UnrepresentableVmessTls,
+    #[error("the Naive sharing URI cannot carry this TLS configuration")]
+    UnrepresentableNaiveTls,
 }

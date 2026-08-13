@@ -257,6 +257,54 @@ describe("buildManualNodeDraft", () => {
     );
   });
 
+  it("builds a Naive draft with SNI-only TLS and optional QUIC", () => {
+    const draft = draftOf({
+      password: "hunter2",
+      protocol: "naive",
+      quic: true,
+      quicCongestionControl: "bbr2",
+      serverName: "cdn.example.com",
+      tlsEnabled: true,
+      username: "alice",
+    });
+
+    expect(draft.transport).toBeNull();
+    expect(draft.tls).toEqual({
+      allowInsecure: false,
+      alpn: [],
+      fingerprint: null,
+      pinnedSha256: null,
+      serverName: "cdn.example.com",
+      type: "tls",
+    });
+    expect(draft.credential).toEqual({
+      password: "hunter2",
+      protocol: "naive",
+      quic: true,
+      quicCongestionControl: "bbr2",
+      username: "alice",
+    });
+  });
+
+  it("rejects Naive Reality and TLS extras", () => {
+    expect(
+      errorOf({
+        protocol: "naive",
+        realityEnabled: true,
+        serverName: "cdn.example.com",
+        publicKey: "key",
+        tlsEnabled: true,
+      }),
+    ).toBe("Naive 不支持 Reality");
+    expect(
+      errorOf({
+        allowInsecure: true,
+        protocol: "naive",
+        tlsEnabled: true,
+      }),
+    ).toBe("Naive 不支持跳过证书校验");
+  });
+
   it("always sends TLS and no transport for Hysteria2", () => {
     const draft = draftOf({
       authentication: "token",
