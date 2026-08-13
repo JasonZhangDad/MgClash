@@ -910,6 +910,25 @@ fn selects_and_deletes_nodes_while_disconnected() {
 }
 
 #[test]
+fn switches_nodes_while_connected_without_dropping_the_session() {
+    let (mut service, _runtime, _fail_start) = service();
+    let tokyo = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
+    let osaka = service
+        .import_node("ss://aes-128-gcm:runtime-secret@edge.example.com:9000#Osaka")
+        .unwrap()
+        .node
+        .unwrap();
+    service.select_node(tokyo.id).unwrap();
+    service.connect().unwrap();
+
+    let status = service.switch_node(osaka.id).unwrap();
+
+    assert!(status.connected);
+    assert_eq!(status.node.as_ref().unwrap().id, osaka.id);
+    assert_eq!(status.node.as_ref().unwrap().name, "Osaka");
+}
+
+#[test]
 fn selects_and_connects_a_read_only_subscription_node() {
     let (mut service, subscription_node_id, _runtime) = service_with_subscription_node();
 

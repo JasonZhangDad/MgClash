@@ -491,12 +491,21 @@ fn handle_background_tray_action(app: &AppHandle, action: TrayAction) {
             .set_routing_mode(mode)
             .map(|_| ())
             .map_err(|error| command_error(&error)),
-        TrayAction::SelectNode(id) => app
-            .state::<AppState>()
-            .service()
-            .select_node(id)
-            .map(|_| ())
-            .map_err(|error| command_error(&error)),
+        TrayAction::SelectNode(id) => {
+            let state = app.state::<AppState>();
+            let mut service = state.service();
+            if service.status().connected {
+                service
+                    .switch_node(id)
+                    .map(|_| ())
+                    .map_err(|error| command_error(&error))
+            } else {
+                service
+                    .select_node(id)
+                    .map(|_| ())
+                    .map_err(|error| command_error(&error))
+            }
+        }
     };
 
     match result {
