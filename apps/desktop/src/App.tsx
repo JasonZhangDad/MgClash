@@ -124,6 +124,10 @@ import {
   type NodeMenuPosition,
   type ThemeMode,
 } from "./appHelpers";
+import {
+  clearGlobalHotkeys,
+  syncGlobalHotkeys,
+} from "./globalHotkeys";
 import { MenuBar } from "./components/MenuBar";
 import { StatusBar } from "./components/StatusBar";
 import { MsgView } from "./components/MsgView";
@@ -1477,7 +1481,40 @@ export default function App() {
     if (settings === null) {
       return undefined;
     }
+    let cancelled = false;
+    let useWindowFallback = true;
+    const runAction = (action: "connect" | "previous" | "next") => {
+      if (busy) {
+        return;
+      }
+      if (action === "connect") {
+        if (connected) {
+          void run(disconnectSession);
+        } else if (node !== null && systemProxyStartup === "clean") {
+          void run(connectSession);
+        }
+        return;
+      }
+      void onStepNode(action === "previous" ? -1 : 1);
+    };
+
+    void syncGlobalHotkeys(
+      {
+        connect: settings.hotkeyConnect,
+        next: settings.hotkeyNext,
+        previous: settings.hotkeyPrevious,
+      },
+      runAction,
+    ).then((registered) => {
+      if (!cancelled) {
+        useWindowFallback = !registered;
+      }
+    });
+
     const onKey = (event: KeyboardEvent) => {
+      if (!useWindowFallback) {
+        return;
+      }
       const target = event.target;
       if (
         target instanceof HTMLElement &&
@@ -1493,25 +1530,25 @@ export default function App() {
       }
       if (matchesHotkey(event, settings.hotkeyConnect)) {
         event.preventDefault();
-        if (connected) {
-          void run(disconnectSession);
-        } else if (node !== null && systemProxyStartup === "clean") {
-          void run(connectSession);
-        }
+        runAction("connect");
         return;
       }
       if (matchesHotkey(event, settings.hotkeyPrevious)) {
         event.preventDefault();
-        void onStepNode(-1);
+        runAction("previous");
         return;
       }
       if (matchesHotkey(event, settings.hotkeyNext)) {
         event.preventDefault();
-        void onStepNode(1);
+        runAction("next");
       }
     };
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("keydown", onKey);
+      void clearGlobalHotkeys();
+    };
   }, [
     settings,
     busy,
@@ -4194,6 +4231,9 @@ export default function App() {
                 }}
               />
             </label>
+            <p className="hint">
+              {t("热键在系统全局生效；窗口未聚焦时也可使用。留空表示禁用。")}
+            </p>
             <p className="hint">
               {t("窗口内生效；留空表示禁用。输入框获得焦点时不触发。")}
             </p>

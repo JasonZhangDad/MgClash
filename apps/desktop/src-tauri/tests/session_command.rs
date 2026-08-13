@@ -750,7 +750,9 @@ fn reorders_nodes_by_explicit_id_list() {
         vec![manual_id, managed_id]
     );
 
-    let reordered = service.reorder_nodes(vec![managed_id, manual_id]).unwrap();
+    let reordered = service
+        .reorder_nodes(&[managed_id, manual_id])
+        .unwrap();
     assert_eq!(
         reordered
             .into_iter()
@@ -770,13 +772,13 @@ fn reorders_nodes_by_explicit_id_list() {
 
     let missing = Uuid::from_u128(999);
     assert!(matches!(
-        service.reorder_nodes(vec![managed_id, missing]),
+        service.reorder_nodes(&[managed_id, missing]),
         Err(SessionCommandError::NodeStore(
             ManualNodeStoreError::NodeNotFound { id }
         )) if id == missing
     ));
     assert!(matches!(
-        service.reorder_nodes(vec![managed_id]),
+        service.reorder_nodes(&[managed_id]),
         Err(SessionCommandError::NodeOrderStore(
             NodeOrderStoreError::IncompleteReorder {
                 expected: 2,

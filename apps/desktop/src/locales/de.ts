@@ -298,6 +298,7 @@ const DICTIONARY: Dictionary = {
   "热键：连接/断开": "Tastenkürzel: Verbinden/Trennen",
   "热键：上一节点": "Tastenkürzel: vorheriger Server",
   "热键：下一节点": "Tastenkürzel: nächster Server",
+  "热键在系统全局生效；窗口未聚焦时也可使用。留空表示禁用。": "Tastenkürzel gelten systemweit, auch wenn das Fenster nicht fokussiert ist. Leer lassen zum Deaktivieren.",
   "窗口内生效；留空表示禁用。输入框获得焦点时不触发。": "Wirkt im Fenster; leer = aus. In Eingabefeldern ignoriert.",
   "私钥": "Privater Schlüssel",
   "WireGuard 私钥": "WireGuard privater Schlüssel",

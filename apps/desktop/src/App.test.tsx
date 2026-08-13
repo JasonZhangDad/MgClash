@@ -55,6 +55,13 @@ const refreshSubscriptionMock = vi.hoisted(() => vi.fn());
 const refreshAllSubscriptionsMock = vi.hoisted(() => vi.fn());
 const setNodeEnabledMock = vi.hoisted(() => vi.fn());
 const deleteSubscriptionMock = vi.hoisted(() => vi.fn());
+const syncGlobalHotkeysMock = vi.hoisted(() => vi.fn());
+const clearGlobalHotkeysMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./globalHotkeys", () => ({
+  clearGlobalHotkeys: clearGlobalHotkeysMock,
+  syncGlobalHotkeys: syncGlobalHotkeysMock,
+}));
 
 vi.mock("./platform", () => ({
   loadPlatformSummary: loadPlatformSummaryMock,
@@ -221,6 +228,11 @@ describe("App", () => {
     loadTrafficMock.mockReset();
     loadNodeTrafficMock.mockReset();
     loadNodeTrafficMock.mockResolvedValue({});
+    syncGlobalHotkeysMock.mockReset();
+    clearGlobalHotkeysMock.mockReset();
+    // Tests run outside Tauri; keep the in-window keydown path.
+    syncGlobalHotkeysMock.mockResolvedValue(false);
+    clearGlobalHotkeysMock.mockResolvedValue(undefined);
     loadNodesMock.mockReset();
     loadNodeGroupsMock.mockReset();
     importNodeMock.mockReset();

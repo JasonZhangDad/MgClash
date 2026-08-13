@@ -153,11 +153,11 @@ pub struct AppSettings {
     pub def_allow_insecure: bool,
     /// Default TLS fingerprint when creating a TLS node (empty = none).
     pub def_fingerprint: String,
-    /// Window hotkey that toggles connect / disconnect (empty disables).
+    /// Global hotkey that toggles connect / disconnect (empty disables).
     pub hotkey_connect: String,
-    /// Window hotkey that selects the previous enabled node (empty disables).
+    /// Global hotkey that selects the previous enabled node (empty disables).
     pub hotkey_previous: String,
-    /// Window hotkey that selects the next enabled node (empty disables).
+    /// Global hotkey that selects the next enabled node (empty disables).
     pub hotkey_next: String,
 }
 
