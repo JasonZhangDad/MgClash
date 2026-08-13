@@ -22,6 +22,7 @@ const DICTIONARY: Dictionary = {
   "URL 测试地址": "URL テストのアドレス",
   "VMess 加密方式": "VMess 暗号化方式",
   "WebSocket 路径": "WebSocket パス",
+  "Xray 不提供连接列表，请改用 sing-box。": "Xray は接続一覧を提供しません。sing-box に切り替えてください。",
   "gRPC 模式": "gRPC モード",
   "上传": "アップロード",
   "上传速率": "アップロード速度",

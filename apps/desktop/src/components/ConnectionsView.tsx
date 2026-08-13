@@ -4,6 +4,8 @@ import type { ConnectionSnapshot } from "../session";
 interface ConnectionsViewProps {
   busy: boolean;
   connected: boolean;
+  /// Only sing-box exposes the Clash API the list comes from.
+  supported: boolean;
   snapshot: ConnectionSnapshot | null;
   query: string;
   t: (text: string) => string;
@@ -32,6 +34,7 @@ function age(start: string, now: number): string {
 export function ConnectionsView({
   busy,
   connected,
+  supported,
   snapshot,
   query,
   t,
@@ -68,19 +71,27 @@ export function ConnectionsView({
           ↑ {formatBytes(snapshot?.uploadTotalBytes ?? 0)} ↓{" "}
           {formatBytes(snapshot?.downloadTotalBytes ?? 0)}
         </span>
-        <button type="button" disabled={busy || !connected} onClick={onRefresh}>
+        <button
+          type="button"
+          disabled={busy || !connected || !supported}
+          onClick={onRefresh}
+        >
           {t("刷新")}
         </button>
         <button
           type="button"
-          disabled={busy || !connected || connections.length === 0}
+          disabled={
+            busy || !connected || !supported || connections.length === 0
+          }
           onClick={onCloseAll}
         >
           {t("全部关闭")}
         </button>
       </div>
 
-      {!connected ? (
+      {!supported ? (
+        <p className="hint">{t("Xray 不提供连接列表，请改用 sing-box。")}</p>
+      ) : !connected ? (
         <p className="hint">{t("连接后才会有连接记录")}</p>
       ) : connections.length === 0 ? (
         <p className="hint">{t("当前没有连接")}</p>

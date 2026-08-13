@@ -423,7 +423,11 @@ export default function App() {
   // Only polled while the tab is open: the list is long, and nobody is reading
   // it from behind the node table.
   useEffect(() => {
-    if (mainTab !== "connections" || status?.connected !== true) {
+    if (
+      mainTab !== "connections" ||
+      status?.connected !== true ||
+      status.core === "xray"
+    ) {
       setConnections(null);
       return undefined;
     }
@@ -446,7 +450,7 @@ export default function App() {
       active = false;
       clearInterval(timer);
     };
-  }, [mainTab, status?.connected]);
+  }, [mainTab, status?.connected, status?.core]);
 
   const run = useCallback(
     async (command: () => Promise<SessionStatus | void>) => {
@@ -2603,6 +2607,7 @@ export default function App() {
             <ConnectionsView
               busy={busy}
               connected={connected}
+              supported={status?.core !== "xray"}
               snapshot={connections}
               query={connectionQuery}
               t={t}

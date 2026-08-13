@@ -3513,6 +3513,17 @@ describe("App", () => {
     expect(closeConnectionsMock).toHaveBeenCalledTimes(1);
   });
 
+  it("says the running Core has no connection API instead of an empty table", async () => {
+    loadSessionStatusMock.mockResolvedValue({ ...CONNECTED, core: "xray" });
+    await render();
+
+    await act(async () => button("连接列表").click());
+
+    expect(container.querySelector("[aria-label='连接列表']")).toBeNull();
+    expect(container.textContent).toContain("Xray 不提供连接列表");
+    expect(loadConnectionsMock).not.toHaveBeenCalled();
+  });
+
   it("explains an empty connection list rather than showing a blank table", async () => {
     loadSessionStatusMock.mockResolvedValue(IDLE);
     await render();

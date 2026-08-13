@@ -22,6 +22,7 @@ const DICTIONARY: Dictionary = {
   "URL 测试地址": "Адрес для проверки",
   "VMess 加密方式": "Шифрование VMess",
   "WebSocket 路径": "Путь WebSocket",
+  "Xray 不提供连接列表，请改用 sing-box。": "Xray не предоставляет список соединений; перейдите на sing-box.",
   "gRPC 模式": "Режим gRPC",
   "上传": "Отправлено",
   "上传速率": "Скорость отправки",
