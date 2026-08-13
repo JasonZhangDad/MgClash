@@ -1,13 +1,28 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  blankManualNodeForm,
   buildManualNodeDraft,
   emptyManualNodeForm,
+  formFromManualNodeDraft,
   usesStreamTransport,
   type ManualNodeForm,
 } from "./manualNode";
 
 const USER_ID = "b0dd64e4-0fbd-4038-9139-d1f32a68a0dc";
+
+describe("blankManualNodeForm", () => {
+  it("applies TLS create defaults without changing the empty baseline", () => {
+    expect(blankManualNodeForm()).toEqual(emptyManualNodeForm);
+    expect(
+      blankManualNodeForm({ allowInsecure: true, fingerprint: "chrome" }),
+    ).toEqual({
+      ...emptyManualNodeForm,
+      allowInsecure: true,
+      fingerprint: "chrome",
+    });
+  });
+});
 
 function form(overrides: Partial<ManualNodeForm> = {}): ManualNodeForm {
   return {
@@ -111,6 +126,7 @@ describe("buildManualNodeDraft", () => {
       allowInsecure: false,
       alpn: [],
       fingerprint: null,
+      pinnedSha256: null,
       serverName: "edge.example.com",
       type: "tls",
     });
@@ -147,6 +163,36 @@ describe("buildManualNodeDraft", () => {
       host: "cdn.example.com",
       path: "/ray",
       type: "websocket",
+    });
+  });
+
+  it("builds an HTTPUpgrade transport", () => {
+    const draft = draftOf({
+      transport: "httpupgrade",
+      wsHost: "cdn.example.com",
+      wsPath: "/upgrade",
+    });
+
+    expect(draft.transport).toEqual({
+      host: "cdn.example.com",
+      path: "/upgrade",
+      type: "httpupgrade",
+    });
+  });
+
+  it("builds an XHTTP transport with its mode", () => {
+    const draft = draftOf({
+      transport: "xhttp",
+      wsHost: "cdn.example.com",
+      wsPath: "/xh",
+      xhttpMode: "stream-one",
+    });
+
+    expect(draft.transport).toEqual({
+      host: "cdn.example.com",
+      mode: "stream-one",
+      path: "/xh",
+      type: "xhttp",
     });
   });
 
@@ -230,6 +276,12 @@ describe("buildManualNodeDraft", () => {
     expect(errorOf({ transport: "websocket", wsPath: " " })).toBe(
       "请填写 WebSocket 路径",
     );
+    expect(errorOf({ transport: "httpupgrade", wsPath: "" })).toBe(
+      "请填写 HTTPUpgrade 路径",
+    );
+    expect(errorOf({ transport: "xhttp", wsPath: "" })).toBe(
+      "请填写 XHTTP 路径",
+    );
     expect(errorOf({ grpcServiceName: "", transport: "grpc" })).toBe(
       "请填写 gRPC serviceName",
     );
@@ -243,11 +295,184 @@ describe("buildManualNodeDraft", () => {
 });
 
 describe("usesStreamTransport", () => {
-  it("is false only for Hysteria2", () => {
+  it("is false for Hysteria2 and TUIC", () => {
     expect(usesStreamTransport("vless")).toBe(true);
     expect(usesStreamTransport("vmess")).toBe(true);
     expect(usesStreamTransport("trojan")).toBe(true);
     expect(usesStreamTransport("shadowsocks")).toBe(true);
     expect(usesStreamTransport("hysteria2")).toBe(false);
+    expect(usesStreamTransport("tuic")).toBe(false);
+  });
+});
+
+describe("formFromManualNodeDraft", () => {
+  it("round-trips a Reality VLESS draft into the form", () => {
+    const form = formFromManualNodeDraft({
+      credential: { flow: "xtls-rprx-vision", protocol: "vless", userId: USER_ID },
+      name: "Reality Edge",
+      port: 443,
+      server: "edge.example.com",
+      tls: {
+        alpn: ["h2"],
+        fingerprint: "chrome",
+        publicKey: "abc",
+        serverName: "www.example.com",
+        shortId: "01",
+        spiderX: "/",
+        type: "reality",
+      },
+      transport: { type: "tcp" },
+      udpEnabled: true,
+    });
+
+    expect(form.protocol).toBe("vless");
+    expect(form.realityEnabled).toBe(true);
+    expect(form.publicKey).toBe("abc");
+    expect(form.serverName).toBe("www.example.com");
+    expect(form.shortId).toBe("01");
+    expect(form.spiderX).toBe("/");
+    expect(form.flow).toBe("xtls-rprx-vision");
+  });
+
+  it("round-trips websocket Trojan and hysteria2 credentials", () => {
+    const trojan = formFromManualNodeDraft({
+      credential: { password: "hunter2", protocol: "trojan" },
+      name: "Trojan",
+      port: 443,
+      server: "edge.example.com",
+      tls: {
+        allowInsecure: true,
+        alpn: [],
+        fingerprint: null,
+        pinnedSha256: null,
+        serverName: null,
+        type: "tls",
+      },
+      transport: { host: "cdn.example.com", path: "/ws", type: "websocket" },
+      udpEnabled: false,
+    });
+    expect(trojan.protocol).toBe("trojan");
+    expect(trojan.password).toBe("hunter2");
+    expect(trojan.transport).toBe("websocket");
+    expect(trojan.wsPath).toBe("/ws");
+    expect(trojan.tlsEnabled).toBe(true);
+    expect(trojan.allowInsecure).toBe(true);
+
+    const hy2 = formFromManualNodeDraft({
+      credential: {
+        authentication: "token",
+        obfuscation: { method: "Salamander", password: "obfs" },
+        protocol: "hysteria2",
+      },
+      name: "HY2",
+      port: 443,
+      server: "edge.example.com",
+      tls: {
+        allowInsecure: false,
+        alpn: ["h3"],
+        fingerprint: null,
+        pinnedSha256: null,
+        serverName: "edge.example.com",
+        type: "tls",
+      },
+      transport: null,
+      udpEnabled: true,
+    });
+    expect(hy2.protocol).toBe("hysteria2");
+    expect(hy2.obfsEnabled).toBe(true);
+    expect(hy2.obfsPassword).toBe("obfs");
+    expect(hy2.authentication).toBe("token");
+  });
+});
+
+describe("Reality TLS draft", () => {
+  it("builds a Reality TLS payload", () => {
+    const draft = draftOf({
+      protocol: "vless",
+      realityEnabled: true,
+      tlsEnabled: true,
+      serverName: "www.example.com",
+      publicKey: "pubkey",
+      shortId: "abcd",
+      spiderX: "/",
+      fingerprint: "chrome",
+      alpn: "h2,http/1.1",
+    });
+
+    expect(draft.tls).toEqual({
+      alpn: ["h2", "http/1.1"],
+      fingerprint: "chrome",
+      publicKey: "pubkey",
+      serverName: "www.example.com",
+      shortId: "abcd",
+      spiderX: "/",
+      type: "reality",
+    });
+  });
+
+  it("rejects Reality without publicKey or SNI", () => {
+    expect(
+      errorOf({
+        protocol: "vless",
+        realityEnabled: true,
+        serverName: "www.example.com",
+        publicKey: "",
+      }),
+    ).toContain("publicKey");
+    expect(
+      errorOf({
+        protocol: "vless",
+        realityEnabled: true,
+        serverName: "",
+        publicKey: "pubkey",
+      }),
+    ).toContain("SNI");
+  });
+});
+
+describe("formFromManualNodeDraft protocol coverage", () => {
+  it("fills VMess, Shadowsocks, and gRPC fields", () => {
+    const vmess = formFromManualNodeDraft({
+      credential: {
+        alterId: 2,
+        protocol: "vmess",
+        security: "Auto",
+        userId: USER_ID,
+      },
+      name: "VMess",
+      port: 443,
+      server: "edge.example.com",
+      tls: null,
+      transport: {
+        authority: "auth.example.com",
+        mode: "multi",
+        serviceName: "GunService",
+        type: "grpc",
+      },
+      udpEnabled: true,
+    });
+    expect(vmess.protocol).toBe("vmess");
+    expect(vmess.alterId).toBe("2");
+    expect(vmess.transport).toBe("grpc");
+    expect(vmess.grpcServiceName).toBe("GunService");
+    expect(vmess.grpcMode).toBe("multi");
+    expect(vmess.grpcAuthority).toBe("auth.example.com");
+
+    const ss = formFromManualNodeDraft({
+      credential: {
+        method: "aes-256-gcm",
+        password: "secret",
+        protocol: "shadowsocks",
+      },
+      name: "SS",
+      port: 8388,
+      server: "edge.example.com",
+      tls: null,
+      transport: { type: "tcp" },
+      udpEnabled: true,
+    });
+    expect(ss.protocol).toBe("shadowsocks");
+    expect(ss.method).toBe("aes-256-gcm");
+    expect(ss.password).toBe("secret");
   });
 });

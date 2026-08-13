@@ -114,9 +114,20 @@ fn dispatches_both_hysteria2_schemes_to_the_hysteria2_parser() {
 }
 
 #[test]
+fn dispatches_a_tuic_link_to_the_tuic_parser() {
+    let parsed = parse(&format!(
+        "tuic://{USER_ID}:hunter2@edge.example.com:443#Tokyo"
+    ))
+    .unwrap();
+
+    assert_eq!(parsed.node().protocol_type, ProxyProtocol::Tuic);
+    assert!(matches!(parsed.credential(), StoredNodeCredential::Tuic(_)));
+}
+
+#[test]
 fn rejects_an_unknown_scheme_before_reaching_a_parser() {
     assert!(matches!(
-        parse("tuic://token@edge.example.com:443"),
+        parse("wireguard://token@edge.example.com:443"),
         Err(ShareLinkParseError::UnsupportedScheme)
     ));
     assert!(matches!(

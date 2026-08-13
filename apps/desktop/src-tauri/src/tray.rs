@@ -264,7 +264,7 @@ pub fn menu_model(
                     id: node.id,
                     name: node.name.clone(),
                     selected,
-                    enabled: !status.connected && !selected,
+                    enabled: !status.connected && !selected && node.enabled,
                 }
             })
             .collect(),
@@ -411,6 +411,7 @@ mod tests {
             transport: "tcp",
             tls: None,
             deletable: true,
+            enabled: true,
             latency_ms: None,
             last_tested_at: None,
         }
@@ -438,6 +439,7 @@ mod tests {
             system_proxy_mode: "managed",
             socks_port: 1080,
             http_port: 1081,
+            clash_api_port: 9090,
         }
     }
 }

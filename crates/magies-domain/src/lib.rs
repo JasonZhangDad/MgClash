@@ -21,6 +21,7 @@ pub enum ProxyProtocol {
     Trojan,
     Shadowsocks,
     Hysteria2,
+    Tuic,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -190,6 +191,15 @@ pub struct Subscription {
     pub etag: Option<String>,
     pub last_modified: Option<String>,
     pub enabled: bool,
+    /// Overrides the default `MgClash` User-Agent when non-empty.
+    #[serde(default)]
+    pub user_agent: Option<String>,
+    /// Keep only nodes whose names contain one of these keywords (`|`/`\n` separated).
+    #[serde(default)]
+    pub include_keywords: String,
+    /// Drop nodes whose names contain one of these keywords (`|`/`\n` separated).
+    #[serde(default)]
+    pub exclude_keywords: String,
 }
 
 impl Subscription {
@@ -220,8 +230,38 @@ impl Subscription {
             etag: None,
             last_modified: None,
             enabled: true,
+            user_agent: None,
+            include_keywords: String::new(),
+            exclude_keywords: String::new(),
         })
     }
+
+    /// Whether a node name survives this subscription's include/exclude filters.
+    ///
+    /// Keywords are separated by `|`, commas, or newlines. Exclude wins when
+    /// both lists match. An empty include list keeps every non-excluded name.
+    #[must_use]
+    pub fn accepts_node_name(&self, name: &str) -> bool {
+        accepts_subscription_node_name(name, &self.include_keywords, &self.exclude_keywords)
+    }
+}
+
+/// Shared include/exclude matching used by refresh and unit tests.
+#[must_use]
+pub fn accepts_subscription_node_name(name: &str, include: &str, exclude: &str) -> bool {
+    let excludes = split_subscription_keywords(exclude);
+    if excludes.iter().any(|keyword| name.contains(keyword)) {
+        return false;
+    }
+    let includes = split_subscription_keywords(include);
+    includes.is_empty() || includes.iter().any(|keyword| name.contains(keyword))
+}
+
+fn split_subscription_keywords(raw: &str) -> Vec<&str> {
+    raw.split(['|', ',', '\n'])
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -239,6 +279,12 @@ pub enum TransportConfig {
     Tcp,
     #[serde(rename = "websocket")]
     WebSocket { path: String, host: Option<String> },
+    /// `HTTPUpgrade` (Xray/`httpupgrade`, sing-box `httpupgrade`).
+    ///
+    /// Carries the same path/host shape as WebSocket so share links and the
+    /// manual form can reuse those fields; only the wire upgrade differs.
+    #[serde(rename = "httpupgrade")]
+    HttpUpgrade { path: String, host: Option<String> },
     #[serde(rename = "grpc")]
     Grpc {
         #[serde(rename = "serviceName")]
@@ -246,6 +292,32 @@ pub enum TransportConfig {
         mode: GrpcMode,
         authority: Option<String>,
     },
+    /// XHTTP (Xray's successor to `SplitHTTP`), Xray-only: the pinned sing-box
+    /// 1.13.18 has no XHTTP transport, so the sing-box outbound generator must
+    /// refuse this variant with a typed error rather than emit an unsupported
+    /// wire format.
+    #[serde(rename = "xhttp")]
+    XHttp {
+        path: String,
+        host: Option<String>,
+        #[serde(default)]
+        mode: XhttpMode,
+    },
+}
+
+/// The XHTTP stream mode Xray negotiates with the server.
+///
+/// Defaults to `Auto`, which lets Xray pick between the packet-up and
+/// stream-up behaviors; this is also the only mode legacy `VMess` JSON
+/// payloads can express since they carry no `mode` field at all.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum XhttpMode {
+    #[default]
+    Auto,
+    PacketUp,
+    StreamUp,
+    StreamOne,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]

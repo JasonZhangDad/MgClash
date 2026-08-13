@@ -77,6 +77,7 @@ impl SubscriptionFetcher {
         &self,
         url: &str,
         validators: Option<&SubscriptionValidators>,
+        user_agent: Option<&str>,
     ) -> Result<SubscriptionFetchResult, SubscriptionFetchError> {
         let url =
             Url::parse(url).map_err(|source| SubscriptionFetchError::InvalidUrl { source })?;
@@ -87,6 +88,12 @@ impl SubscriptionFetcher {
         }
 
         let mut request = self.client.get(url);
+        if let Some(user_agent) = user_agent.filter(|value| !value.is_empty()) {
+            request = request.header(
+                reqwest::header::USER_AGENT,
+                request_header(user_agent, "User-Agent")?,
+            );
+        }
         if let Some(validators) = validators {
             if let Some(etag) = validators.etag() {
                 request = request.header(IF_NONE_MATCH, request_header(etag, "If-None-Match")?);

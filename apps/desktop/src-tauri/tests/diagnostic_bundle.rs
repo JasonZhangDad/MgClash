@@ -17,6 +17,7 @@ fn status() -> SessionStatus {
         connected: true,
         node: Some(NodeSummary {
             deletable: true,
+            enabled: true,
             id: Uuid::nil(),
             name: "Tokyo Edge".to_owned(),
             protocol: ProxyProtocol::Shadowsocks,
@@ -36,6 +37,7 @@ fn status() -> SessionStatus {
         system_proxy_mode: "managed",
         socks_port: 10_808,
         http_port: 10_809,
+        clash_api_port: 9_090,
     }
 }
 

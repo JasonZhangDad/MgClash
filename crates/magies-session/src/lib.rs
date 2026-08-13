@@ -59,6 +59,9 @@ where
             .with_clash_api_port(port)
             .map_err(|source| DesktopSessionError::Config { source })?;
     }
+    if profile.mux_enabled {
+        runtime_profile = runtime_profile.with_mux(true);
+    }
     if let Some(tun) = profile.tun.as_ref() {
         runtime_profile = runtime_profile.with_tun(tun, profile.dns_hijack);
     }
@@ -96,6 +99,9 @@ where
     .map_err(|source| DesktopSessionError::XrayConfig { source })?;
     if let Some(port) = profile.clash_api_port {
         runtime_profile = runtime_profile.with_api_port(port);
+    }
+    if profile.mux_enabled {
+        runtime_profile = runtime_profile.with_mux(true);
     }
     Ok(XrayRuntimeConfigGenerator::generate(&runtime_profile)
         .map_err(|source| DesktopSessionError::XrayConfig { source })?
@@ -176,6 +182,7 @@ pub struct DesktopSessionProfile {
     tun: Option<TunProfile>,
     dns_hijack: bool,
     system_proxy: SystemProxyMode,
+    mux_enabled: bool,
 }
 
 impl DesktopSessionProfile {
@@ -194,6 +201,7 @@ impl DesktopSessionProfile {
             tun: None,
             dns_hijack: false,
             system_proxy: SystemProxyMode::Unchanged,
+            mux_enabled: false,
         }
     }
 
@@ -218,6 +226,13 @@ impl DesktopSessionProfile {
     #[must_use]
     pub const fn with_clash_api_port(mut self, port: NonZeroU16) -> Self {
         self.clash_api_port = Some(port);
+        self
+    }
+
+    /// Turns on Core multiplex / mux for this session.
+    #[must_use]
+    pub const fn with_mux(mut self, enabled: bool) -> Self {
+        self.mux_enabled = enabled;
         self
     }
 

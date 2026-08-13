@@ -5,7 +5,8 @@ use serde_json::{Value, json};
 
 use crate::{
     Hysteria2Credential, Hysteria2ObfuscationMethod, ShadowsocksCredential, TrojanCredential,
-    VlessCredential, VmessCredential, VmessSecurity,
+    TuicCongestionControl, TuicCredential, TuicUdpRelayMode, VlessCredential, VmessCredential,
+    VmessSecurity,
 };
 
 #[derive(Clone, Copy)]
@@ -15,6 +16,7 @@ pub enum NodeCredential<'a> {
     Trojan(&'a TrojanCredential),
     Shadowsocks(&'a ShadowsocksCredential),
     Hysteria2(&'a Hysteria2Credential),
+    Tuic(&'a TuicCredential),
 }
 
 impl NodeCredential<'_> {
@@ -26,6 +28,7 @@ impl NodeCredential<'_> {
             Self::Trojan(_) => ProxyProtocol::Trojan,
             Self::Shadowsocks(_) => ProxyProtocol::Shadowsocks,
             Self::Hysteria2(_) => ProxyProtocol::Hysteria2,
+            Self::Tuic(_) => ProxyProtocol::Tuic,
         }
     }
 }
@@ -63,6 +66,12 @@ impl<'a> From<&'a ShadowsocksCredential> for NodeCredential<'a> {
 impl<'a> From<&'a Hysteria2Credential> for NodeCredential<'a> {
     fn from(value: &'a Hysteria2Credential) -> Self {
         Self::Hysteria2(value)
+    }
+}
+
+impl<'a> From<&'a TuicCredential> for NodeCredential<'a> {
+    fn from(value: &'a TuicCredential) -> Self {
+        Self::Tuic(value)
     }
 }
 
@@ -125,9 +134,25 @@ impl SingBoxOutboundConfigGenerator {
             NodeCredential::Hysteria2(credential) => {
                 generate_hysteria2(node, credential, &mut outbound)?;
             }
+            NodeCredential::Tuic(credential) => {
+                generate_tuic(node, credential, &mut outbound)?;
+            }
         }
         Ok(GeneratedSingBoxOutbound { json: outbound })
     }
+}
+
+/// Enables sing-box multiplex on a generated outbound when the user asked for it.
+///
+/// Hysteria2 and TUIC already multiplex over QUIC, so mux is skipped there.
+pub fn apply_sing_box_multiplex(outbound: &mut Value, protocol: ProxyProtocol) {
+    if matches!(protocol, ProxyProtocol::Hysteria2 | ProxyProtocol::Tuic) {
+        return;
+    }
+    outbound["multiplex"] = json!({
+        "enabled": true,
+        "protocol": "h2mux",
+    });
 }
 
 fn base_outbound(node: &ProxyNode) -> Value {
@@ -146,6 +171,7 @@ const fn protocol_name(protocol: ProxyProtocol) -> &'static str {
         ProxyProtocol::Trojan => "trojan",
         ProxyProtocol::Shadowsocks => "shadowsocks",
         ProxyProtocol::Hysteria2 => "hysteria2",
+        ProxyProtocol::Tuic => "tuic",
     }
 }
 
@@ -267,6 +293,62 @@ fn generate_hysteria2(
     Ok(())
 }
 
+fn generate_tuic(
+    node: &ProxyNode,
+    credential: &TuicCredential,
+    outbound: &mut Value,
+) -> Result<(), OutboundConfigError> {
+    if node.transport.is_some() {
+        return Err(OutboundConfigError::UnsupportedTransport {
+            protocol: node.protocol_type,
+        });
+    }
+    let tls = node.tls.as_ref().ok_or(OutboundConfigError::MissingTls {
+        protocol: node.protocol_type,
+    })?;
+    if !matches!(tls, TlsConfig::Tls { .. }) {
+        return Err(OutboundConfigError::UnsupportedTls {
+            protocol: node.protocol_type,
+        });
+    }
+    outbound["uuid"] = Value::String(credential.uuid().to_string());
+    if let Some(password) = credential.password() {
+        outbound["password"] = Value::String(password.to_owned());
+    }
+    if let Some(congestion_control) = credential.congestion_control() {
+        outbound["congestion_control"] =
+            Value::String(tuic_congestion_control_name(congestion_control).to_owned());
+    }
+    if let Some(udp_relay_mode) = credential.udp_relay_mode() {
+        outbound["udp_relay_mode"] =
+            Value::String(tuic_udp_relay_mode_name(udp_relay_mode).to_owned());
+    }
+    if credential.udp_over_stream() {
+        outbound["udp_over_stream"] = Value::Bool(true);
+    }
+    if credential.zero_rtt_handshake() {
+        outbound["zero_rtt_handshake"] = Value::Bool(true);
+    }
+    outbound["tls"] = generated_tls(tls)?;
+    apply_network(node, outbound);
+    Ok(())
+}
+
+const fn tuic_congestion_control_name(value: TuicCongestionControl) -> &'static str {
+    match value {
+        TuicCongestionControl::Cubic => "cubic",
+        TuicCongestionControl::NewReno => "new_reno",
+        TuicCongestionControl::Bbr => "bbr",
+    }
+}
+
+const fn tuic_udp_relay_mode_name(value: TuicUdpRelayMode) -> &'static str {
+    match value {
+        TuicUdpRelayMode::Native => "native",
+        TuicUdpRelayMode::Quic => "quic",
+    }
+}
+
 fn apply_common_stream(node: &ProxyNode, outbound: &mut Value) -> Result<(), OutboundConfigError> {
     let transport = node
         .transport
@@ -294,6 +376,13 @@ fn generated_transport(transport: &TransportConfig) -> Result<Option<Value>, Out
             }
             Ok(Some(transport))
         }
+        TransportConfig::HttpUpgrade { path, host } => {
+            let mut transport = json!({ "type": "httpupgrade", "path": path });
+            if let Some(host) = host {
+                transport["host"] = Value::String(host.clone());
+            }
+            Ok(Some(transport))
+        }
         TransportConfig::Grpc {
             service_name,
             mode,
@@ -310,6 +399,9 @@ fn generated_transport(transport: &TransportConfig) -> Result<Option<Value>, Out
                 "service_name": service_name
             })))
         }
+        // Pinned sing-box 1.13.18 has no XHTTP transport; the capability
+        // matrix routes these nodes to Xray instead of inventing a wire format.
+        TransportConfig::XHttp { .. } => Err(OutboundConfigError::XhttpUnsupported),
     }
 }
 
@@ -417,4 +509,6 @@ pub enum OutboundConfigError {
     UnsupportedRealitySpiderX,
     #[error("Hysteria2 Gecko packet sizes are unsupported by sing-box")]
     UnsupportedHysteria2PacketSizes,
+    #[error("XHTTP transport is unsupported by sing-box")]
+    XhttpUnsupported,
 }

@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use crate::{
     Hysteria2ParseError, Hysteria2Parser, ShadowsocksParseError, ShadowsocksParser,
-    StoredNodeCredential, TrojanParseError, TrojanParser, VlessParseError, VlessParser,
-    VmessParseError, VmessParser,
+    StoredNodeCredential, TrojanParseError, TrojanParser, TuicParseError, TuicParser,
+    VlessParseError, VlessParser, VmessParseError, VmessParser,
 };
 
 /// A sharing URI resolved into the shared node model and its owned credential.
@@ -69,6 +69,7 @@ impl ShareLinkParser {
             TrojanParser => Trojan,
             ShadowsocksParser => Shadowsocks,
             Hysteria2Parser => Hysteria2,
+            TuicParser => Tuic,
         }
         Err(ShareLinkParseError::UnsupportedScheme)
     }
@@ -88,6 +89,8 @@ pub enum ShareLinkParseError {
     Shadowsocks(#[source] ShadowsocksParseError),
     #[error("failed to parse Hysteria2 sharing URI")]
     Hysteria2(#[source] Hysteria2ParseError),
+    #[error("failed to parse TUIC sharing URI")]
+    Tuic(#[source] TuicParseError),
     #[error("failed to build the shared node model")]
     Node(#[source] NodeModelError),
 }

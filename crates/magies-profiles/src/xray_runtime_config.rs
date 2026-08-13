@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use crate::{
     DnsProfile, GeneratedCoreConfig, LocalHttpConfigGenerator, LocalHttpProfile,
     LocalSocksConfigGenerator, LocalSocksProfile, NodeCredential, XrayDnsConfigGenerator,
-    XrayOutboundConfigGenerator, XrayOutboundError,
+    XrayOutboundConfigGenerator, XrayOutboundError, apply_xray_mux,
 };
 
 /// The pool Xray hands out fake addresses from, matching sing-box's range so a
@@ -33,6 +33,7 @@ pub struct XrayRuntimeProfile<'a> {
     socks: LocalSocksProfile,
     http: LocalHttpProfile,
     api_port: Option<NonZeroU16>,
+    mux_enabled: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -56,6 +57,7 @@ impl<'a> XrayRuntimeProfile<'a> {
             socks: LocalSocksProfile::default(),
             http: LocalHttpProfile::default(),
             api_port: None,
+            mux_enabled: false,
         }
     }
 
@@ -68,6 +70,7 @@ impl<'a> XrayRuntimeProfile<'a> {
             socks: LocalSocksProfile::default(),
             http: LocalHttpProfile::default(),
             api_port: None,
+            mux_enabled: false,
         }
     }
 
@@ -97,6 +100,13 @@ impl<'a> XrayRuntimeProfile<'a> {
         self.api_port = Some(port);
         self
     }
+
+    /// Turns on outbound mux for the next generated config.
+    #[must_use]
+    pub const fn with_mux(mut self, enabled: bool) -> Self {
+        self.mux_enabled = enabled;
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -120,11 +130,16 @@ impl XrayRuntimeConfigGenerator {
             let selected = profile
                 .selected
                 .ok_or(XrayRuntimeConfigError::MissingSelectedNode)?;
-            outbounds.push(
-                XrayOutboundConfigGenerator::generate(selected.node, selected.credential)?
-                    .json()
-                    .clone(),
-            );
+            outbounds.push({
+                let mut outbound =
+                    XrayOutboundConfigGenerator::generate(selected.node, selected.credential)?
+                        .json()
+                        .clone();
+                if profile.mux_enabled {
+                    apply_xray_mux(&mut outbound, selected.credential);
+                }
+                outbound
+            });
         }
         outbounds.push(json!({ "protocol": "freedom", "tag": "direct" }));
 

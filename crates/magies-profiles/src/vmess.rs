@@ -3,8 +3,8 @@ use std::num::NonZeroU16;
 
 use base64::{Engine as _, engine::general_purpose};
 use magies_domain::{
-    CredentialRef, GrpcMode, NodeModelError, NodeName, ProxyNode, ProxyProtocol, ServerAddress,
-    TlsConfig, TransportConfig,
+    CertificatePin, CredentialRef, GrpcMode, NodeModelError, NodeName, ProxyNode, ProxyProtocol,
+    ServerAddress, TlsConfig, TransportConfig, XhttpMode,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -195,6 +195,8 @@ pub enum VmessParseError {
     UnsupportedSecurity { value: String },
     #[error("invalid VMess ALPN list")]
     InvalidAlpn,
+    #[error("invalid VMess certificate pin: {value}")]
+    InvalidCertificatePin { value: String },
     #[error("VMess field {name} cannot be represented by the node model")]
     UnsupportedField { name: &'static str },
     #[error("unsupported VMess parameter: {name}")]
@@ -316,7 +318,7 @@ impl TryFrom<LegacyVmess> for ParsedVmessNode {
     fn try_from(value: LegacyVmess) -> Result<Self, Self::Error> {
         validate_version(value.v.as_ref())?;
         reject_non_empty(value.vcn.as_deref(), "vcn")?;
-        reject_non_empty(value.pcs.as_deref(), "pcs")?;
+        let pinned_sha256 = parse_legacy_certificate_pin(value.pcs.as_deref())?;
 
         let server = required_non_empty(value.add, "add")?;
         let server =
@@ -352,6 +354,7 @@ impl TryFrom<LegacyVmess> for ParsedVmessNode {
             value.alpn.as_deref(),
             value.fp,
             value.insecure.as_ref(),
+            pinned_sha256,
         )?;
 
         let fallback_name = default_name(&server, port);
@@ -430,6 +433,21 @@ fn parse_legacy_transport(
                 .unwrap_or_else(|| "/".to_owned()),
             host: host.filter(|value| !value.is_empty()),
         }),
+        "httpupgrade" => Ok(TransportConfig::HttpUpgrade {
+            path: path
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "/".to_owned()),
+            host: host.filter(|value| !value.is_empty()),
+        }),
+        // The legacy VMess JSON document has no XHTTP mode field at all, so
+        // every node imported this way gets Xray's default behavior.
+        "xhttp" | "splithttp" => Ok(TransportConfig::XHttp {
+            path: path
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "/".to_owned()),
+            host: host.filter(|value| !value.is_empty()),
+            mode: XhttpMode::Auto,
+        }),
         "grpc" => Ok(TransportConfig::Grpc {
             service_name: required_non_empty(path, "path")?,
             mode: GrpcMode::Gun,
@@ -447,6 +465,7 @@ fn parse_legacy_tls(
     alpn: Option<&str>,
     fingerprint: Option<String>,
     insecure: Option<&TextOrNumber>,
+    pinned_sha256: Option<CertificatePin>,
 ) -> Result<Option<TlsConfig>, VmessParseError> {
     match security.filter(|value| !value.is_empty()).unwrap_or("none") {
         "none" => Ok(None),
@@ -455,12 +474,25 @@ fn parse_legacy_tls(
             allow_insecure: parse_legacy_boolean(insecure, "insecure")?,
             alpn: parse_legacy_alpn(alpn)?,
             fingerprint: fingerprint.filter(|value| !value.is_empty()),
-            pinned_sha256: None,
+            pinned_sha256,
         })),
         value => Err(VmessParseError::UnsupportedSecurity {
             value: value.to_owned(),
         }),
     }
+}
+
+fn parse_legacy_certificate_pin(
+    value: Option<&str>,
+) -> Result<Option<CertificatePin>, VmessParseError> {
+    let Some(value) = value.filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    CertificatePin::new(value)
+        .map(Some)
+        .map_err(|_| VmessParseError::InvalidCertificatePin {
+            value: value.to_owned(),
+        })
 }
 
 fn parse_legacy_boolean(

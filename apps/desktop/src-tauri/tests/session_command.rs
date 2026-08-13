@@ -18,13 +18,16 @@ use magies_desktop_lib::routing_mode::SqliteRoutingModeStore;
 use magies_desktop_lib::session::{
     NodeMoveDirection, NodeStores, SessionCommandError, SessionDefaults, SessionService,
 };
-use magies_domain::{CoreType, CredentialRef, ProxyProtocol, Subscription, TimestampMillis};
+use magies_domain::{
+    CoreType, CredentialRef, ProxyProtocol, Subscription, TimestampMillis, TlsConfig,
+    TransportConfig,
+};
 use magies_platform::system_proxy::SystemProxyState;
 use magies_profiles::{
     CorePreference, CredentialCodec, LocalHttpProfile, LocalSocksProfile, ManualCredentialDraft,
-    ManualNodeDraft, ManualNodeStoreError, ShareLinkParser, SqliteManualNodeStore,
-    SqliteNodeGroupStore, SqliteNodeOrderStore, SqliteSubscriptionStore, SubscriptionContentParser,
-    SubscriptionUpdate, SubscriptionValidators,
+    ManualNodeDraft, ManualNodeStoreError, NodeOrderStoreError, ShareLinkParser,
+    SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore, SqliteSubscriptionStore,
+    SubscriptionContentParser, SubscriptionUpdate, SubscriptionValidators,
 };
 use magies_routing::RoutingMode;
 use magies_session::{
@@ -321,6 +324,22 @@ fn a_hysteria2_node_reports_its_own_quic_transport() {
 }
 
 #[test]
+fn a_tuic_node_imports_and_reports_its_own_quic_transport() {
+    let (mut service, _runtime, _fail_start) = service();
+    service
+        .import_node(
+            "tuic://d1b93f4a-9a5b-4c1e-8a2b-6b6f0c9a1234:secret@edge.example.com:8443#Tokyo",
+        )
+        .unwrap();
+
+    let node = &service.nodes().unwrap()[0];
+
+    // The model stores no transport for TUIC because it carries its own QUIC transport.
+    assert_eq!(node.transport, "quic");
+    assert_eq!(node.tls, Some("tls"));
+}
+
+#[test]
 fn the_status_reports_sing_box_by_default() {
     let (mut service, _runtime, _fail_start) = service();
     assert_eq!(service.status().core, "sing-box");
@@ -370,6 +389,25 @@ fn auto_keeps_sing_box_for_a_hysteria2_node() {
     service.set_core_preference(CorePreference::Auto);
 
     assert_eq!(service.selected_core(), Ok(CoreType::SingBox));
+}
+
+#[test]
+fn auto_picks_xray_for_an_xhttp_node() {
+    let (mut service, _runtime, _fail_start) = service();
+    service
+        .import_node(
+            "vless://b0dd64e4-0fbd-4038-9139-d1f32a68a0dc@edge.example.com:443\
+             ?type=xhttp&path=%2Fxh&security=tls&sni=www.example.com#XHTTP",
+        )
+        .unwrap();
+    let id = service.nodes().unwrap()[0].id;
+    service.select_node(id).unwrap();
+
+    service.set_core_preference(CorePreference::Auto);
+
+    assert_eq!(service.nodes().unwrap()[0].transport, "xhttp");
+    assert_eq!(service.selected_core(), Ok(CoreType::Xray));
+    assert_eq!(service.status().core, "xray");
 }
 
 #[test]
@@ -516,6 +554,50 @@ fn edits_a_manual_node_while_preserving_its_protocol_and_credential() {
 }
 
 #[test]
+fn updates_a_manual_node_transport_tls_and_credential_in_place() {
+    let (mut service, _runtime, _fail_start) = service();
+    let original = service
+        .create_node(trojan_draft("Frankfurt", 8443))
+        .unwrap()
+        .node
+        .unwrap();
+
+    let mut draft = service.node_draft(original.id).unwrap();
+    draft.name = "Frankfurt TLS".to_owned();
+    draft.server = "edge.example.com".to_owned();
+    draft.port = 443;
+    draft.tls = Some(TlsConfig::Tls {
+        server_name: Some("edge.example.com".to_owned()),
+        allow_insecure: false,
+        alpn: vec!["h2".to_owned()],
+        fingerprint: None,
+        pinned_sha256: None,
+    });
+    draft.transport = Some(TransportConfig::WebSocket {
+        path: "/ws".to_owned(),
+        host: Some("edge.example.com".to_owned()),
+    });
+
+    let status = service.update_node(original.id, draft).unwrap();
+    let updated = status.node.unwrap();
+    assert_eq!(updated.id, original.id);
+    assert_eq!(updated.name, "Frankfurt TLS");
+    assert_eq!(updated.server, "edge.example.com");
+    assert_eq!(updated.port, 443);
+    assert_eq!(updated.transport, "ws");
+    assert_eq!(updated.tls, Some("tls"));
+    assert_eq!(updated.protocol, ProxyProtocol::Trojan);
+
+    let reloaded = service.node_draft(original.id).unwrap();
+    assert_eq!(reloaded.name, "Frankfurt TLS");
+    assert!(matches!(
+        reloaded.transport,
+        Some(TransportConfig::WebSocket { .. })
+    ));
+    assert!(matches!(reloaded.tls, Some(TlsConfig::Tls { .. })));
+}
+
+#[test]
 fn reorders_manual_and_subscription_nodes_together() {
     let (mut service, managed_id, _runtime) = service_with_subscription_node();
     let manual_id = service
@@ -551,6 +633,63 @@ fn reorders_manual_and_subscription_nodes_together() {
             .collect::<Vec<_>>(),
         vec![managed_id, manual_id]
     );
+}
+
+#[test]
+fn reorders_nodes_by_explicit_id_list() {
+    let (mut service, managed_id, _runtime) = service_with_subscription_node();
+    let manual_id = service
+        .import_node(SHADOWSOCKS_LINK)
+        .unwrap()
+        .node
+        .unwrap()
+        .id;
+    assert_eq!(
+        service
+            .nodes()
+            .unwrap()
+            .into_iter()
+            .map(|node| node.id)
+            .collect::<Vec<_>>(),
+        vec![manual_id, managed_id]
+    );
+
+    let reordered = service
+        .reorder_nodes(vec![managed_id, manual_id])
+        .unwrap();
+    assert_eq!(
+        reordered
+            .into_iter()
+            .map(|node| node.id)
+            .collect::<Vec<_>>(),
+        vec![managed_id, manual_id]
+    );
+    assert_eq!(
+        service
+            .nodes()
+            .unwrap()
+            .into_iter()
+            .map(|node| node.id)
+            .collect::<Vec<_>>(),
+        vec![managed_id, manual_id]
+    );
+
+    let missing = Uuid::from_u128(999);
+    assert!(matches!(
+        service.reorder_nodes(vec![managed_id, missing]),
+        Err(SessionCommandError::NodeStore(
+            ManualNodeStoreError::NodeNotFound { id }
+        )) if id == missing
+    ));
+    assert!(matches!(
+        service.reorder_nodes(vec![managed_id]),
+        Err(SessionCommandError::NodeOrderStore(
+            NodeOrderStoreError::IncompleteReorder {
+                expected: 2,
+                actual: 1
+            }
+        ))
+    ));
 }
 
 #[test]
@@ -909,7 +1048,7 @@ fn rejects_an_unsupported_share_link_without_selecting_a_node() {
     let (mut service, _runtime, _fail_start) = service();
 
     assert!(matches!(
-        service.import_node("tuic://token@edge.example.com:443"),
+        service.import_node("wireguard://token@edge.example.com:443"),
         Err(SessionCommandError::ShareLink(_))
     ));
     assert!(service.status().node.is_none());
@@ -1250,7 +1389,7 @@ fn every_session_failure_carries_a_stable_code_for_the_ui() {
     assert_eq!(service.connect().unwrap_err().code(), "no_selected_node");
     assert_eq!(
         service
-            .import_node("tuic://token@edge.example.com")
+            .import_node("wireguard://token@edge.example.com")
             .unwrap_err()
             .code(),
         "invalid_share_link"

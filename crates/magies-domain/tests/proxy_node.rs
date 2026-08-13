@@ -1,6 +1,6 @@
 use magies_domain::{
     CertificatePin, CredentialRef, GrpcMode, NodeModelError, ProxyNode, ProxyProtocol,
-    TimestampMillis, TlsConfig, TransportConfig,
+    TimestampMillis, TlsConfig, TransportConfig, XhttpMode,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -51,6 +51,7 @@ fn serializes_all_p0_protocol_names_stably() {
         (ProxyProtocol::Trojan, "trojan"),
         (ProxyProtocol::Shadowsocks, "shadowsocks"),
         (ProxyProtocol::Hysteria2, "hysteria2"),
+        (ProxyProtocol::Tuic, "tuic"),
     ];
 
     for (protocol, expected) in cases {
@@ -141,6 +142,50 @@ fn supports_tcp_grpc_and_standard_tls_without_stringly_typed_kinds() {
             "fingerprint": "chrome",
             "pinnedSha256": null
         })
+    );
+}
+
+#[test]
+fn round_trips_xhttp_transport_with_its_mode() {
+    let mut node = ProxyNode::new(
+        node_id(),
+        "XHTTP Edge",
+        ProxyProtocol::Vless,
+        "203.0.113.9",
+        443,
+        Some(credential_ref()),
+    )
+    .unwrap();
+    node.transport = Some(TransportConfig::XHttp {
+        path: "/api".to_owned(),
+        host: Some("cdn.example.com".to_owned()),
+        mode: XhttpMode::PacketUp,
+    });
+
+    let encoded = serde_json::to_value(&node).unwrap();
+
+    assert_eq!(encoded["transport"]["type"], json!("xhttp"));
+    assert_eq!(encoded["transport"]["mode"], json!("packet-up"));
+    assert_eq!(serde_json::from_value::<ProxyNode>(encoded).unwrap(), node);
+}
+
+#[test]
+fn xhttp_mode_defaults_to_auto_when_absent() {
+    let stored = json!({
+        "type": "xhttp",
+        "path": "/api",
+        "host": null,
+    });
+
+    let transport: TransportConfig = serde_json::from_value(stored).unwrap();
+
+    assert_eq!(
+        transport,
+        TransportConfig::XHttp {
+            path: "/api".to_owned(),
+            host: None,
+            mode: XhttpMode::Auto,
+        }
     );
 }
 

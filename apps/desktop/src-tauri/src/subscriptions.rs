@@ -23,6 +23,9 @@ pub struct DesktopSubscriptionSummary {
     pub enabled: bool,
     pub node_count: usize,
     pub last_error: Option<String>,
+    pub user_agent: Option<String>,
+    pub include_keywords: String,
+    pub exclude_keywords: String,
 }
 
 pub struct DesktopSubscriptionController<S: SecretStore> {
@@ -63,16 +66,31 @@ impl<S: SecretStore> DesktopSubscriptionController<S> {
     /// # Errors
     ///
     /// Returns a typed validation, secret-store, or database error.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "create mirrors the editable subscription fields one-for-one"
+    )]
     pub fn create(
         &self,
         name: &str,
         url: &str,
         update_interval_minutes: u32,
         auto_update: bool,
+        user_agent: Option<&str>,
+        include_keywords: &str,
+        exclude_keywords: &str,
     ) -> Result<DesktopSubscriptionSummary, DesktopSubscriptionError> {
         let mut store = self.store();
         let subscription = SubscriptionManagementService::new(&mut store, &self.secret_store)
-            .create(name, url, update_interval_minutes, auto_update)?;
+            .create(
+                name,
+                url,
+                update_interval_minutes,
+                auto_update,
+                user_agent,
+                include_keywords,
+                exclude_keywords,
+            )?;
         summary(&store, &subscription, None)
     }
 
@@ -81,6 +99,10 @@ impl<S: SecretStore> DesktopSubscriptionController<S> {
     /// # Errors
     ///
     /// Returns a typed validation, secret-store, or database error.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "update mirrors the editable subscription fields one-for-one"
+    )]
     pub fn update(
         &self,
         id: Uuid,
@@ -89,10 +111,23 @@ impl<S: SecretStore> DesktopSubscriptionController<S> {
         auto_update: bool,
         enabled: bool,
         url: Option<&str>,
+        user_agent: Option<&str>,
+        include_keywords: &str,
+        exclude_keywords: &str,
     ) -> Result<DesktopSubscriptionSummary, DesktopSubscriptionError> {
         let mut store = self.store();
         let subscription = SubscriptionManagementService::new(&mut store, &self.secret_store)
-            .update(id, name, update_interval_minutes, auto_update, enabled, url)?;
+            .update(
+                id,
+                name,
+                update_interval_minutes,
+                auto_update,
+                enabled,
+                url,
+                user_agent,
+                include_keywords,
+                exclude_keywords,
+            )?;
         summary(
             &store,
             &subscription,
@@ -229,6 +264,9 @@ fn summary(
         enabled: subscription.enabled,
         node_count: store.subscription_nodes(subscription.id)?.len(),
         last_error,
+        user_agent: subscription.user_agent.clone(),
+        include_keywords: subscription.include_keywords.clone(),
+        exclude_keywords: subscription.exclude_keywords.clone(),
     })
 }
 
@@ -314,6 +352,9 @@ mod tests {
                 "https://example.com/list?token=url-secret",
                 60,
                 true,
+                None,
+                "",
+                "",
             )
             .unwrap();
         assert_eq!(created.name, "Primary");
@@ -330,6 +371,9 @@ mod tests {
                 false,
                 false,
                 Some("https://example.com/new?token=new-url-secret"),
+                None,
+                "",
+                "",
             )
             .unwrap();
         assert_eq!(edited.name, "Edited");
@@ -366,13 +410,13 @@ mod tests {
         let store = SqliteSubscriptionStore::open_in_memory().unwrap();
         let controller = DesktopSubscriptionController::new(store, MemorySecretStore::default());
         let due = controller
-            .create("Due", "https://example.com/due", 60, true)
+            .create("Due", "https://example.com/due", 60, true, None, "", "")
             .unwrap();
         let manual = controller
-            .create("Manual", "https://example.com/manual", 60, false)
+            .create("Manual", "https://example.com/manual", 60, false, None, "", "")
             .unwrap();
         let future = controller
-            .create("Future", "https://example.com/future", 60, true)
+            .create("Future", "https://example.com/future", 60, true, None, "", "")
             .unwrap();
         controller
             .store()
@@ -417,7 +461,7 @@ mod tests {
             secrets.clone(),
         );
         let created = controller
-            .create("Broken", "https://example.com/?token=url-secret", 60, true)
+            .create("Broken", "https://example.com/?token=url-secret", 60, true, None, "", "")
             .unwrap();
         let url_ref =
             magies_domain::CredentialRef::new(format!("subscription/{}/url", created.id)).unwrap();
@@ -442,16 +486,16 @@ mod tests {
             secrets.clone(),
         );
         let broken = controller
-            .create("Broken", "https://example.com/broken", 60, true)
+            .create("Broken", "https://example.com/broken", 60, true, None, "", "")
             .unwrap();
         let also_broken = controller
-            .create("Also broken", "https://example.com/also-broken", 60, true)
+            .create("Also broken", "https://example.com/also-broken", 60, true, None, "", "")
             .unwrap();
         let disabled = controller
-            .create("Disabled", "https://example.com/disabled", 60, true)
+            .create("Disabled", "https://example.com/disabled", 60, true, None, "", "")
             .unwrap();
         controller
-            .update(disabled.id, "Disabled", 60, true, false, None)
+            .update(disabled.id, "Disabled", 60, true, false, None, None, "", "")
             .unwrap();
         for id in [broken.id, also_broken.id] {
             let url_ref =
