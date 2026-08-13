@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type ProxyProtocol =
   | "anytls"
+  | "custom"
   | "hysteria2"
   | "http"
   | "naive"
@@ -177,6 +178,11 @@ export type ManualCredentialDraft =
       quic: boolean;
       quicCongestionControl: "bbr" | "bbr2" | "cubic" | "reno" | null;
       username: string | null;
+    }
+  | {
+      core: "sing-box" | "xray";
+      document: string;
+      protocol: "custom";
     };
 
 export type TransportDraft =

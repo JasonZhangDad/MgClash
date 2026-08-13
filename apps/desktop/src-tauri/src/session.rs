@@ -17,8 +17,8 @@ use magies_domain::{
 };
 use magies_platform::{CpuArchitecture, OperatingSystem};
 use magies_profiles::{
-    BulkImportError, BulkNodeImportParser, CoreCapabilityMatrix, CorePreference, CoreRequirements,
-    CoreSelectionError, CredentialCodec, CredentialCodecError, DnsConfigError, DnsProfile,
+    BulkImportError, BulkNodeImportParser, CoreCapabilityMatrix, CorePreference, CoreRejection,
+    CoreRequirements, CoreSelectionError, CredentialCodec, CredentialCodecError, DnsConfigError, DnsProfile,
     LocalHttpProfile, LocalProxyConfigError, LocalSocksProfile, ManualNodeDraft,
     ManualNodeDraftError, ManualNodeStoreError, NodeFingerprint, NodeGroup, NodeGroupStoreError,
     NodeOrderStoreError, ShareLinkParseError, ShareLinkParser, ShareLinkQrCode, ShareLinkQrError,
@@ -200,6 +200,7 @@ const fn transport_name(protocol: ProxyProtocol, transport: Option<&TransportCon
         None if matches!(protocol, ProxyProtocol::WireGuard) => "wireguard",
         None if matches!(protocol, ProxyProtocol::AnyTls) => "anytls",
         None if matches!(protocol, ProxyProtocol::Naive) => "naive",
+        None if matches!(protocol, ProxyProtocol::Custom) => "custom",
         None => "quic",
     }
 }
@@ -1411,7 +1412,7 @@ where
         // Resolved before anything starts: a preference the node cannot satisfy
         // is an error the user sees, not a silent fallback to the other Core.
         let core = self
-            .selected_core()
+            .resolve_core()
             .map_err(SessionCommandError::CoreSelection)?;
         let profile = DesktopSessionProfile::new(
             node,
@@ -1482,6 +1483,9 @@ where
                 CorePreference::Auto => CoreType::SingBox,
             });
         };
+        if node.protocol_type == ProxyProtocol::Custom {
+            return self.selected_core_for_custom(node);
+        }
         let requirements =
             CoreRequirements::new(node.protocol_type, self.tun_enabled, host_architecture());
         let requirements = if pins_a_certificate(node.tls.as_ref()) {
@@ -1500,6 +1504,100 @@ where
             requirements
         };
         CoreCapabilityMatrix::select(self.core_preference, requirements)
+    }
+
+    /// Resolves which Core a connect should run, including custom nodes whose
+    /// credential pins the Core type.
+    ///
+    /// # Errors
+    ///
+    /// Returns the matrix's reason when the preferred Core cannot serve the
+    /// node, when a custom credential disagrees with the preference, or when
+    /// the secret cannot be read.
+    fn resolve_core(&self) -> Result<CoreType, CoreSelectionError> {
+        let Some(node) = self.node.as_ref() else {
+            return self.selected_core();
+        };
+        if node.protocol_type != ProxyProtocol::Custom {
+            return self.selected_core();
+        }
+        let required = self.custom_required_core(node)?;
+        if self.tun_enabled && required == CoreType::Xray {
+            return Err(CoreSelectionError::ChosenCoreUnusable {
+                rejection: CoreRejection::TunUnsupported {
+                    core: CoreType::Xray,
+                },
+            });
+        }
+        match self.core_preference {
+            CorePreference::Auto => Ok(required),
+            CorePreference::Fixed(core) if core == required => Ok(core),
+            CorePreference::Fixed(core) => Err(CoreSelectionError::ChosenCoreUnusable {
+                rejection: CoreRejection::CustomCoreMismatch {
+                    chosen: core,
+                    required,
+                },
+            }),
+        }
+    }
+
+    /// Reads the Core type a custom node's credential requires.
+    fn custom_required_core(&self, node: &ProxyNode) -> Result<CoreType, CoreSelectionError> {
+        let secret = self
+            .session
+            .secret_store()
+            .get(&node.credential_ref)
+            .map_err(|_| CoreSelectionError::NoUsableCore {
+                protocol: ProxyProtocol::Custom,
+                tun: self.tun_enabled,
+                certificate_pin: false,
+                xhttp: false,
+                kcp: false,
+            })?;
+        let credential = CredentialCodec::decode(&secret).map_err(|_| {
+            CoreSelectionError::NoUsableCore {
+                protocol: ProxyProtocol::Custom,
+                tun: self.tun_enabled,
+                certificate_pin: false,
+                xhttp: false,
+                kcp: false,
+            }
+        })?;
+        match credential {
+            StoredNodeCredential::Custom(custom) => Ok(custom.core()),
+            _ => Err(CoreSelectionError::NoUsableCore {
+                protocol: ProxyProtocol::Custom,
+                tun: self.tun_enabled,
+                certificate_pin: false,
+                xhttp: false,
+                kcp: false,
+            }),
+        }
+    }
+
+    /// Picks the Core for a custom node when its credential is already loaded.
+    fn selected_core_for_custom(
+        &self,
+        node: &ProxyNode,
+    ) -> Result<CoreType, CoreSelectionError> {
+        let required = self.custom_required_core(node)?;
+        if self.tun_enabled && required == CoreType::Xray {
+            return Err(CoreSelectionError::ChosenCoreUnusable {
+                rejection: CoreRejection::TunUnsupported {
+                    core: CoreType::Xray,
+                },
+            });
+        }
+        match self.core_preference {
+            CorePreference::Auto => Ok(required),
+            CorePreference::Fixed(core) if core == required => Ok(core),
+            CorePreference::Fixed(core) => Err(CoreSelectionError::ChosenCoreUnusable {
+                rejection: CoreRejection::CustomCoreMismatch {
+                    chosen: core,
+                    required,
+                },
+            }),
+        }
     }
 
     /// Replaces the Core the session should run.

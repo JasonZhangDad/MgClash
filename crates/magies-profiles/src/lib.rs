@@ -1,6 +1,7 @@
 //! Node import and profile services for `MgClash`.
 
 mod anytls;
+mod custom;
 mod bulk_import;
 mod core_capability;
 mod credential_codec;
@@ -38,6 +39,7 @@ mod xray_outbound;
 mod xray_runtime_config;
 
 pub use anytls::{AnyTlsCredential, AnyTlsParseError, AnyTlsParser, ParsedAnyTlsNode};
+pub use custom::CustomCredential;
 pub use bulk_import::{
     BulkImportError, BulkImportFailure, BulkImportLineError, BulkImportOutcome,
     BulkNodeImportParser, ParsedBulkNode, node_fingerprint,

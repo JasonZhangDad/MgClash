@@ -788,6 +788,7 @@ fn protocol_name(protocol: ProxyProtocol) -> &'static str {
         ProxyProtocol::WireGuard => "wireguard",
         ProxyProtocol::AnyTls => "anytls",
         ProxyProtocol::Naive => "naive",
+        ProxyProtocol::Custom => "custom",
     }
 }
 
@@ -804,6 +805,7 @@ fn decode_protocol(value: &str) -> Result<ProxyProtocol, SubscriptionTransaction
         "wireguard" => Ok(ProxyProtocol::WireGuard),
         "anytls" => Ok(ProxyProtocol::AnyTls),
         "naive" => Ok(ProxyProtocol::Naive),
+        "custom" => Ok(ProxyProtocol::Custom),
         _ => Err(SubscriptionTransactionError::InvalidStoredProtocol {
             value: value.to_owned(),
         }),

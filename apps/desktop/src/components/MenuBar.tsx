@@ -108,6 +108,9 @@ export function MenuBar({
             <button type="button" role="menuitem" disabled={busy || connected} onClick={() => onAddServer("naive")}>
               {t("添加")} Naive {t("服务器")}
             </button>
+            <button type="button" role="menuitem" disabled={busy || connected} onClick={() => onAddServer("custom")}>
+              {t("添加自定义配置")}
+            </button>
             <hr />
             <button type="button" role="menuitem" disabled={busy || connected} onClick={onOpenCreate}>
               {t("手动创建")}

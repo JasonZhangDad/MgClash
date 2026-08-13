@@ -1287,6 +1287,35 @@ fn trojan_draft(name: &str, port: u32) -> ManualNodeDraft {
     }
 }
 
+#[test]
+fn creates_a_custom_node_and_selects_its_pinned_core() {
+    let (mut service, _runtime, _fail_start) = service();
+    let document = r#"{"inbounds":[],"outbounds":[{"type":"direct","tag":"direct"}]}"#;
+    let status = service
+        .create_node(ManualNodeDraft {
+            name: "Full JSON".to_owned(),
+            server: "ignored.example.com".to_owned(),
+            port: 8443,
+            udp_enabled: false,
+            transport: None,
+            tls: None,
+            credential: ManualCredentialDraft::Custom {
+                core: CoreType::Xray,
+                document: document.to_owned(),
+            },
+        })
+        .unwrap();
+    let node = status.node.unwrap();
+    assert_eq!(node.protocol, ProxyProtocol::Custom);
+    assert_eq!(node.server, "127.0.0.1");
+    assert_eq!(node.port, 443);
+    assert_eq!(node.transport, "custom");
+    assert_eq!(service.selected_core(), Ok(CoreType::Xray));
+
+    service.set_core_preference(CorePreference::Fixed(CoreType::SingBox));
+    assert!(service.selected_core().is_err());
+}
+
 fn service_with_events(
     events: &Arc<Mutex<Vec<&'static str>>>,
 ) -> (TestService, RuntimeDirectory, Arc<AtomicBool>) {

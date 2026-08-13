@@ -71,6 +71,9 @@ impl ShareLinkSerializer {
                 actual: credential.protocol(),
             });
         }
+        if matches!(credential, StoredNodeCredential::Custom(_)) {
+            return Err(ShareLinkSerializerError::UnrepresentableCustomNode);
+        }
         // `VMess` is written as the Base64 JSON document, which is what v2rayN
         // exports and the only form that carries `alterId`.
         if let StoredNodeCredential::Vmess(vmess) = credential {
@@ -99,6 +102,9 @@ impl ShareLinkSerializer {
                     query.set("congestion_control", control.as_str());
                 }
                 user_pass_authority(value.username(), value.password())
+            }
+            StoredNodeCredential::Custom(_) => {
+                unreachable!("custom nodes returned above")
             }
         };
         // Only VLESS and Trojan read a `type` parameter. Shadowsocks rejects
@@ -207,6 +213,7 @@ const fn scheme(protocol: ProxyProtocol, has_tls: bool) -> &'static str {
         // Naive's scheme also encodes QUIC vs HTTP/2; callers that know the
         // credential pick `naive` / `naive+quic` themselves before this runs.
         ProxyProtocol::Naive => "naive",
+        ProxyProtocol::Custom => "custom",
     }
 }
 
@@ -689,4 +696,6 @@ pub enum ShareLinkSerializerError {
     UnrepresentableVmessTls,
     #[error("the Naive sharing URI cannot carry this TLS configuration")]
     UnrepresentableNaiveTls,
+    #[error("custom nodes cannot be exported as sharing links")]
+    UnrepresentableCustomNode,
 }
