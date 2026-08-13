@@ -1322,6 +1322,7 @@ fn set_app_settings(
         service.set_tun_enabled(settings.tun_enabled);
         service.set_mux_enabled(settings.mux_enabled);
         service.set_fragment_enabled(settings.fragment_enabled);
+        service.set_udp_noise_enabled(settings.udp_noise_enabled);
         service.set_allow_lan(settings.allow_lan);
         service.set_inbound_udp_enabled(settings.inbound_udp_enabled);
         service.set_system_proxy_mode(settings.system_proxy_mode.mode(pac_url.as_deref()));
@@ -1742,6 +1743,7 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         service.set_tun_enabled(settings.tun_enabled);
         service.set_mux_enabled(settings.mux_enabled);
         service.set_fragment_enabled(settings.fragment_enabled);
+        service.set_udp_noise_enabled(settings.udp_noise_enabled);
         service.set_allow_lan(settings.allow_lan);
         service.set_inbound_udp_enabled(settings.inbound_udp_enabled);
         service

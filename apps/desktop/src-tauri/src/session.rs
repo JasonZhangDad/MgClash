@@ -83,6 +83,9 @@ pub struct SessionDefaults {
     /// When true the next connect fragments the TLS `ClientHello` (v2rayN's
     /// Fragment anti-detection toggle).
     pub fragment_enabled: bool,
+    /// When true the next connect sends v2rayN-style UDP noise via Xray freedom
+    /// `noises` (Xray only).
+    pub udp_noise_enabled: bool,
 }
 
 impl SessionDefaults {
@@ -106,6 +109,7 @@ impl SessionDefaults {
             system_proxy: SystemProxyMode::Managed,
             mux_enabled: false,
             fragment_enabled: false,
+            udp_noise_enabled: false,
         }
     }
 
@@ -1423,7 +1427,8 @@ where
         .with_local_proxies(self.defaults.socks, self.defaults.http)
         .with_clash_api_port(self.defaults.clash_api_port)
         .with_mux(self.defaults.mux_enabled)
-        .with_fragment(self.defaults.fragment_enabled);
+        .with_fragment(self.defaults.fragment_enabled)
+        .with_udp_noise(self.defaults.udp_noise_enabled);
         // The two are mutually exclusive in DesktopSession, so TUN replaces
         // System Proxy rather than being layered on top of it.
         let profile = match self.tun_profile()? {
@@ -1668,6 +1673,11 @@ where
     /// Turns TLS `ClientHello` fragmentation on or off for the next session.
     pub fn set_fragment_enabled(&mut self, enabled: bool) {
         self.defaults.fragment_enabled = enabled;
+    }
+
+    /// Turns Xray UDP noise on or off for the next session.
+    pub fn set_udp_noise_enabled(&mut self, enabled: bool) {
+        self.defaults.udp_noise_enabled = enabled;
     }
 
     /// Turns TUN routing on or off for the next session.

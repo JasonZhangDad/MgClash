@@ -125,6 +125,7 @@ pub use xray_dns_config::{FAKE_DNS_SERVER, XrayDnsConfigGenerator};
 pub use xray_outbound::{
     FRAGMENT_OUTBOUND_TAG, GeneratedXrayOutbound, XrayOutboundConfigGenerator, XrayOutboundError,
     apply_xray_fragment, apply_xray_mux, xray_fragment_outbound,
+    xray_fragment_outbound_with_options,
 };
 pub use xray_runtime_config::{
     XrayRuntimeConfigError, XrayRuntimeConfigGenerator, XrayRuntimeProfile,

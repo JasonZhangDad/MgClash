@@ -204,6 +204,63 @@ fn enables_fragment_dialer_and_adds_the_freedom_outbound_when_requested() {
 }
 
 #[test]
+fn enables_udp_noise_on_the_freedom_outbound_when_requested() {
+    let (node, credential) = node();
+    let dns = dns(false);
+    let route = global_route();
+
+    let config = generate(
+        &XrayRuntimeProfile::new(&node, credential.as_node_credential(), &dns, &route)
+            .with_udp_noise(true),
+    );
+    let outbounds = config["outbounds"].as_array().unwrap();
+    let proxy = outbounds
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert_eq!(proxy["streamSettings"]["sockopt"]["dialerProxy"], "fragment");
+
+    let fragment = outbounds
+        .iter()
+        .find(|outbound| outbound["tag"] == "fragment")
+        .unwrap();
+    assert_eq!(fragment["protocol"], "freedom");
+    assert!(fragment["settings"]["fragment"].is_null());
+    assert_eq!(
+        fragment["settings"]["noises"],
+        serde_json::json!([{
+            "type": "rand",
+            "packet": "10-20",
+            "delay": "10-16"
+        }])
+    );
+}
+
+#[test]
+fn combines_fragment_and_udp_noise_on_one_freedom_outbound() {
+    let (node, credential) = node();
+    let dns = dns(false);
+    let route = global_route();
+
+    let config = generate(
+        &XrayRuntimeProfile::new(&node, credential.as_node_credential(), &dns, &route)
+            .with_fragment(true)
+            .with_udp_noise(true),
+    );
+    let fragment = config["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["tag"] == "fragment")
+        .unwrap();
+    assert_eq!(fragment["settings"]["fragment"]["packets"], "tlshello");
+    assert_eq!(
+        fragment["settings"]["noises"][0]["type"],
+        "rand"
+    );
+}
+
+#[test]
 fn no_fragment_outbound_appears_when_fragment_is_off() {
     let (node, credential) = node();
     let dns = dns(false);

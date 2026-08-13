@@ -193,6 +193,7 @@ const DEFAULT_SETTINGS = {
   clashApiPort: 9090,
   muxEnabled: false,
   fragmentEnabled: false,
+  udpNoiseEnabled: false,
   autoSelectLowestLatency: false,
   urlTestAddress: "https://www.gstatic.com/generate_204",
   allowLan: false,
@@ -2015,6 +2016,14 @@ describe("App", () => {
     await act(async () => createField("启用 Fragment").click());
     expect(saveAppSettingsMock).toHaveBeenCalledWith(
       expect.objectContaining({ fragmentEnabled: true }),
+    );
+  });
+
+  it("persists the UDP Noise anti-detection toggle from settings", async () => {
+    await render();
+    await act(async () => createField("启用 UDP Noise").click());
+    expect(saveAppSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ udpNoiseEnabled: true }),
     );
   });
 
