@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::anytls::AnyTlsCredential;
 use crate::http_proxy::HttpCredential;
 use crate::hysteria2::{Hysteria2Credential, Hysteria2Obfuscation, Hysteria2ObfuscationMethod};
 use crate::shadowsocks::{SUPPORTED_METHODS, ShadowsocksCredential};
@@ -132,6 +133,12 @@ fn resolve_transport(
             }
             Ok(None)
         }
+        StoredNodeCredential::AnyTls(_) => {
+            if transport.is_some() {
+                return Err(ManualNodeDraftError::AnyTlsRejectsTransport);
+            }
+            Ok(None)
+        }
         StoredNodeCredential::Shadowsocks(_) => match transport {
             None | Some(TransportConfig::Tcp) => Ok(Some(TransportConfig::Tcp)),
             Some(_) => Err(ManualNodeDraftError::ShadowsocksRequiresTcpTransport),
@@ -173,6 +180,13 @@ fn resolve_tls(
         // stream-protocol feature the HTTP outbound cannot use.
         StoredNodeCredential::Http(_) if matches!(tls, Some(TlsConfig::Reality { .. })) => {
             Err(ManualNodeDraftError::HttpRejectsReality)
+        }
+        // AnyTLS is TLS from the first byte; v2rayN also exposes Reality for
+        // it, so both TLS layers are accepted, but plaintext is not.
+        StoredNodeCredential::AnyTls(_)
+            if !matches!(tls, Some(TlsConfig::Tls { .. } | TlsConfig::Reality { .. })) =>
+        {
+            Err(ManualNodeDraftError::AnyTlsRequiresTls)
         }
         _ => Ok(tls),
     }
@@ -246,6 +260,8 @@ pub enum ManualCredentialDraft {
         #[serde(default)]
         reserved: Option<[u8; 3]>,
     },
+    #[serde(rename_all = "camelCase")]
+    AnyTls { password: String },
 }
 
 impl ManualCredentialDraft {
@@ -298,9 +314,16 @@ impl ManualCredentialDraft {
                 mtu: value.mtu(),
                 reserved: value.reserved(),
             },
+            StoredNodeCredential::AnyTls(value) => Self::AnyTls {
+                password: value.password().to_owned(),
+            },
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "each protocol variant is a short arm; splitting would scatter validation"
+    )]
     fn build(self) -> Result<StoredNodeCredential, ManualNodeDraftError> {
         match self {
             Self::Vless { user_id, flow } => Ok(StoredNodeCredential::Vless(VlessCredential {
@@ -422,6 +445,10 @@ impl ManualCredentialDraft {
                     reserved,
                 }))
             }
+            Self::AnyTls { password } => {
+                let password = required(&password, ManualNodeDraftError::MissingAnyTlsPassword)?;
+                Ok(StoredNodeCredential::AnyTls(AnyTlsCredential { password }))
+            }
         }
     }
 }
@@ -522,6 +549,12 @@ pub enum ManualNodeDraftError {
     MissingWireGuardPeerPublicKey,
     #[error("WireGuard requires at least one local address")]
     MissingWireGuardLocalAddress,
+    #[error("AnyTLS carries its own session layer and accepts no transport setting")]
+    AnyTlsRejectsTransport,
+    #[error("AnyTLS requires TLS or Reality")]
+    AnyTlsRequiresTls,
+    #[error("AnyTLS password is required")]
+    MissingAnyTlsPassword,
 }
 
 const fn enabled_by_default() -> bool {

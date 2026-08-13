@@ -5,7 +5,7 @@ use magies_domain::{CoreType, ProxyProtocol};
 use magies_platform::CpuArchitecture;
 use magies_profiles::{
     CoreCapabilityMatrix, CorePreference, CoreRejection, CoreRequirements, CoreSelectionError,
-    core_name, parse_core_name,
+    core_name, parse_core_name, protocol_name,
 };
 
 fn requirements(protocol: ProxyProtocol, tun: bool) -> CoreRequirements {
@@ -27,12 +27,29 @@ fn sing_box_serves_every_v01_protocol() {
         ProxyProtocol::Trojan,
         ProxyProtocol::Shadowsocks,
         ProxyProtocol::Hysteria2,
+        ProxyProtocol::AnyTls,
     ] {
         assert!(
             CoreCapabilityMatrix::supports(CoreType::SingBox, requirements(protocol, false)),
             "sing-box should support {protocol:?}"
         );
     }
+}
+
+#[test]
+fn xray_has_no_anytls_outbound() {
+    assert_eq!(
+        CoreCapabilityMatrix::rejection(CoreType::Xray, requirements(ProxyProtocol::AnyTls, false)),
+        Some(CoreRejection::ProtocolUnsupported {
+            core: CoreType::Xray,
+            protocol: ProxyProtocol::AnyTls,
+        })
+    );
+    assert_eq!(
+        CoreCapabilityMatrix::select(CorePreference::Auto, requirements(ProxyProtocol::AnyTls, false)),
+        Ok(CoreType::SingBox)
+    );
+    assert_eq!(protocol_name(ProxyProtocol::AnyTls), "AnyTLS");
 }
 
 #[test]

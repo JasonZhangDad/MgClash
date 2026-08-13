@@ -1,10 +1,10 @@
-//! WireGuard sharing links.
+//! `WireGuard` sharing links.
 //!
-//! There is no protocol-level standard for a WireGuard sharing URI — the
-//! `.conf` file is the only thing WireGuard itself defines — so this follows
+//! There is no protocol-level standard for a `WireGuard` sharing URI — the
+//! `.conf` file is the only thing `WireGuard` itself defines — so this follows
 //! the informal `wireguard://` shape v2rayN-family clients already emit:
 //! the private key as userinfo, the peer's public key and tunnel addresses as
-//! query parameters. WireGuard carries no stream transport and no TLS layer of
+//! query parameters. `WireGuard` carries no stream transport and no TLS layer of
 //! its own; it *is* the tunnel, so both are always absent on the shared model.
 
 use std::fmt::{Debug, Formatter};
@@ -23,7 +23,7 @@ use super::{
     parse_server, validate_percent_encoding,
 };
 
-/// WireGuard has no IANA-assigned default; this matches the upstream
+/// `WireGuard` has no IANA-assigned default; this matches the upstream
 /// `wireguard-tools` example configs and every client that emits this link.
 const DEFAULT_PORT: u16 = 51820;
 
@@ -36,7 +36,7 @@ impl WireGuardParser {
         value.trim().starts_with("wireguard://")
     }
 
-    /// Parses a WireGuard sharing URI without persisting its credential.
+    /// Parses a `WireGuard` sharing URI without persisting its credential.
     ///
     /// # Errors
     ///
@@ -187,13 +187,13 @@ impl ParsedWireGuardNode {
         &self.credential
     }
 
-    /// WireGuard is its own tunnel; it never carries a stream transport.
+    /// `WireGuard` is its own tunnel; it never carries a stream transport.
     #[must_use]
     pub const fn transport(&self) -> Option<&TransportConfig> {
         None
     }
 
-    /// WireGuard authenticates peers by key, not by certificate; it never
+    /// `WireGuard` authenticates peers by key, not by certificate; it never
     /// carries a TLS layer.
     #[must_use]
     pub const fn tls(&self) -> Option<&magies_domain::TlsConfig> {

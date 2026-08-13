@@ -101,6 +101,13 @@ impl XrayOutboundConfigGenerator {
                     protocol: ProxyProtocol::WireGuard,
                 });
             }
+            NodeCredential::AnyTls(_) => {
+                // Xray ships no AnyTLS outbound at all. Unreachable through
+                // the matrix, but the generator is public.
+                return Err(XrayOutboundError::ProtocolUnsupported {
+                    protocol: ProxyProtocol::AnyTls,
+                });
+            }
             NodeCredential::Socks(credential) => {
                 user_pass_settings(node, credential.username(), credential.password())
             }
@@ -125,7 +132,10 @@ pub fn apply_xray_mux(outbound: &mut Value, credential: NodeCredential<'_>) {
     }
     if matches!(
         credential.protocol(),
-        ProxyProtocol::Hysteria2 | ProxyProtocol::Tuic | ProxyProtocol::WireGuard
+        ProxyProtocol::Hysteria2
+            | ProxyProtocol::Tuic
+            | ProxyProtocol::WireGuard
+            | ProxyProtocol::AnyTls
     ) {
         return;
     }
@@ -314,9 +324,10 @@ fn protocol_name(protocol: ProxyProtocol) -> Result<&'static str, XrayOutboundEr
         ProxyProtocol::Shadowsocks => Ok("shadowsocks"),
         ProxyProtocol::Socks => Ok("socks"),
         ProxyProtocol::Http => Ok("http"),
-        ProxyProtocol::Hysteria2 | ProxyProtocol::Tuic | ProxyProtocol::WireGuard => {
-            Err(XrayOutboundError::ProtocolUnsupported { protocol })
-        }
+        ProxyProtocol::Hysteria2
+        | ProxyProtocol::Tuic
+        | ProxyProtocol::WireGuard
+        | ProxyProtocol::AnyTls => Err(XrayOutboundError::ProtocolUnsupported { protocol }),
     }
 }
 

@@ -2,8 +2,9 @@ use magies_domain::{
     CertificatePin, CredentialRef, GrpcMode, ProxyNode, ProxyProtocol, TlsConfig, TransportConfig,
 };
 use magies_profiles::{
-    HttpProxyParser, Hysteria2Parser, NodeCredential, OutboundConfigError, ShadowsocksParser,
-    SingBoxOutboundConfigGenerator, SocksParser, TrojanParser, VlessParser, VmessParser,
+    AnyTlsParser, HttpProxyParser, Hysteria2Parser, NodeCredential, OutboundConfigError,
+    ShadowsocksParser, SingBoxOutboundConfigGenerator, SocksParser, TrojanParser, VlessParser,
+    VmessParser,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -220,6 +221,102 @@ fn generates_trojan_shadowsocks_and_hysteria2_outbounds() {
                 "alpn": ["h3"],
                 "utls": { "enabled": true, "fingerprint": "chrome" }
             }
+        })
+    );
+}
+
+#[test]
+fn generates_anytls_tls_and_reality_outbounds() {
+    let anytls = AnyTlsParser
+        .parse("anytls://anytls-secret@edge.example.com:443?sni=cdn.example.com&insecure=1")
+        .unwrap();
+    let mut anytls_node = node(ProxyProtocol::AnyTls);
+    anytls_node.transport = None;
+    anytls_node.tls = anytls.tls().cloned();
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &anytls_node,
+            NodeCredential::from(anytls.credential())
+        )
+        .unwrap()
+        .json(),
+        &json!({
+            "type": "anytls",
+            "tag": "proxy",
+            "server": "edge.example.com",
+            "server_port": 443,
+            "password": "anytls-secret",
+            "tls": {
+                "enabled": true,
+                "server_name": "cdn.example.com",
+                "insecure": true
+            }
+        })
+    );
+
+    let anytls_reality = AnyTlsParser
+        .parse(
+            "anytls://anytls-secret@edge.example.com:443?security=reality\
+             &sni=www.example.com&pbk=example-public-key&sid=abcd&fp=chrome",
+        )
+        .unwrap();
+    let mut reality_node = node(ProxyProtocol::AnyTls);
+    reality_node.transport = None;
+    reality_node.tls = anytls_reality.tls().cloned();
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &reality_node,
+            NodeCredential::from(anytls_reality.credential())
+        )
+        .unwrap()
+        .json(),
+        &json!({
+            "type": "anytls",
+            "tag": "proxy",
+            "server": "edge.example.com",
+            "server_port": 443,
+            "password": "anytls-secret",
+            "tls": {
+                "enabled": true,
+                "server_name": "www.example.com",
+                "utls": { "enabled": true, "fingerprint": "chrome" },
+                "reality": {
+                    "enabled": true,
+                    "public_key": "example-public-key",
+                    "short_id": "abcd"
+                }
+            }
+        })
+    );
+}
+
+#[test]
+fn rejects_an_anytls_node_missing_tls_or_carrying_a_transport() {
+    let anytls = AnyTlsParser
+        .parse("anytls://anytls-secret@edge.example.com:443")
+        .unwrap();
+    let mut missing_tls = node(ProxyProtocol::AnyTls);
+    missing_tls.transport = None;
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &missing_tls,
+            NodeCredential::from(anytls.credential())
+        ),
+        Err(OutboundConfigError::MissingTls {
+            protocol: ProxyProtocol::AnyTls
+        })
+    );
+
+    let mut transported = node(ProxyProtocol::AnyTls);
+    transported.transport = Some(TransportConfig::Tcp);
+    transported.tls = anytls.tls().cloned();
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &transported,
+            NodeCredential::from(anytls.credential())
+        ),
+        Err(OutboundConfigError::UnsupportedTransport {
+            protocol: ProxyProtocol::AnyTls
         })
     );
 }

@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    HttpCredential, Hysteria2Credential, NodeCredential, ShadowsocksCredential, SocksCredential,
-    TrojanCredential, TuicCredential, VlessCredential, VmessCredential, WireGuardCredential,
+    AnyTlsCredential, HttpCredential, Hysteria2Credential, NodeCredential, ShadowsocksCredential,
+    SocksCredential, TrojanCredential, TuicCredential, VlessCredential, VmessCredential,
+    WireGuardCredential,
 };
 
 const CREDENTIAL_PAYLOAD_VERSION: u8 = 1;
@@ -25,6 +26,7 @@ pub enum StoredNodeCredential {
     Socks(SocksCredential),
     Http(HttpCredential),
     WireGuard(WireGuardCredential),
+    AnyTls(AnyTlsCredential),
 }
 
 impl StoredNodeCredential {
@@ -40,6 +42,7 @@ impl StoredNodeCredential {
             Self::Socks(_) => ProxyProtocol::Socks,
             Self::Http(_) => ProxyProtocol::Http,
             Self::WireGuard(_) => ProxyProtocol::WireGuard,
+            Self::AnyTls(_) => ProxyProtocol::AnyTls,
         }
     }
 
@@ -55,6 +58,7 @@ impl StoredNodeCredential {
             Self::Socks(value) => NodeCredential::Socks(value),
             Self::Http(value) => NodeCredential::Http(value),
             Self::WireGuard(value) => NodeCredential::WireGuard(value),
+            Self::AnyTls(value) => NodeCredential::AnyTls(value),
         }
     }
 }
@@ -84,6 +88,7 @@ impl_from_credential!(TuicCredential, Tuic);
 impl_from_credential!(SocksCredential, Socks);
 impl_from_credential!(HttpCredential, Http);
 impl_from_credential!(WireGuardCredential, WireGuard);
+impl_from_credential!(AnyTlsCredential, AnyTls);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CredentialCodec;
