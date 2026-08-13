@@ -149,7 +149,8 @@ where
     if let Some(tun) = profile.tun.as_ref() {
         runtime_profile = runtime_profile.with_tun(tun, profile.dns_hijack);
     }
-    runtime_profile = apply_group_outbound(runtime_profile, profile, credential, member_credentials);
+    runtime_profile =
+        apply_group_outbound(runtime_profile, profile, credential, member_credentials);
     Ok(SingBoxRuntimeConfigGenerator::generate(&runtime_profile)
         .map_err(|source| DesktopSessionError::Config { source })?
         .json()
@@ -198,7 +199,8 @@ where
     if profile.udp_noise_enabled {
         runtime_profile = runtime_profile.with_udp_noise(true);
     }
-    runtime_profile = apply_xray_group_outbound(runtime_profile, profile, credential, member_credentials);
+    runtime_profile =
+        apply_xray_group_outbound(runtime_profile, profile, credential, member_credentials);
     Ok(XrayRuntimeConfigGenerator::generate(&runtime_profile)
         .map_err(|source| DesktopSessionError::XrayConfig { source })?
         .json()
@@ -576,9 +578,7 @@ where
                 parse_custom_document(custom.document())?
             }
             _ => match profile.core {
-                CoreType::SingBox => {
-                    generate_sing_box(profile, &credential, &member_credentials)?
-                }
+                CoreType::SingBox => generate_sing_box(profile, &credential, &member_credentials)?,
                 CoreType::Xray => generate_xray(profile, &credential, &member_credentials)?,
             },
         };

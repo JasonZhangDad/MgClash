@@ -34,6 +34,10 @@ const FAKE_DNS_POOL_SIZE: u32 = 65_535;
 const DEFAULT_URLTEST_PROBE: &str = "https://www.gstatic.com/generate_204";
 const URLTEST_INTERVAL: &str = "3m";
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent Core toggles the UI exposes one by one"
+)]
 pub struct XrayRuntimeProfile<'a> {
     selected: Option<SelectedNode<'a>>,
     group_outbound: Option<GroupOutbound<'a>>,
@@ -182,7 +186,7 @@ impl<'a> XrayRuntimeProfile<'a> {
     /// has at least two nodes.
     #[must_use]
     pub fn with_urltest(
-        mut self,
+        self,
         members: Vec<(&'a ProxyNode, NodeCredential<'a>)>,
         probe_url: &'a str,
     ) -> Self {
@@ -297,8 +301,9 @@ fn xray_member_outbound(
     member: &SelectedNode<'_>,
     tag: &str,
 ) -> Result<Value, XrayRuntimeConfigError> {
-    let mut outbound =
-        XrayOutboundConfigGenerator::generate(member.node, member.credential)?.json().clone();
+    let mut outbound = XrayOutboundConfigGenerator::generate(member.node, member.credential)?
+        .json()
+        .clone();
     outbound["tag"] = Value::String(tag.to_owned());
     if profile.mux_enabled {
         apply_xray_mux(&mut outbound, member.credential);
@@ -309,11 +314,7 @@ fn xray_member_outbound(
     Ok(outbound)
 }
 
-fn apply_proxy_balancer(
-    routing: &mut Value,
-    member_tags: &[String],
-    strategy: NodeGroupStrategy,
-) {
+fn apply_proxy_balancer(routing: &mut Value, member_tags: &[String], strategy: NodeGroupStrategy) {
     if let Some(rules) = routing["rules"].as_array_mut() {
         for rule in rules {
             if rule.get("outboundTag").and_then(Value::as_str) == Some("proxy") {
@@ -423,12 +424,11 @@ fn finalmask_overrides(
         && let Some(json) = selected.node.xray_finalmask_json.as_ref()
     {
         let value: Value = serde_json::from_str(json).map_err(|_| {
-            XrayRuntimeConfigError::Finalmask(crate::xray_outbound::XrayFinalmaskError::InvalidShape)
+            XrayRuntimeConfigError::Finalmask(
+                crate::xray_outbound::XrayFinalmaskError::InvalidShape,
+            )
         })?;
-        overrides.insert(
-            "proxy".to_owned(),
-            normalize_xray_finalmask_tcp(&value)?,
-        );
+        overrides.insert("proxy".to_owned(), normalize_xray_finalmask_tcp(&value)?);
     }
     Ok(overrides)
 }

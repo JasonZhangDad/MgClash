@@ -7,6 +7,7 @@
 //! responsibility, and the capability matrix decides which of the two runs.
 
 use std::collections::HashMap;
+use std::hash::BuildHasher;
 
 use magies_domain::{GrpcMode, ProxyNode, ProxyProtocol, TlsConfig, TransportConfig};
 use serde_json::{Value, json};
@@ -246,9 +247,9 @@ pub fn xray_finalmask_fragment_mask() -> Value {
 ///
 /// `overrides` maps outbound tag to a mask entry; tags without an entry use
 /// [`xray_finalmask_fragment_mask`].
-pub fn apply_xray_final_fragment(
+pub fn apply_xray_final_fragment<S: BuildHasher>(
     outbounds: &mut Vec<Value>,
-    overrides: &HashMap<String, Value>,
+    overrides: &HashMap<String, Value, S>,
 ) {
     let default_mask = xray_finalmask_fragment_mask();
     let mut index = 0;

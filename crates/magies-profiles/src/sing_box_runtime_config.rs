@@ -17,6 +17,10 @@ const DEFAULT_URLTEST_PROBE: &str = "https://www.gstatic.com/generate_204";
 const URLTEST_INTERVAL: &str = "3m";
 const URLTEST_TOLERANCE_MS: u32 = 50;
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent Core toggles the UI exposes one by one"
+)]
 pub struct SingBoxRuntimeProfile<'a> {
     selected: Option<SelectedNode<'a>>,
     group_outbound: Option<GroupOutbound<'a>>,
@@ -179,7 +183,7 @@ impl<'a> SingBoxRuntimeProfile<'a> {
     /// nodes. Fewer members fall back to the selected single outbound.
     #[must_use]
     pub fn with_urltest(
-        mut self,
+        self,
         members: Vec<(&'a ProxyNode, NodeCredential<'a>)>,
         probe_url: &'a str,
     ) -> Self {
@@ -244,9 +248,7 @@ impl SingBoxRuntimeConfigGenerator {
     }
 }
 
-fn proxy_outbounds(
-    profile: &SingBoxRuntimeProfile<'_>,
-) -> Result<Vec<Value>, RuntimeConfigError> {
+fn proxy_outbounds(profile: &SingBoxRuntimeProfile<'_>) -> Result<Vec<Value>, RuntimeConfigError> {
     if let Some(group) = profile
         .group_outbound
         .as_ref()
@@ -303,8 +305,9 @@ fn member_outbound(
     member: &SelectedNode<'_>,
     tag: &str,
 ) -> Result<Value, RuntimeConfigError> {
-    let mut outbound =
-        SingBoxOutboundConfigGenerator::generate(member.node, member.credential)?.json().clone();
+    let mut outbound = SingBoxOutboundConfigGenerator::generate(member.node, member.credential)?
+        .json()
+        .clone();
     outbound["tag"] = Value::String(tag.to_owned());
     if profile.mux_enabled {
         apply_sing_box_multiplex(&mut outbound, member.node.protocol_type);

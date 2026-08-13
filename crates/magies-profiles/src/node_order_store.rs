@@ -69,10 +69,8 @@ impl SqliteNodeOrderStore {
             .query_map([], |row| row.get::<_, String>(0))?
             .map(|row| {
                 let value = row?;
-                Uuid::parse_str(&value).map_err(|source| NodeOrderStoreError::InvalidId {
-                    value,
-                    source,
-                })
+                Uuid::parse_str(&value)
+                    .map_err(|source| NodeOrderStoreError::InvalidId { value, source })
             })
             .collect()
     }

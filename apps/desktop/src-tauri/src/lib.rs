@@ -1317,10 +1317,6 @@ fn geo_assets_status(state: State<'_, AppState>) -> GeoAssetsStatus {
 }
 
 #[tauri::command]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Tauri commands receive State by value"
-)]
 async fn geo_assets_update(state: State<'_, AppState>) -> Result<GeoAssetsStatus, CommandError> {
     state
         .geo_assets
@@ -1347,10 +1343,6 @@ async fn core_check_update(state: State<'_, AppState>) -> Result<CoreUpdateCheck
 }
 
 #[tauri::command]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Tauri commands receive State by value"
-)]
 async fn core_download_update(
     core: String,
     state: State<'_, AppState>,
@@ -2011,6 +2003,10 @@ fn handle_run_event(app: &AppHandle, event: tauri::RunEvent) {
 
 /// Opens the on-disk stores, wires the session service into Tauri state, and
 /// starts the background loops.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one linear wiring sequence; splitting it would hide the startup order"
+)]
 fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let logs = Arc::new(LogBuffer::default());
     install_log_subscriber(logs.clone());

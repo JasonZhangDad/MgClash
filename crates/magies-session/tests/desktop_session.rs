@@ -375,8 +375,8 @@ fn writes_a_custom_document_verbatim_without_generators() {
         Some(credential_ref),
     )
     .unwrap();
-    let profile = DesktopSessionProfile::new(node, system_dns(), global_route())
-        .with_core(CoreType::SingBox);
+    let profile =
+        DesktopSessionProfile::new(node, system_dns(), global_route()).with_core(CoreType::SingBox);
     let runtime = RuntimeDirectory::new("custom-session");
     let mut session = DesktopSession::new(
         store,
@@ -417,8 +417,8 @@ fn rejects_custom_core_mismatch() {
         Some(credential_ref),
     )
     .unwrap();
-    let profile = DesktopSessionProfile::new(node, system_dns(), global_route())
-        .with_core(CoreType::SingBox);
+    let profile =
+        DesktopSessionProfile::new(node, system_dns(), global_route()).with_core(CoreType::SingBox);
     let runtime = RuntimeDirectory::new("custom-mismatch");
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut session = DesktopSession::new(

@@ -126,8 +126,7 @@ fn dispatches_a_tuic_link_to_the_tuic_parser() {
 
 #[test]
 fn dispatches_an_anytls_link_to_the_anytls_parser() {
-    let parsed = parse("anytls://hunter2@edge.example.com:443?sni=cdn.example.com#Tokyo")
-        .unwrap();
+    let parsed = parse("anytls://hunter2@edge.example.com:443?sni=cdn.example.com#Tokyo").unwrap();
 
     assert_eq!(parsed.node().protocol_type, ProxyProtocol::AnyTls);
     assert!(matches!(
@@ -139,8 +138,8 @@ fn dispatches_an_anytls_link_to_the_anytls_parser() {
 
 #[test]
 fn dispatches_a_naive_link_to_the_naive_parser() {
-    let parsed = parse("naive+quic://alice:hunter2@edge.example.com?sni=cdn.example.com#Tokyo")
-        .unwrap();
+    let parsed =
+        parse("naive+quic://alice:hunter2@edge.example.com?sni=cdn.example.com#Tokyo").unwrap();
 
     assert_eq!(parsed.node().protocol_type, ProxyProtocol::Naive);
     assert!(matches!(

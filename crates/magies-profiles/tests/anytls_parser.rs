@@ -133,9 +133,7 @@ fn rejects_plaintext_security_because_anytls_requires_tls() {
 #[test]
 fn rejects_conflicting_insecure_aliases() {
     assert!(matches!(
-        AnyTlsParser.parse(
-            "anytls://hunter2@edge.example.com:443?insecure=1&allowInsecure=0"
-        ),
+        AnyTlsParser.parse("anytls://hunter2@edge.example.com:443?insecure=1&allowInsecure=0"),
         Err(AnyTlsParseError::ConflictingInsecureAliases)
     ));
 }
@@ -163,9 +161,7 @@ fn rejects_the_log_level_query_parameter() {
 #[test]
 fn rejects_a_reality_link_missing_its_public_key() {
     assert!(matches!(
-        AnyTlsParser.parse(
-            "anytls://hunter2@edge.example.com:443?security=reality&fp=chrome"
-        ),
+        AnyTlsParser.parse("anytls://hunter2@edge.example.com:443?security=reality&fp=chrome"),
         Err(AnyTlsParseError::InvalidUri {
             source: VlessParseError::MissingParameter { name: "pbk" }
         })

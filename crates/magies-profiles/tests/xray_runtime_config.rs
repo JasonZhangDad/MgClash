@@ -11,7 +11,7 @@ use magies_profiles::{
     XrayRuntimeConfigGenerator, XrayRuntimeProfile,
 };
 use magies_routing::{RouteOutbound, RouteProfile, RoutingMode};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 const USER_ID: &str = "b0dd64e4-0fbd-4038-9139-d1f32a68a0dc";
@@ -192,7 +192,10 @@ fn enables_fragment_dialer_and_adds_the_freedom_outbound_when_requested() {
         .iter()
         .find(|outbound| outbound["tag"] == "proxy")
         .unwrap();
-    assert_eq!(proxy["streamSettings"]["sockopt"]["dialerProxy"], "fragment");
+    assert_eq!(
+        proxy["streamSettings"]["sockopt"]["dialerProxy"],
+        "fragment"
+    );
 
     let fragment = outbounds
         .iter()
@@ -219,7 +222,10 @@ fn enables_udp_noise_on_the_freedom_outbound_when_requested() {
         .iter()
         .find(|outbound| outbound["tag"] == "proxy")
         .unwrap();
-    assert_eq!(proxy["streamSettings"]["sockopt"]["dialerProxy"], "fragment");
+    assert_eq!(
+        proxy["streamSettings"]["sockopt"]["dialerProxy"],
+        "fragment"
+    );
 
     let fragment = outbounds
         .iter()
@@ -255,10 +261,7 @@ fn combines_fragment_and_udp_noise_on_one_freedom_outbound() {
         .find(|outbound| outbound["tag"] == "fragment")
         .unwrap();
     assert_eq!(fragment["settings"]["fragment"]["packets"], "tlshello");
-    assert_eq!(
-        fragment["settings"]["noises"][0]["type"],
-        "rand"
-    );
+    assert_eq!(fragment["settings"]["noises"][0]["type"], "rand");
 }
 
 #[test]
@@ -486,19 +489,14 @@ fn urltest_group_uses_a_leastping_balancer_instead_of_a_proxy_outbound() {
     .unwrap();
     let dns = dns(false);
     let route = global_route();
-    let profile = XrayRuntimeProfile::new(
-        &node,
-        credential.as_node_credential(),
-        &dns,
-        &route,
-    )
-    .with_urltest(
-        vec![
-            (&node, credential.as_node_credential()),
-            (&other, other_credential.as_node_credential()),
-        ],
-        "https://www.gstatic.com/generate_204",
-    );
+    let profile = XrayRuntimeProfile::new(&node, credential.as_node_credential(), &dns, &route)
+        .with_urltest(
+            vec![
+                (&node, credential.as_node_credential()),
+                (&other, other_credential.as_node_credential()),
+            ],
+            "https://www.gstatic.com/generate_204",
+        );
 
     let config = generate(&profile);
     let tags: Vec<_> = config["outbounds"]

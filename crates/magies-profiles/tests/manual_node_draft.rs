@@ -1076,7 +1076,10 @@ fn rejects_transport_and_tls_for_custom() {
     };
     value.transport = Some(TransportConfig::Tcp);
     assert_eq!(
-        value.clone().build(node_id(), credential_ref()).unwrap_err(),
+        value
+            .clone()
+            .build(node_id(), credential_ref())
+            .unwrap_err(),
         ManualNodeDraftError::CustomRejectsTransport
     );
     value.transport = None;
@@ -1091,8 +1094,7 @@ fn rejects_transport_and_tls_for_custom() {
 fn accepts_and_persists_a_valid_xray_finalmask_json_override() {
     let mut value = draft(vless());
     value.xray_finalmask_json = Some(
-        r#"{"type":"fragment","settings":{"packets":"tlshello","lengths":["80-120"]}}"#
-            .to_owned(),
+        r#"{"type":"fragment","settings":{"packets":"tlshello","lengths":["80-120"]}}"#.to_owned(),
     );
     let (node, _) = value.build(node_id(), credential_ref()).unwrap();
     assert!(node.xray_finalmask_json.is_some());

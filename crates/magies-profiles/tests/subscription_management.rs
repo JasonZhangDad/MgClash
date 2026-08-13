@@ -1,7 +1,8 @@
 use magies_domain::{CredentialRef, SubscriptionName, TimestampMillis};
 use magies_profiles::{
     CredentialCodec, ShareLinkParser, SqliteSubscriptionStore, SubscriptionManagementError,
-    SubscriptionManagementService, SubscriptionUpdate, SubscriptionUrlError, SubscriptionValidators,
+    SubscriptionManagementService, SubscriptionUpdate, SubscriptionUrlError,
+    SubscriptionValidators,
 };
 use magies_storage::{MemorySecretStore, SecretStore, SecretStoreError, SecretValue};
 use uuid::Uuid;
@@ -78,7 +79,16 @@ fn rejects_invalid_urls_before_changing_storage() {
         .create("Invalid", "not a URL", 60, false, None, "", "", None)
         .unwrap_err();
     let unsupported = service
-        .create("File", "file:///tmp/subscription", 60, false, None, "", "", None)
+        .create(
+            "File",
+            "file:///tmp/subscription",
+            60,
+            false,
+            None,
+            "",
+            "",
+            None,
+        )
         .unwrap_err();
 
     assert!(matches!(
@@ -108,7 +118,18 @@ fn edits_settings_and_url_without_losing_fetch_state() {
         .unwrap();
 
     let edited = SubscriptionManagementService::new(&mut store, &secrets)
-        .update(created.id, "Edited", 120, false, false, Some(NEW_URL), None, "", "", None)
+        .update(
+            created.id,
+            "Edited",
+            120,
+            false,
+            false,
+            Some(NEW_URL),
+            None,
+            "",
+            "",
+            None,
+        )
         .unwrap();
 
     assert_eq!(edited.name, SubscriptionName::new("Edited").unwrap());
@@ -210,7 +231,18 @@ fn settings_only_update_does_not_require_the_url_secret() {
     store.insert_subscription(&subscription).unwrap();
 
     let edited = SubscriptionManagementService::new(&mut store, &secrets)
-        .update(subscription.id, "Renamed", 30, true, false, None, None, "", "", None)
+        .update(
+            subscription.id,
+            "Renamed",
+            30,
+            true,
+            false,
+            None,
+            None,
+            "",
+            "",
+            None,
+        )
         .unwrap();
 
     assert_eq!(edited.name.as_str(), "Renamed");
@@ -226,7 +258,9 @@ fn update_reports_missing_subscription_and_missing_previous_url_secret() {
     let missing_id = uuid("018f78b5-2cd0-7000-a9a6-3bccf60951e8");
 
     let missing = SubscriptionManagementService::new(&mut store, &secrets)
-        .update(missing_id, "Missing", 60, false, true, None, None, "", "", None)
+        .update(
+            missing_id, "Missing", 60, false, true, None, None, "", "", None,
+        )
         .unwrap_err();
     assert!(matches!(
         missing,
@@ -244,7 +278,18 @@ fn update_reports_missing_subscription_and_missing_previous_url_secret() {
     .unwrap();
     store.insert_subscription(&subscription).unwrap();
     let missing_secret = SubscriptionManagementService::new(&mut store, &secrets)
-        .update(subscription.id, "Primary", 60, false, true, Some(NEW_URL), None, "", "", None)
+        .update(
+            subscription.id,
+            "Primary",
+            60,
+            false,
+            true,
+            Some(NEW_URL),
+            None,
+            "",
+            "",
+            None,
+        )
         .unwrap_err();
     assert!(matches!(
         missing_secret,

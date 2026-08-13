@@ -26,24 +26,16 @@ fn constructs_and_round_trips_a_valid_subscription() {
 #[test]
 fn filters_subscription_node_names_by_include_and_exclude_keywords() {
     assert!(magies_domain::accepts_subscription_node_name(
-        "HK-01",
-        "HK|TW",
-        "game"
+        "HK-01", "HK|TW", "game"
     ));
     assert!(!magies_domain::accepts_subscription_node_name(
-        "HK-game",
-        "HK|TW",
-        "game"
+        "HK-game", "HK|TW", "game"
     ));
     assert!(!magies_domain::accepts_subscription_node_name(
-        "US-01",
-        "HK|TW",
-        ""
+        "US-01", "HK|TW", ""
     ));
     assert!(magies_domain::accepts_subscription_node_name(
-        "US-01",
-        "",
-        "game"
+        "US-01", "", "game"
     ));
 }
 

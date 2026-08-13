@@ -183,7 +183,7 @@ impl CoreInstallStore {
             .ok()
             .flatten()
             .and_then(|manifest| manifest.sing_box)
-            .map(|entry| entry.into_settings())
+            .map(InstalledCoreEntry::into_settings)
     }
 
     /// Resolves Xray settings from the manifest when present.
@@ -193,7 +193,7 @@ impl CoreInstallStore {
             .ok()
             .flatten()
             .and_then(|manifest| manifest.xray)
-            .map(|entry| entry.into_settings())
+            .map(InstalledCoreEntry::into_settings)
     }
 
     /// Downloads and installs the latest GitHub release for one Core.
@@ -647,14 +647,13 @@ fn extract_zip(
         let mut file = archive
             .by_index(index)
             .map_err(|source| CoreInstallError::ExtractZip { source })?;
-        let Some(name) = file.enclosed_name().map(PathBuf::from) else {
+        let Some(name) = file.enclosed_name() else {
             continue;
         };
         let relative = match nested_prefix {
             Some(prefix) if name.starts_with(Path::new(prefix)) => name
                 .strip_prefix(prefix)
-                .map(|value| value.to_path_buf())
-                .unwrap_or_else(|_| name.clone()),
+                .map_or_else(|_| name.clone(), std::path::Path::to_path_buf),
             Some(_) => continue,
             None => name,
         };
@@ -916,6 +915,11 @@ fn mark_executable(path: &Path) -> Result<(), CoreInstallError> {
 ///
 /// Environment overrides win; otherwise a user-installed binary is preferred
 /// over the bundled artifact.
+///
+/// # Errors
+///
+/// Returns a typed error when neither the environment nor the install store
+/// yields usable Core settings.
 pub fn sing_box_settings_with_store(
     store: Option<&CoreInstallStore>,
 ) -> Result<CoreSettings, CoreSettingsError> {
@@ -931,6 +935,11 @@ pub fn sing_box_settings_with_store(
 }
 
 /// Resolves Xray settings with install-store awareness.
+///
+/// # Errors
+///
+/// Returns a typed error when neither the environment nor the install store
+/// yields usable Core settings.
 pub fn xray_settings_with_store(
     store: Option<&CoreInstallStore>,
 ) -> Result<CoreSettings, CoreSettingsError> {

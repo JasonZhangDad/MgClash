@@ -7,13 +7,15 @@ use magies_storage::{SecretStore, SecretStoreError, SecretValue};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::subscription_url::{
+    SubscriptionUrlError, effective_fetch_urls, split_subscription_urls,
+};
 use crate::{
     CredentialCodec, CredentialCodecError, CredentialIdentity, NodeDedupCandidate,
     NodeDeduplicator, ParsedSubscriptionNode, SqliteSubscriptionStore, SubscriptionContentError,
     SubscriptionContentParser, SubscriptionFetchError, SubscriptionFetchResult,
     SubscriptionFetcher, SubscriptionTransactionError, SubscriptionUpdate, SubscriptionValidators,
 };
-use crate::subscription_url::{SubscriptionUrlError, effective_fetch_urls, split_subscription_urls};
 
 type PendingCredential = (CredentialRef, SecretValue);
 type PendingCredentials = HashMap<String, PendingCredential>;
@@ -76,11 +78,8 @@ impl<'a, S: SecretStore + ?Sized> SubscriptionRefreshService<'a, S> {
         let url = str::from_utf8(url_secret.expose_secret())
             .map_err(|source| SubscriptionRefreshError::InvalidUrlSecret { source })?;
         let sources = split_subscription_urls(url);
-        let fetch_urls = effective_fetch_urls(
-            &sources,
-            subscription.subconverter_url.as_deref(),
-        )
-        .map_err(SubscriptionRefreshError::Url)?;
+        let fetch_urls = effective_fetch_urls(&sources, subscription.subconverter_url.as_deref())
+            .map_err(SubscriptionRefreshError::Url)?;
         let validators = SubscriptionValidators::new(
             subscription.etag.clone(),
             subscription.last_modified.clone(),

@@ -32,7 +32,10 @@ fn parses_a_full_link_with_every_optional_field() {
     assert_eq!(parsed.server().as_str(), "edge.example.com");
     assert_eq!(parsed.port().get(), 51821);
     assert_eq!(parsed.credential().private_key(), "cHJpdmF0ZS1rZXk=");
-    assert_eq!(parsed.credential().peer_public_key(), "cGVlci1wdWJsaWMta2V5");
+    assert_eq!(
+        parsed.credential().peer_public_key(),
+        "cGVlci1wdWJsaWMta2V5"
+    );
     assert_eq!(parsed.credential().pre_shared_key(), Some("cHNr"));
     assert_eq!(
         parsed.credential().local_address(),
@@ -44,7 +47,10 @@ fn parses_a_full_link_with_every_optional_field() {
     assert_eq!(parsed.tls(), None);
 
     let node = parsed
-        .into_proxy_node(node_id(), CredentialRef::new("keychain://nodes/wg").unwrap())
+        .into_proxy_node(
+            node_id(),
+            CredentialRef::new("keychain://nodes/wg").unwrap(),
+        )
         .unwrap();
     assert_eq!(node.protocol_type, ProxyProtocol::WireGuard);
     assert!(node.transport.is_none());
@@ -71,16 +77,20 @@ fn rejects_a_missing_private_key() {
 
 #[test]
 fn rejects_a_missing_public_key() {
-    assert!(WireGuardParser
-        .parse("wireguard://key@edge.example.com?address=10.0.0.2/32")
-        .is_err());
+    assert!(
+        WireGuardParser
+            .parse("wireguard://key@edge.example.com?address=10.0.0.2/32")
+            .is_err()
+    );
 }
 
 #[test]
 fn rejects_a_missing_address() {
-    assert!(WireGuardParser
-        .parse("wireguard://key@edge.example.com?publickey=peer")
-        .is_err());
+    assert!(
+        WireGuardParser
+            .parse("wireguard://key@edge.example.com?publickey=peer")
+            .is_err()
+    );
 }
 
 #[test]
@@ -119,9 +129,8 @@ fn rejects_an_unknown_query_parameter() {
 #[test]
 fn rejects_a_non_empty_path() {
     assert!(matches!(
-        WireGuardParser.parse(
-            "wireguard://key@edge.example.com/tunnel?publickey=peer&address=10.0.0.2/32"
-        ),
+        WireGuardParser
+            .parse("wireguard://key@edge.example.com/tunnel?publickey=peer&address=10.0.0.2/32"),
         Err(WireGuardParseError::UnexpectedPath)
     ));
 }
@@ -129,9 +138,8 @@ fn rejects_a_non_empty_path() {
 #[test]
 fn rejects_a_separate_password() {
     assert!(matches!(
-        WireGuardParser.parse(
-            "wireguard://key:secret@edge.example.com?publickey=peer&address=10.0.0.2/32"
-        ),
+        WireGuardParser
+            .parse("wireguard://key:secret@edge.example.com?publickey=peer&address=10.0.0.2/32"),
         Err(WireGuardParseError::UnexpectedPassword)
     ));
 }

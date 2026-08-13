@@ -59,9 +59,7 @@ pub fn wrap_subconverter(source: &str, base: &str) -> Result<String, Subscriptio
     validate_http_url(base)?;
     let separator = if base.contains('?') { '&' } else { '?' };
     let encoded = utf8_percent_encode(source, SUBCONVERTER_URL);
-    Ok(format!(
-        "{base}{separator}target=v2ray&url={encoded}",
-    ))
+    Ok(format!("{base}{separator}target=v2ray&url={encoded}"))
 }
 
 /// Builds the HTTP(S) URLs the fetcher should request.
@@ -73,7 +71,9 @@ pub fn effective_fetch_urls(
     sources: &[String],
     subconverter: Option<&str>,
 ) -> Result<Vec<String>, SubscriptionUrlError> {
-    let subconverter = subconverter.map(str::trim).filter(|value| !value.is_empty());
+    let subconverter = subconverter
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     sources
         .iter()
         .map(|source| {
@@ -101,9 +101,8 @@ pub fn validated_url_secret(raw: &str) -> Result<SecretValue, SubscriptionUrlErr
         validate_http_url(url)?;
     }
     let normalized = urls.join("\n");
-    SecretValue::new(normalized.into_bytes()).map_err(|source| SubscriptionUrlError::Secret {
-        source,
-    })
+    SecretValue::new(normalized.into_bytes())
+        .map_err(|source| SubscriptionUrlError::Secret { source })
 }
 
 fn validate_http_url(value: &str) -> Result<(), SubscriptionUrlError> {
@@ -125,7 +124,9 @@ pub enum SubscriptionUrlError {
     #[error("unsupported subscription URL scheme: {scheme}")]
     UnsupportedScheme { scheme: String },
     #[error("failed to store the subscription URL secret")]
-    Secret { source: magies_storage::SecretStoreError },
+    Secret {
+        source: magies_storage::SecretStoreError,
+    },
 }
 
 #[cfg(test)]
@@ -146,11 +147,8 @@ mod tests {
 
     #[test]
     fn wraps_subconverter_urls() {
-        let wrapped = wrap_subconverter(
-            "https://example.com/sub",
-            "http://127.0.0.1:25500/sub",
-        )
-        .unwrap();
+        let wrapped =
+            wrap_subconverter("https://example.com/sub", "http://127.0.0.1:25500/sub").unwrap();
         assert!(wrapped.starts_with("http://127.0.0.1:25500/sub?target=v2ray&url="));
         assert!(wrapped.contains("https%3A%2F%2Fexample.com%2Fsub"));
     }

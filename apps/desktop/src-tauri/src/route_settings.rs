@@ -82,7 +82,7 @@ impl RouteSchemeBundle {
                 id: scheme_id.to_owned(),
             });
         }
-        self.active_scheme_id = scheme_id.to_owned();
+        scheme_id.clone_into(&mut self.active_scheme_id);
         Ok(())
     }
 
@@ -91,11 +91,7 @@ impl RouteSchemeBundle {
     /// # Errors
     ///
     /// Returns a typed error when `name` is blank or `scheme_id` already exists.
-    pub fn add_scheme(
-        &mut self,
-        scheme_id: String,
-        name: String,
-    ) -> Result<(), RouteSettingsError> {
+    pub fn add_scheme(&mut self, scheme_id: String, name: &str) -> Result<(), RouteSettingsError> {
         let name = name.trim();
         if name.is_empty() {
             return Err(RouteSettingsError::EmptySchemeName);
@@ -141,6 +137,11 @@ impl RouteSchemeBundle {
     /// # Errors
     ///
     /// Returns a typed matcher or profile error.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the bundle lost its active scheme, which its own
+    /// constructors and `select_scheme` make impossible.
     pub fn set_active_settings(
         &mut self,
         settings: RouteSettings,

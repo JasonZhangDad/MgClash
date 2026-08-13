@@ -492,6 +492,12 @@ pub fn describe(error: &dyn Error) -> String {
     message
 }
 
+/// Reads the installed sing-box version, preferring a user-installed binary.
+///
+/// # Errors
+///
+/// Returns a typed error when the Core settings cannot be resolved or the
+/// binary does not report a version.
 pub fn read_sing_box_version_from_settings_with_store(
     install: Option<&crate::core_install::CoreInstallStore>,
 ) -> Result<String, SingBoxVersionReadError> {

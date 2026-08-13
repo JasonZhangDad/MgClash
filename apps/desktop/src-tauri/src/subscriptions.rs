@@ -385,6 +385,10 @@ pub enum DesktopSubscriptionError {
 
 impl DesktopSubscriptionError {
     #[must_use]
+    #[expect(
+        clippy::match_same_arms,
+        reason = "unrelated failures that share a code stay separate arms"
+    )]
     pub const fn code(&self) -> &'static str {
         match self {
             Self::Management(error) => management_error_code(error),

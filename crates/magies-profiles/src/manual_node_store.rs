@@ -207,10 +207,7 @@ impl SqliteManualNodeStore {
     ///
     /// Rejects subscription-owned nodes, more than one selected row, and
     /// returns serialization or database errors without a partial write.
-    pub fn replace_all(
-        &mut self,
-        nodes: &[(ProxyNode, bool)],
-    ) -> Result<(), ManualNodeStoreError> {
+    pub fn replace_all(&mut self, nodes: &[(ProxyNode, bool)]) -> Result<(), ManualNodeStoreError> {
         let selected = nodes.iter().filter(|(_, selected)| *selected).count();
         if selected > 1 {
             return Err(ManualNodeStoreError::MultipleSelected { count: selected });

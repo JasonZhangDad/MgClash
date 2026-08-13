@@ -1,10 +1,10 @@
 //! Node import and profile services for `MgClash`.
 
 mod anytls;
-mod custom;
 mod bulk_import;
 mod core_capability;
 mod credential_codec;
+mod custom;
 mod diagnostics;
 mod dns_config;
 mod http_proxy;
@@ -40,7 +40,6 @@ mod xray_outbound;
 mod xray_runtime_config;
 
 pub use anytls::{AnyTlsCredential, AnyTlsParseError, AnyTlsParser, ParsedAnyTlsNode};
-pub use custom::CustomCredential;
 pub use bulk_import::{
     BulkImportError, BulkImportFailure, BulkImportLineError, BulkImportOutcome,
     BulkNodeImportParser, ParsedBulkNode, node_fingerprint,
@@ -50,6 +49,7 @@ pub use core_capability::{
     CoreSelectionError, architecture_name, core_name, parse_core_name, protocol_name,
 };
 pub use credential_codec::{CredentialCodec, CredentialCodecError, StoredNodeCredential};
+pub use custom::CustomCredential;
 pub use diagnostics::{DiagnosticRedactor, REDACTED};
 pub use dns_config::{
     DnsConfigError, DnsProfile, DnsRule, DnsServer, DnsStrategy, GeneratedDnsConfig,
@@ -130,10 +130,9 @@ pub use wireguard::{
 };
 pub use xray_dns_config::{FAKE_DNS_SERVER, XrayDnsConfigGenerator};
 pub use xray_outbound::{
-    FRAGMENT_OUTBOUND_TAG, GeneratedXrayOutbound, XrayOutboundConfigGenerator, XrayOutboundError,
-    apply_xray_fragment, apply_xray_final_fragment, apply_xray_mux, normalize_xray_finalmask_tcp,
-    xray_finalmask_fragment_mask, XrayFinalmaskError,
-    xray_fragment_outbound,
+    FRAGMENT_OUTBOUND_TAG, GeneratedXrayOutbound, XrayFinalmaskError, XrayOutboundConfigGenerator,
+    XrayOutboundError, apply_xray_final_fragment, apply_xray_fragment, apply_xray_mux,
+    normalize_xray_finalmask_tcp, xray_finalmask_fragment_mask, xray_fragment_outbound,
     xray_fragment_outbound_with_options,
 };
 pub use xray_runtime_config::{

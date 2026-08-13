@@ -208,7 +208,7 @@ fn replace_node_items(
             submenu.append(&CheckMenuItem::with_id(
                 app,
                 node_menu_id(node.id),
-                &format_tray_node_label(&node.name, node.latency_ms),
+                format_tray_node_label(&node.name, node.latency_ms),
                 node.enabled,
                 node.selected,
                 None::<&str>,

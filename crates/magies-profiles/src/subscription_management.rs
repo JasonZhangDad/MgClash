@@ -191,7 +191,8 @@ impl<'a, S: SecretStore + ?Sized> SubscriptionManagementService<'a, S> {
         edited.subconverter_url = normalize_optional_text(subconverter_url);
 
         let previous_url = if let Some(new_url) = new_url {
-            let new_url = validated_url_secret(new_url).map_err(SubscriptionManagementError::Url)?;
+            let new_url =
+                validated_url_secret(new_url).map_err(SubscriptionManagementError::Url)?;
             let previous_url = self
                 .secret_store
                 .get(&edited.url_secret_ref)

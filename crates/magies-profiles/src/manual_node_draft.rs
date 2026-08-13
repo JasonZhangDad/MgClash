@@ -13,7 +13,9 @@
 
 use std::fmt::{Debug, Formatter};
 
-use magies_domain::{CredentialRef, CoreType, NodeModelError, ProxyNode, TlsConfig, TransportConfig};
+use magies_domain::{
+    CoreType, CredentialRef, NodeModelError, ProxyNode, TlsConfig, TransportConfig,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -110,7 +112,8 @@ impl ManualNodeDraft {
         node.transport = transport;
         node.tls = tls;
         node.udp_enabled = self.udp_enabled;
-        node.xray_finalmask_json = parse_xray_finalmask_json(&credential, self.xray_finalmask_json)?;
+        node.xray_finalmask_json =
+            parse_xray_finalmask_json(&credential, self.xray_finalmask_json)?;
         Ok((node, credential))
     }
 }
@@ -334,10 +337,7 @@ pub enum ManualCredentialDraft {
         quic_congestion_control: Option<NaiveCongestionControl>,
     },
     #[serde(rename_all = "camelCase")]
-    Custom {
-        core: CoreType,
-        document: String,
-    },
+    Custom { core: CoreType, document: String },
 }
 
 impl ManualCredentialDraft {

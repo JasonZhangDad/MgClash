@@ -55,7 +55,10 @@ fn rejects_blank_group_names_without_changing_the_assignment() {
 #[test]
 fn persists_urltest_strategy_on_an_existing_group() {
     let mut store = SqliteNodeGroupStore::open_in_memory().unwrap();
-    let group = store.assign(Uuid::from_u128(1), Some("Auto")).unwrap().unwrap();
+    let group = store
+        .assign(Uuid::from_u128(1), Some("Auto"))
+        .unwrap()
+        .unwrap();
     assert_eq!(group.strategy, NodeGroupStrategy::Select);
 
     let updated = store
@@ -80,10 +83,7 @@ fn snapshot_and_replace_all_round_trip() {
     store.assign(manual.id, Some("Work")).unwrap();
     store.assign(managed.id, Some("Work")).unwrap();
     store
-        .set_strategy(
-            store.groups().unwrap()[0].id,
-            NodeGroupStrategy::UrlTest,
-        )
+        .set_strategy(store.groups().unwrap()[0].id, NodeGroupStrategy::UrlTest)
         .unwrap();
     let snapshot = store.snapshot().unwrap();
     assert_eq!(snapshot.len(), 1);

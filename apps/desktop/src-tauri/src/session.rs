@@ -74,6 +74,10 @@ fn host_architecture() -> CpuArchitecture {
 
 /// Fixed session settings the V0.1 shell does not let the user edit yet.
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent Core toggles the UI exposes one by one"
+)]
 pub struct SessionDefaults {
     pub socks: LocalSocksProfile,
     pub http: LocalHttpProfile,
@@ -87,7 +91,7 @@ pub struct SessionDefaults {
     /// Fragment anti-detection toggle).
     pub fragment_enabled: bool,
     /// When true the next connect applies Final (tail) TLS fragmentation
-    /// (v2rayN's EnableFinalFragment).
+    /// (v2rayN's `EnableFinalFragment`).
     pub final_fragment_enabled: bool,
     /// When true the next connect sends v2rayN-style UDP noise via Xray freedom
     /// `noises` (Xray only).
@@ -735,7 +739,7 @@ where
             .nodes()
             .map_err(SessionCommandError::NodeStore)?
         {
-            let _ = self
+            let () = self
                 .session
                 .secret_store()
                 .delete(&node.credential_ref)
@@ -1555,7 +1559,7 @@ where
         }
         let scheme_id = Uuid::new_v4().to_string();
         self.current_route_bundle
-            .add_scheme(scheme_id, name.to_owned())
+            .add_scheme(scheme_id, name)
             .map_err(SessionCommandError::InvalidRouteSettings)?;
         self.route_settings
             .save_bundle(&self.current_route_bundle)
@@ -1808,6 +1812,10 @@ where
         }
     }
 
+    #[expect(
+        clippy::type_complexity,
+        reason = "one private helper's return; a type alias would hide the shape"
+    )]
     fn group_members_for(
         &self,
         selected: &ProxyNode,

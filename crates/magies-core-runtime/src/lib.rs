@@ -230,10 +230,12 @@ impl CoreRuntime {
         for (key, value) in &spec.environment {
             child.env(key, value);
         }
-        let mut child = child.spawn().map_err(|source| CoreRuntimeError::SpawnFailed {
-            executable: binary.path().to_path_buf(),
-            source,
-        })?;
+        let mut child = child
+            .spawn()
+            .map_err(|source| CoreRuntimeError::SpawnFailed {
+                executable: binary.path().to_path_buf(),
+                source,
+            })?;
         let stdout = child.stdout.take().ok_or_else(|| {
             cleanup_started_child(&mut child, Vec::new());
             CoreRuntimeError::OutputPipeUnavailable(CoreOutputStream::Stdout)

@@ -35,7 +35,10 @@ fn a_fresh_install_uses_the_documented_defaults() {
     assert_eq!(settings.clash_api_port, 9_090);
     assert!(!settings.mux_enabled);
     assert!(!settings.auto_select_lowest_latency);
-    assert_eq!(settings.url_test_address, "https://www.gstatic.com/generate_204");
+    assert_eq!(
+        settings.url_test_address,
+        "https://www.gstatic.com/generate_204"
+    );
     assert!(!settings.allow_lan);
     assert_eq!(
         settings.speed_test_url,

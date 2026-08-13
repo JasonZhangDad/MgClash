@@ -68,8 +68,8 @@ pub async fn check_core_updates(
 
     let sing_box_body = fetch_release_body(&client, SING_BOX_RELEASE_API).await?;
     let xray_body = fetch_release_body(&client, XRAY_RELEASE_API).await?;
-    let sing_box_release = parse_release_body(sing_box_body, SING_BOX_RELEASE_HTML)?;
-    let xray_release = parse_release_body(xray_body, XRAY_RELEASE_HTML)?;
+    let sing_box_release = parse_release_body(&sing_box_body, SING_BOX_RELEASE_HTML)?;
+    let xray_release = parse_release_body(&xray_body, XRAY_RELEASE_HTML)?;
 
     let install_status = match install {
         Some(store) => store
@@ -175,14 +175,14 @@ async fn fetch_release_body(
         })
 }
 
-fn parse_release_body(body: String, fallback_html: &str) -> Result<GithubRelease, CoreUpdateError> {
+fn parse_release_body(body: &str, fallback_html: &str) -> Result<GithubRelease, CoreUpdateError> {
     if body.is_empty() {
         return Ok(GithubRelease {
             tag_name: String::new(),
             html_url: fallback_html.to_owned(),
         });
     }
-    serde_json::from_str(&body).map_err(|source| CoreUpdateError::ParseRelease { source })
+    serde_json::from_str(body).map_err(|source| CoreUpdateError::ParseRelease { source })
 }
 
 #[derive(Clone, Debug, Deserialize)]

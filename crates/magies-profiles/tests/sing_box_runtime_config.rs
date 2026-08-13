@@ -1,6 +1,8 @@
 use std::num::NonZeroU16;
 
-use magies_domain::{CoreType, CredentialRef, ProxyNode, ProxyProtocol, ServerAddress, TransportConfig};
+use magies_domain::{
+    CoreType, CredentialRef, ProxyNode, ProxyProtocol, ServerAddress, TransportConfig,
+};
 use magies_platform::OperatingSystem;
 use magies_profiles::{
     DnsProfile, DnsServer, DnsStrategy, LocalHttpProfile, LocalSocksProfile, NodeCredential,

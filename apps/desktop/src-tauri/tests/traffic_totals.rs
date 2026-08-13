@@ -320,17 +320,10 @@ fn clearing_zeros_aggregate_and_per_node_totals() {
     let mut counter = SqliteTrafficCounter::open_in_memory(day(2026, 8, 11), started_at).unwrap();
     let node = Uuid::from_u128(7);
     counter
-        .record(
-            day(2026, 8, 11),
-            split_rate(12, 34),
-            started_at,
-            Some(node),
-        )
+        .record(day(2026, 8, 11), split_rate(12, 34), started_at, Some(node))
         .unwrap();
 
-    counter
-        .clear(day(2026, 8, 11), started_at)
-        .unwrap();
+    counter.clear(day(2026, 8, 11), started_at).unwrap();
 
     assert!(counter.node_totals().is_empty());
     let snapshot = counter.snapshot();

@@ -330,9 +330,9 @@ impl SqliteNodeGroupStore {
                 group_id TEXT NOT NULL REFERENCES node_groups(id)
              );",
         )?;
-        if let Err(error) =
-            connection.execute_batch("ALTER TABLE node_groups ADD COLUMN strategy TEXT NOT NULL DEFAULT 'select';")
-            && !error.to_string().contains("duplicate column")
+        if let Err(error) = connection.execute_batch(
+            "ALTER TABLE node_groups ADD COLUMN strategy TEXT NOT NULL DEFAULT 'select';",
+        ) && !error.to_string().contains("duplicate column")
         {
             return Err(error.into());
         }
