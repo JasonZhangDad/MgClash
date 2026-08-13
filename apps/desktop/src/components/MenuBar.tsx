@@ -83,47 +83,47 @@ export function MenuBar({
         <details className="menu">
           <summary>{t("服务器")}</summary>
           <div className="menu-panel" role="menu">
-            <button type="button" role="menuitem" disabled={busy || connected} onClick={() => onAddServer("vless")}>
+            <button type="button" role="menuitem" disabled={busy} onClick={() => onAddServer("vless")}>
               {t("添加")} VLESS {t("服务器")}
             </button>
-            <button type="button" role="menuitem" disabled={busy || connected} onClick={() => onAddServer("vmess")}>
+            <button type="button" role="menuitem" disabled={busy} onClick={() => onAddServer("vmess")}>
               {t("添加")} VMess {t("服务器")}
             </button>
-            <button type="button" role="menuitem" disabled={busy || connected} onClick={() => onAddServer("shadowsocks")}>
+            <button type="button" role="menuitem" disabled={busy} onClick={() => onAddServer("shadowsocks")}>
               {t("添加")} Shadowsocks {t("服务器")}
             </button>
-            <button type="button" role="menuitem" disabled={busy || connected} onClick={() => onAddServer("trojan")}>
+            <button type="button" role="menuitem" disabled={busy} onClick={() => onAddServer("trojan")}>
               {t("添加")} Trojan {t("服务器")}
             </button>
-            <button type="button" role="menuitem" disabled={busy || connected} onClick={() => onAddServer("hysteria2")}>
+            <button type="button" role="menuitem" disabled={busy} onClick={() => onAddServer("hysteria2")}>
               {t("添加")} Hysteria2 {t("服务器")}
             </button>
-            <button type="button" role="menuitem" disabled={busy || connected} onClick={() => onAddServer("tuic")}>
+            <button type="button" role="menuitem" disabled={busy} onClick={() => onAddServer("tuic")}>
               {t("添加")} TUIC {t("服务器")}
             </button>
-            <button type="button" role="menuitem" disabled={busy || connected} onClick={() => onAddServer("socks")}>
+            <button type="button" role="menuitem" disabled={busy} onClick={() => onAddServer("socks")}>
               {t("添加")} SOCKS5 {t("服务器")}
             </button>
-            <button type="button" role="menuitem" disabled={busy || connected} onClick={() => onAddServer("http")}>
+            <button type="button" role="menuitem" disabled={busy} onClick={() => onAddServer("http")}>
               {t("添加")} HTTP {t("服务器")}
             </button>
-            <button type="button" role="menuitem" disabled={busy || connected} onClick={() => onAddServer("wireguard")}>
+            <button type="button" role="menuitem" disabled={busy} onClick={() => onAddServer("wireguard")}>
               {t("添加")} WireGuard {t("服务器")}
             </button>
-            <button type="button" role="menuitem" disabled={busy || connected} onClick={() => onAddServer("anytls")}>
+            <button type="button" role="menuitem" disabled={busy} onClick={() => onAddServer("anytls")}>
               {t("添加")} AnyTLS {t("服务器")}
             </button>
-            <button type="button" role="menuitem" disabled={busy || connected} onClick={() => onAddServer("naive")}>
+            <button type="button" role="menuitem" disabled={busy} onClick={() => onAddServer("naive")}>
               {t("添加")} Naive {t("服务器")}
             </button>
-            <button type="button" role="menuitem" disabled={busy || connected} onClick={() => onAddServer("custom")}>
+            <button type="button" role="menuitem" disabled={busy} onClick={() => onAddServer("custom")}>
               {t("添加自定义配置")}
             </button>
             <hr />
-            <button type="button" role="menuitem" disabled={busy || connected} onClick={onOpenCreate}>
+            <button type="button" role="menuitem" disabled={busy} onClick={onOpenCreate}>
               {t("手动创建")}
             </button>
-            <button type="button" role="menuitem" disabled={busy || connected} onClick={onOpenImport}>
+            <button type="button" role="menuitem" disabled={busy} onClick={onOpenImport}>
               {t("导入节点")}
             </button>
             <button type="button" role="menuitem" disabled={busy} onClick={onExportAllLinks}>

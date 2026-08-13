@@ -468,9 +468,6 @@ where
         &mut self,
         uri: &str,
     ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
-        if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
-        }
         let id = Uuid::new_v4();
         let credential_ref =
             CredentialRef::new(format!("node/{id}")).map_err(SessionCommandError::CredentialRef)?;
@@ -491,9 +488,6 @@ where
         &mut self,
         draft: ManualNodeDraft,
     ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
-        if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
-        }
         let id = Uuid::new_v4();
         let credential_ref =
             CredentialRef::new(format!("node/{id}")).map_err(SessionCommandError::CredentialRef)?;
@@ -557,9 +551,7 @@ where
         id: Uuid,
         draft: ManualNodeDraft,
     ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
-        if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
-        }
+        self.reject_running_node(id)?;
         let existing = self
             .manual_nodes
             .nodes()
@@ -618,9 +610,6 @@ where
         &mut self,
         content: &[u8],
     ) -> Result<BulkImportReport, SessionCommandError<C::Error, P::Error>> {
-        if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
-        }
         let outcome = BulkNodeImportParser
             .parse(content)
             .map_err(SessionCommandError::BulkImport)?;
@@ -873,7 +862,15 @@ where
             .put(&node.credential_ref, &secret)
             .map_err(SessionCommandError::Secret)?;
 
-        if let Err(store) = self.manual_nodes.save_and_select(&node) {
+        // A running session keeps the server it started with: adding one is
+        // not a request to switch to it.
+        let running = self.session.is_running();
+        let saved = if running {
+            self.manual_nodes.save(&node)
+        } else {
+            self.manual_nodes.save_and_select(&node)
+        };
+        if let Err(store) = saved {
             return match self.session.secret_store().delete(&node.credential_ref) {
                 Ok(()) => Err(SessionCommandError::NodeStore(store)),
                 Err(secret) => {
@@ -881,11 +878,12 @@ where
                 }
             };
         }
-        self.subscription_nodes
-            .clear_selected_node()
-            .map_err(SessionCommandError::SubscriptionNodeStore)?;
-
-        self.node = Some(node);
+        if !running {
+            self.subscription_nodes
+                .clear_selected_node()
+                .map_err(SessionCommandError::SubscriptionNodeStore)?;
+            self.node = Some(node);
+        }
         Ok(self.status())
     }
 
@@ -944,9 +942,6 @@ where
         &mut self,
         id: Uuid,
     ) -> Result<Vec<NodeSummary>, SessionCommandError<C::Error, P::Error>> {
-        if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
-        }
         let source = self
             .manual_nodes
             .nodes()
@@ -1299,6 +1294,18 @@ where
         Ok(self.status())
     }
 
+    /// Rejects a change to the node the Core is currently running.
+    ///
+    /// Everything else in the list stays editable while connected: adding,
+    /// renaming or deleting some other server does not touch the running
+    /// config, and making the user disconnect for it is what v2rayN does not do.
+    fn reject_running_node(&self, id: Uuid) -> Result<(), SessionCommandError<C::Error, P::Error>> {
+        if self.session.is_running() && self.node.as_ref().is_some_and(|node| node.id == id) {
+            return Err(SessionCommandError::SessionActive);
+        }
+        Ok(())
+    }
+
     /// Applies a change the Core only reads at startup, restarting it around
     /// the change so the user does not have to disconnect by hand.
     ///
@@ -1359,9 +1366,7 @@ where
         id: Uuid,
         enabled: bool,
     ) -> Result<Vec<NodeSummary>, SessionCommandError<C::Error, P::Error>> {
-        if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
-        }
+        self.reject_running_node(id)?;
 
         let manual = self
             .manual_nodes
@@ -1414,9 +1419,7 @@ where
         server: impl Into<String>,
         port: u32,
     ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
-        if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
-        }
+        self.reject_running_node(id)?;
         let mut node = self
             .manual_nodes
             .nodes()
@@ -1615,9 +1618,7 @@ where
         &mut self,
         id: Uuid,
     ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
-        if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
-        }
+        self.reject_running_node(id)?;
         let node = match self.manual_nodes.delete(id) {
             Ok(node) => node,
             Err(error @ ManualNodeStoreError::NodeNotFound { .. }) => {

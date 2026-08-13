@@ -3570,6 +3570,34 @@ describe("App", () => {
     expect(container.querySelector("[aria-label='消息窗口']")).not.toBeNull();
   });
 
+  it("adds and imports servers while connected", async () => {
+    loadSessionStatusMock.mockResolvedValue(CONNECTED);
+    loadNodesMock.mockResolvedValue([CONNECTED.node]);
+    await render();
+
+    expect(button("添加 VLESS 服务器").disabled).toBe(false);
+    expect(button("手动创建").disabled).toBe(false);
+    expect(button("导入节点").disabled).toBe(false);
+  });
+
+  it("edits other servers while connected but not the running one", async () => {
+    const osaka = {
+      ...SELECTED.node!,
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Osaka",
+    };
+    loadSessionStatusMock.mockResolvedValue(CONNECTED);
+    loadNodesMock.mockResolvedValue([CONNECTED.node, osaka]);
+    await render();
+
+    expect(await nodeMenuItemDisabled("Osaka", "编辑")).toBe(false);
+    expect(await nodeMenuItemDisabled("Osaka", "移除所选")).toBe(false);
+    expect(await nodeMenuItemDisabled("Osaka", "禁用节点")).toBe(false);
+    expect(await nodeMenuItemDisabled("Tokyo Edge", "编辑")).toBe(true);
+    expect(await nodeMenuItemDisabled("Tokyo Edge", "移除所选")).toBe(true);
+    expect(await nodeMenuItemDisabled("Tokyo Edge", "禁用节点")).toBe(true);
+  });
+
   it("opens create forms for each protocol and the vertical layout", async () => {
     await render();
 

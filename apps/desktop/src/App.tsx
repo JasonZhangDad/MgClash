@@ -2303,7 +2303,7 @@ export default function App() {
                           <button
                             type="button"
                             role="menuitem"
-                            disabled={busy || connected}
+                            disabled={busy || (connected && selected)}
                             onClick={act(() =>
                               void run(async () => {
                                 setNodes(
@@ -2344,7 +2344,7 @@ export default function App() {
                           <button
                             type="button"
                             role="menuitem"
-                            disabled={busy || connected || !target.deletable}
+                            disabled={busy || !target.deletable}
                             onClick={act(() => void onCloneNode(target.id))}
                           >
                             {t("克隆所选")}
@@ -2419,7 +2419,7 @@ export default function App() {
                             <button
                               type="button"
                               role="menuitem"
-                              disabled={busy || connected}
+                              disabled={busy || (connected && selected)}
                               onClick={act(() => void onEditNode(target))}
                             >
                               {t("编辑")}
@@ -2431,7 +2431,11 @@ export default function App() {
                             type="button"
                             role="menuitem"
                             className="danger"
-                            disabled={busy || connected || !target.deletable}
+                            disabled={
+                              busy ||
+                              !target.deletable ||
+                              (connected && batch.some((id) => id === node?.id))
+                            }
                             onClick={act(() =>
                               batch.length > 1
                                 ? void onDeleteNodes(batch)

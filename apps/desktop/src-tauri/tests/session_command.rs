@@ -258,18 +258,15 @@ fn importing_an_unreadable_list_is_a_typed_error() {
 }
 
 #[test]
-fn refuses_to_import_a_list_while_connected() {
+fn imports_a_list_while_connected_without_switching_the_running_node() {
     let (mut service, _runtime, _fail_start) = service();
-    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    let tokyo = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
     service.connect().unwrap();
 
-    assert_eq!(
-        service
-            .import_nodes(OSAKA_LINK.as_bytes())
-            .unwrap_err()
-            .code(),
-        "session_active"
-    );
+    let report = service.import_nodes(OSAKA_LINK.as_bytes()).unwrap();
+
+    assert_eq!(report.imported, 1);
+    assert_eq!(service.status().node.as_ref().unwrap().id, tokyo.id);
 }
 
 #[test]
@@ -995,7 +992,7 @@ fn synchronization_drops_a_subscription_node_that_was_disabled() {
 }
 
 #[test]
-fn refuses_to_change_nodes_while_connected() {
+fn refuses_to_touch_the_running_node_while_connected() {
     let (mut service, _runtime, _fail_start) = service();
     let node = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
     service.connect().unwrap();
@@ -1009,16 +1006,76 @@ fn refuses_to_change_nodes_while_connected() {
         "session_active"
     );
     assert_eq!(
-        service.import_node(SHADOWSOCKS_LINK).unwrap_err().code(),
-        "session_active"
-    );
-    assert_eq!(
         service
-            .create_node(trojan_draft("Frankfurt", 8443))
+            .edit_node(node.id, "Renamed", "edge.example.com", 443)
             .unwrap_err()
             .code(),
         "session_active"
     );
+    assert_eq!(
+        service.set_node_enabled(node.id, false).unwrap_err().code(),
+        "session_active"
+    );
+}
+
+#[test]
+fn adds_nodes_while_connected_without_switching_the_running_one() {
+    let (mut service, _runtime, _fail_start) = service();
+    let tokyo = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
+    service.connect().unwrap();
+
+    let status = service
+        .import_node("ss://aes-128-gcm:runtime-secret@edge.example.com:9000#Osaka")
+        .unwrap();
+
+    assert!(status.connected);
+    assert_eq!(status.node.as_ref().unwrap().id, tokyo.id);
+
+    service
+        .create_node(trojan_draft("Frankfurt", 8443))
+        .unwrap();
+    service.clone_node(tokyo.id).unwrap();
+
+    assert_eq!(service.nodes().unwrap().len(), 4);
+    assert_eq!(service.status().node.as_ref().unwrap().id, tokyo.id);
+    assert!(service.status().connected);
+}
+
+#[test]
+fn imports_a_list_while_connected() {
+    let (mut service, _runtime, _fail_start) = service();
+    let tokyo = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
+    service.connect().unwrap();
+
+    let report = service
+        .import_nodes(b"ss://aes-128-gcm:runtime-secret@edge.example.com:9000#Osaka")
+        .unwrap();
+
+    assert_eq!(report.imported, 1);
+    assert_eq!(service.status().node.as_ref().unwrap().id, tokyo.id);
+}
+
+#[test]
+fn edits_and_deletes_other_nodes_while_connected() {
+    let (mut service, _runtime, _fail_start) = service();
+    let tokyo = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
+    let osaka = service
+        .import_node("ss://aes-128-gcm:runtime-secret@edge.example.com:9000#Osaka")
+        .unwrap()
+        .node
+        .unwrap();
+    service.select_node(tokyo.id).unwrap();
+    service.connect().unwrap();
+
+    service
+        .edit_node(osaka.id, "Osaka 2", "edge2.example.com", 9001)
+        .unwrap();
+    service.set_node_enabled(osaka.id, false).unwrap();
+    let status = service.delete_node(osaka.id).unwrap();
+
+    assert!(status.connected);
+    assert_eq!(status.node.as_ref().unwrap().id, tokyo.id);
+    assert_eq!(service.nodes().unwrap().len(), 1);
 }
 
 #[test]
