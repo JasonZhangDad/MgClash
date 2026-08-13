@@ -3490,6 +3490,76 @@ describe("App", () => {
     expect(document.documentElement.dataset.theme).toBe("light");
   });
 
+  it("groups nodes by policy group in the proxies tab", async () => {
+    const work = {
+      id: "00000000-0000-0000-0000-000000000020",
+      name: "Work",
+      strategy: "urlTest" as const,
+    };
+    const osaka = {
+      ...SELECTED.node!,
+      groupId: work.id,
+      id: "00000000-0000-0000-0000-000000000002",
+      latencyMs: 88,
+      name: "Osaka",
+    };
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadNodeGroupsMock.mockResolvedValue([work]);
+    loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
+    setNodeGroupStrategyMock.mockResolvedValue([{ ...work, strategy: "select" }]);
+    switchNodeMock.mockResolvedValue({ ...SELECTED, node: osaka });
+    await render();
+
+    await act(async () => button("代理组").click());
+
+    const rows = [
+      ...container.querySelectorAll("[aria-label='代理组节点'] tbody tr"),
+    ];
+    expect(rows.map((row) => row.textContent)).toEqual([
+      expect.stringContaining("Osaka"),
+    ]);
+    expect(rows[0]?.textContent).toContain("88 ms");
+
+    const strategy = container.querySelector<HTMLSelectElement>(
+      "[aria-label='代理组策略']",
+    );
+    await act(async () => selectValue("select", strategy!));
+    expect(setNodeGroupStrategyMock).toHaveBeenCalledWith(work.id, "select");
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>("[aria-label='设为活动 Osaka']")
+        ?.click(),
+    );
+    expect(switchNodeMock).toHaveBeenCalledWith(osaka.id);
+  });
+
+  it("tests every node of the selected policy group", async () => {
+    const work = {
+      id: "00000000-0000-0000-0000-000000000020",
+      name: "Work",
+      strategy: "select" as const,
+    };
+    const osaka = {
+      ...SELECTED.node!,
+      groupId: work.id,
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Osaka",
+    };
+    loadNodeGroupsMock.mockResolvedValue([work]);
+    loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
+    await render();
+
+    await act(async () => button("代理组").click());
+    await act(async () => button("测试本组延迟").click());
+
+    expect(testAllNodesMock).toHaveBeenCalledWith(
+      [osaka.id],
+      expect.any(Function),
+      expect.any(Function),
+    );
+  });
+
   it("lists live connections and closes them from the connections tab", async () => {
     loadSessionStatusMock.mockResolvedValue(CONNECTED);
     loadConnectionsMock.mockResolvedValue({

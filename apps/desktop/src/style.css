@@ -246,6 +246,19 @@ button {
   border-right: 1px solid var(--line);
 }
 
+/* The proxy-group view has the same shape as the profiles pane: a group rail on
+   the left, its toolbar and node table to the right. */
+.proxies-pane {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+}
+
 /* The connection table replaces both panes of the split while its tab is open. */
 .connections-pane {
   grid-column: 1 / -1;

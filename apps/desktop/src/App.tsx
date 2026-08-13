@@ -155,6 +155,7 @@ import { MenuBar } from "./components/MenuBar";
 import { StatusBar } from "./components/StatusBar";
 import { MsgView } from "./components/MsgView";
 import { ConnectionsView } from "./components/ConnectionsView";
+import { ProxiesView } from "./components/ProxiesView";
 import { Dialog } from "./components/Dialog";
 
 function nodeGroupStrategyBadge(
@@ -244,6 +245,7 @@ export default function App() {
     null,
   );
   const [connectionQuery, setConnectionQuery] = useState("");
+  const [proxyGroupId, setProxyGroupId] = useState<string | null>(null);
   const [nodeQuery, setNodeQuery] = useState("");
   const [inspectedId, setInspectedId] = useState<string | null>(null);
   const [bulkText, setBulkText] = useState("");
@@ -1935,7 +1937,7 @@ export default function App() {
         )}
 
         <div className={`main-split layout-${layout}`}>
-          {mainTab !== "connections" &&
+          {mainTab === "profiles" &&
             (layout !== "tab" || mainTab === "profiles") && (
             <section className="profiles-pane">
               <nav className="group-rail" aria-label={t("节点分组筛选")}>
@@ -2607,6 +2609,25 @@ export default function App() {
               </div>
             </section>
           )}
+          {mainTab === "proxies" && (
+            <ProxiesView
+              busy={busy}
+              groups={nodeGroups}
+              nodes={nodes}
+              activeNodeId={node?.id ?? null}
+              selectedGroupId={proxyGroupId}
+              testing={nodeTestInProgress}
+              t={t}
+              onSelectGroup={setProxyGroupId}
+              onStrategy={(groupId, strategy) =>
+                void run(async () => {
+                  setNodeGroups(await saveNodeGroupStrategy(groupId, strategy));
+                })
+              }
+              onTestGroup={(ids) => void onTestNodes(ids)}
+              onActivate={(id) => void run(() => switchNode(id))}
+            />
+          )}
           {mainTab === "connections" && (
             <ConnectionsView
               busy={busy}
@@ -2636,6 +2657,7 @@ export default function App() {
             />
           )}
           {mainTab !== "connections" &&
+            mainTab !== "proxies" &&
             msgVisible &&
             (layout !== "tab" || mainTab === "msg") && (
             <MsgView
@@ -2659,6 +2681,13 @@ export default function App() {
             onClick={() => setMainTab("profiles")}
           >
             {t("服务器")}
+          </button>
+          <button
+            type="button"
+            className={mainTab === "proxies" ? "active" : undefined}
+            onClick={() => setMainTab("proxies")}
+          >
+            {t("代理组")}
           </button>
           <button
             type="button"

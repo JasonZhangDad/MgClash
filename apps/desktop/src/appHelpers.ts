@@ -27,7 +27,7 @@ export type DialogId =
   | null;
 
 export type MainLayout = "horizontal" | "vertical" | "tab";
-export type MainTab = "profiles" | "connections" | "msg";
+export type MainTab = "profiles" | "proxies" | "connections" | "msg";
 export type ThemeMode = "light" | "dark";
 
 export const TUN_LABEL: Record<PlatformSummary["tunAvailability"], string> = {

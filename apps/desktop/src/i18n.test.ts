@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 // can call `t(...)` has to be scanned, not just App.tsx.
 import appSource from "./App.tsx?raw";
 import connectionsViewSource from "./components/ConnectionsView.tsx?raw";
+import proxiesViewSource from "./components/ProxiesView.tsx?raw";
 import dialogSource from "./components/Dialog.tsx?raw";
 import menuBarSource from "./components/MenuBar.tsx?raw";
 import msgViewSource from "./components/MsgView.tsx?raw";
@@ -31,6 +32,7 @@ function usedKeys(): string[] {
   const source = [
     appSource,
     connectionsViewSource,
+    proxiesViewSource,
     menuBarSource,
     statusBarSource,
     msgViewSource,
