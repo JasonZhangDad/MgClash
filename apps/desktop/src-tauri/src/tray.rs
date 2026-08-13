@@ -262,7 +262,9 @@ pub fn menu_model(
         toggle_text: if status.connected { "断开" } else { "连接" },
         toggle_enabled: status.connected || selected_id.is_some(),
         mode,
-        mode_enabled: !status.connected,
+        // The session restarts around a routing-mode change, so the tray offers
+        // it while connected exactly as the window does.
+        mode_enabled: true,
         nodes: ordered_nodes
             .iter()
             .map(|node| {
@@ -397,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn connected_menu_disables_node_switching_and_can_disconnect() {
+    fn connected_menu_switches_nodes_and_modes_and_can_disconnect() {
         let mut selected = node(1, "Tokyo");
         selected.latency_ms = Some(32);
         let model = menu_model(
@@ -411,7 +413,8 @@ mod tests {
         assert_eq!(model.traffic_text, "↓ 2.0 KB/s    ↑ 1.0 MB/s");
         assert_eq!(model.toggle_text, "断开");
         assert!(model.toggle_enabled);
-        assert!(!model.mode_enabled);
+        assert!(model.mode_enabled);
+        // The running node is the one item that cannot be picked again.
         assert!(!model.nodes[0].enabled);
         assert_eq!(
             tray_tooltip(&model),
