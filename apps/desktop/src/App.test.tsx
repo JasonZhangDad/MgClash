@@ -1668,6 +1668,31 @@ describe("App", () => {
     expect(container.textContent).toContain("osaka.example.com:9000");
   });
 
+  it("switches node while connected from the context menu", async () => {
+    const osaka = {
+      id: "00000000-0000-0000-0000-000000000002",
+      deletable: true,
+      enabled: true,
+      lastTestedAt: null,
+      latencyMs: 42,
+      name: "Osaka",
+      port: 9000,
+      protocol: "shadowsocks" as const,
+      server: "osaka.example.com",
+      transport: "tcp",
+      tls: null,
+    };
+    loadSessionStatusMock.mockResolvedValue(CONNECTED);
+    loadNodesMock.mockResolvedValue([CONNECTED.node, osaka]);
+    switchNodeMock.mockResolvedValue({ ...CONNECTED, node: osaka });
+    await render();
+
+    await nodeMenuAction("Osaka", "设为活动");
+
+    expect(switchNodeMock).toHaveBeenCalledWith(osaka.id);
+    expect(selectNodeMock).not.toHaveBeenCalled();
+  });
+
   it("edits a manual node through the full form dialog", async () => {
     const editedNode = {
       ...SELECTED.node!,

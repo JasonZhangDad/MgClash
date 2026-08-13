@@ -2104,7 +2104,6 @@ export default function App() {
                             onDoubleClick={() => {
                               if (
                                 !busy &&
-                                !connected &&
                                 !selected &&
                                 !nodeTestInProgress &&
                                 candidate.enabled
@@ -2246,7 +2245,7 @@ export default function App() {
                             type="button"
                             role="menuitem"
                             disabled={
-                              busy || connected || selected || !target.enabled
+                              busy || selected || !target.enabled
                             }
                             onClick={act(() => void run(() => switchNode(target.id)))}
                           >
@@ -2535,7 +2534,6 @@ export default function App() {
                           className="primary"
                           disabled={
                             busy ||
-                            connected ||
                             inspected.id === node?.id ||
                             nodeTestInProgress ||
                             !inspected.enabled
