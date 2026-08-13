@@ -47,6 +47,9 @@ const SING_BOX_CAPABILITIES: &[CoreCapability] = &[
     // Added in sing-box 1.12.0, carried by the pinned 1.13.18. Xray ships no
     // AnyTLS outbound at all, so this stays sing-box-only.
     capability(ProxyProtocol::AnyTls, true, false),
+    // Added in sing-box 1.13.0, carried by the pinned 1.13.18. Xray ships no
+    // Naive outbound at all, so this stays sing-box-only.
+    capability(ProxyProtocol::Naive, true, false),
 ];
 
 /// Xray covers the stream protocols but has no Hysteria2 or TUIC outbound and
@@ -335,6 +338,7 @@ pub const fn protocol_name(protocol: ProxyProtocol) -> &'static str {
         ProxyProtocol::Http => "HTTP",
         ProxyProtocol::WireGuard => "WireGuard",
         ProxyProtocol::AnyTls => "AnyTLS",
+        ProxyProtocol::Naive => "Naive",
     }
 }
 

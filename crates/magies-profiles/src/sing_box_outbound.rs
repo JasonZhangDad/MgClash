@@ -5,9 +5,9 @@ use serde_json::{Value, json};
 
 use crate::{
     AnyTlsCredential, HttpCredential, Hysteria2Credential, Hysteria2ObfuscationMethod,
-    ShadowsocksCredential, SocksCredential, TrojanCredential, TuicCongestionControl,
-    TuicCredential, TuicUdpRelayMode, VlessCredential, VmessCredential, VmessSecurity,
-    WireGuardCredential,
+    NaiveCredential, ShadowsocksCredential, SocksCredential, TrojanCredential,
+    TuicCongestionControl, TuicCredential, TuicUdpRelayMode, VlessCredential, VmessCredential,
+    VmessSecurity, WireGuardCredential,
 };
 
 #[derive(Clone, Copy)]
@@ -22,6 +22,7 @@ pub enum NodeCredential<'a> {
     Http(&'a HttpCredential),
     WireGuard(&'a WireGuardCredential),
     AnyTls(&'a AnyTlsCredential),
+    Naive(&'a NaiveCredential),
 }
 
 impl NodeCredential<'_> {
@@ -38,6 +39,7 @@ impl NodeCredential<'_> {
             Self::Http(_) => ProxyProtocol::Http,
             Self::WireGuard(_) => ProxyProtocol::WireGuard,
             Self::AnyTls(_) => ProxyProtocol::AnyTls,
+            Self::Naive(_) => ProxyProtocol::Naive,
         }
     }
 }
@@ -105,6 +107,12 @@ impl<'a> From<&'a WireGuardCredential> for NodeCredential<'a> {
 impl<'a> From<&'a AnyTlsCredential> for NodeCredential<'a> {
     fn from(value: &'a AnyTlsCredential) -> Self {
         Self::AnyTls(value)
+    }
+}
+
+impl<'a> From<&'a NaiveCredential> for NodeCredential<'a> {
+    fn from(value: &'a NaiveCredential) -> Self {
+        Self::Naive(value)
     }
 }
 
@@ -182,6 +190,9 @@ impl SingBoxOutboundConfigGenerator {
             NodeCredential::AnyTls(credential) => {
                 generate_anytls(node, credential, &mut outbound)?;
             }
+            NodeCredential::Naive(credential) => {
+                generate_naive(node, credential, &mut outbound)?;
+            }
         }
         Ok(GeneratedSingBoxOutbound { json: outbound })
     }
@@ -192,7 +203,8 @@ impl SingBoxOutboundConfigGenerator {
 /// Hysteria2 and TUIC already multiplex over QUIC, so mux is skipped there.
 /// `WireGuard` is its own tunnel with no stream layer to multiplex over.
 /// `AnyTLS` carries its own session-pooling multiplex scheme and rejects the
-/// standard `multiplex` block outright.
+/// standard `multiplex` block outright. `Naive` tunnels over HTTP/2 or QUIC
+/// and has no stream mux either.
 pub fn apply_sing_box_multiplex(outbound: &mut Value, protocol: ProxyProtocol) {
     if matches!(
         protocol,
@@ -200,6 +212,7 @@ pub fn apply_sing_box_multiplex(outbound: &mut Value, protocol: ProxyProtocol) {
             | ProxyProtocol::Tuic
             | ProxyProtocol::WireGuard
             | ProxyProtocol::AnyTls
+            | ProxyProtocol::Naive
     ) {
         return;
     }
@@ -230,6 +243,7 @@ const fn protocol_name(protocol: ProxyProtocol) -> &'static str {
         ProxyProtocol::Http => "http",
         ProxyProtocol::WireGuard => "wireguard",
         ProxyProtocol::AnyTls => "anytls",
+        ProxyProtocol::Naive => "naive",
     }
 }
 
@@ -478,6 +492,73 @@ fn generate_anytls(
     outbound["tls"] = generated_tls(tls)?;
     apply_network(node, outbound);
     Ok(())
+}
+
+/// `Naive` tunnels over HTTP/2 or QUIC. Official sing-box builds need platform
+/// libcronet on some targets; the outbound shape still matches what v2rayN
+/// emits for the pinned 1.13.18 Core.
+///
+/// sing-box Naive TLS accepts only `server_name` (plus certificate / ECH paths
+/// this model does not expose), so fingerprint / ALPN / insecure / pin /
+/// Reality are refused rather than dropped.
+fn generate_naive(
+    node: &ProxyNode,
+    credential: &NaiveCredential,
+    outbound: &mut Value,
+) -> Result<(), OutboundConfigError> {
+    if node.transport.is_some() {
+        return Err(OutboundConfigError::UnsupportedTransport {
+            protocol: node.protocol_type,
+        });
+    }
+    let tls = node.tls.as_ref().ok_or(OutboundConfigError::MissingTls {
+        protocol: node.protocol_type,
+    })?;
+    if let Some(username) = credential.username() {
+        outbound["username"] = Value::String(username.to_owned());
+    }
+    if let Some(password) = credential.password() {
+        outbound["password"] = Value::String(password.to_owned());
+    }
+    if credential.quic() {
+        outbound["quic"] = Value::Bool(true);
+    }
+    if let Some(control) = credential.quic_congestion_control() {
+        outbound["quic_congestion_control"] = Value::String(control.as_str().to_owned());
+    }
+    outbound["tls"] = generated_naive_tls(tls)?;
+    apply_network(node, outbound);
+    Ok(())
+}
+
+fn generated_naive_tls(tls: &TlsConfig) -> Result<Value, OutboundConfigError> {
+    match tls {
+        TlsConfig::Tls {
+            server_name,
+            allow_insecure,
+            alpn,
+            fingerprint,
+            pinned_sha256,
+        } => {
+            if *allow_insecure
+                || !alpn.is_empty()
+                || fingerprint.is_some()
+                || pinned_sha256.is_some()
+            {
+                return Err(OutboundConfigError::UnsupportedTls {
+                    protocol: ProxyProtocol::Naive,
+                });
+            }
+            let mut tls = json!({ "enabled": true });
+            if let Some(server_name) = server_name {
+                tls["server_name"] = Value::String(server_name.clone());
+            }
+            Ok(tls)
+        }
+        TlsConfig::Reality { .. } => Err(OutboundConfigError::UnsupportedTls {
+            protocol: ProxyProtocol::Naive,
+        }),
+    }
 }
 
 /// `WireGuard` is its own tunnel: no stream transport, no TLS, and no `network`

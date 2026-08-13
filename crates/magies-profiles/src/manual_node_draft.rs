@@ -21,6 +21,7 @@ use uuid::Uuid;
 use crate::anytls::AnyTlsCredential;
 use crate::http_proxy::HttpCredential;
 use crate::hysteria2::{Hysteria2Credential, Hysteria2Obfuscation, Hysteria2ObfuscationMethod};
+use crate::naive::{NaiveCongestionControl, NaiveCredential};
 use crate::shadowsocks::{SUPPORTED_METHODS, ShadowsocksCredential};
 use crate::socks::SocksCredential;
 use crate::trojan::TrojanCredential;
@@ -139,6 +140,12 @@ fn resolve_transport(
             }
             Ok(None)
         }
+        StoredNodeCredential::Naive(_) => {
+            if transport.is_some() {
+                return Err(ManualNodeDraftError::NaiveRejectsTransport);
+            }
+            Ok(None)
+        }
         StoredNodeCredential::Shadowsocks(_) => match transport {
             None | Some(TransportConfig::Tcp) => Ok(Some(TransportConfig::Tcp)),
             Some(_) => Err(ManualNodeDraftError::ShadowsocksRequiresTcpTransport),
@@ -188,7 +195,40 @@ fn resolve_tls(
         {
             Err(ManualNodeDraftError::AnyTlsRequiresTls)
         }
+        StoredNodeCredential::Naive(_) => validate_naive_tls(tls),
         _ => Ok(tls),
+    }
+}
+
+/// Naive requires plain TLS and only `server_name` — sing-box rejects the rest.
+fn validate_naive_tls(
+    tls: Option<TlsConfig>,
+) -> Result<Option<TlsConfig>, ManualNodeDraftError> {
+    match tls {
+        Some(TlsConfig::Tls {
+            server_name,
+            allow_insecure,
+            alpn,
+            fingerprint,
+            pinned_sha256,
+        }) => {
+            if allow_insecure
+                || !alpn.is_empty()
+                || fingerprint.is_some()
+                || pinned_sha256.is_some()
+            {
+                return Err(ManualNodeDraftError::NaiveRejectsTlsExtras);
+            }
+            Ok(Some(TlsConfig::Tls {
+                server_name,
+                allow_insecure: false,
+                alpn: Vec::new(),
+                fingerprint: None,
+                pinned_sha256: None,
+            }))
+        }
+        Some(TlsConfig::Reality { .. }) => Err(ManualNodeDraftError::NaiveRejectsReality),
+        None => Err(ManualNodeDraftError::NaiveRequiresTls),
     }
 }
 
@@ -262,6 +302,17 @@ pub enum ManualCredentialDraft {
     },
     #[serde(rename_all = "camelCase")]
     AnyTls { password: String },
+    #[serde(rename_all = "camelCase")]
+    Naive {
+        #[serde(default)]
+        username: Option<String>,
+        #[serde(default)]
+        password: Option<String>,
+        #[serde(default)]
+        quic: bool,
+        #[serde(default)]
+        quic_congestion_control: Option<NaiveCongestionControl>,
+    },
 }
 
 impl ManualCredentialDraft {
@@ -316,6 +367,12 @@ impl ManualCredentialDraft {
             },
             StoredNodeCredential::AnyTls(value) => Self::AnyTls {
                 password: value.password().to_owned(),
+            },
+            StoredNodeCredential::Naive(value) => Self::Naive {
+                username: value.username().map(str::to_owned),
+                password: value.password().map(str::to_owned),
+                quic: value.quic(),
+                quic_congestion_control: value.quic_congestion_control(),
             },
         }
     }
@@ -449,6 +506,24 @@ impl ManualCredentialDraft {
                 let password = required(&password, ManualNodeDraftError::MissingAnyTlsPassword)?;
                 Ok(StoredNodeCredential::AnyTls(AnyTlsCredential { password }))
             }
+            Self::Naive {
+                username,
+                password,
+                quic,
+                quic_congestion_control,
+            } => {
+                let (username, password) = build_user_pass_credential(
+                    username,
+                    password,
+                    ManualNodeDraftError::NaivePasswordRequiresUsername,
+                )?;
+                Ok(StoredNodeCredential::Naive(NaiveCredential {
+                    username,
+                    password,
+                    quic,
+                    quic_congestion_control,
+                }))
+            }
         }
     }
 }
@@ -555,6 +630,16 @@ pub enum ManualNodeDraftError {
     AnyTlsRequiresTls,
     #[error("AnyTLS password is required")]
     MissingAnyTlsPassword,
+    #[error("Naive carries its own tunnel and accepts no transport setting")]
+    NaiveRejectsTransport,
+    #[error("Naive requires standard TLS")]
+    NaiveRequiresTls,
+    #[error("Naive does not support Reality")]
+    NaiveRejectsReality,
+    #[error("Naive TLS accepts only server_name")]
+    NaiveRejectsTlsExtras,
+    #[error("Naive password requires a username")]
+    NaivePasswordRequiresUsername,
 }
 
 const fn enabled_by_default() -> bool {

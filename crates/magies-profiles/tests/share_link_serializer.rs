@@ -103,6 +103,20 @@ fn links() -> Vec<(&'static str, String)> {
              &sni=www.example.com&pbk=public-key&sid=ab&fp=chrome#AnyTLS-Reality"
                 .to_owned(),
         ),
+        (
+            "naive-http2",
+            "naive://alice:hunter2@edge.example.com:443?sni=www.example.com#Naive".to_owned(),
+        ),
+        (
+            "naive-quic",
+            "naive+quic://alice:hunter2@edge.example.com:443?\
+             congestion_control=bbr&sni=www.example.com#Naive-QUIC"
+                .to_owned(),
+        ),
+        (
+            "naive-https-scheme",
+            "naive+https://edge.example.com#Anon".to_owned(),
+        ),
     ]
 }
 

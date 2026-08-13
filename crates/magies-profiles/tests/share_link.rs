@@ -138,6 +138,19 @@ fn dispatches_an_anytls_link_to_the_anytls_parser() {
 }
 
 #[test]
+fn dispatches_a_naive_link_to_the_naive_parser() {
+    let parsed = parse("naive+quic://alice:hunter2@edge.example.com?sni=cdn.example.com#Tokyo")
+        .unwrap();
+
+    assert_eq!(parsed.node().protocol_type, ProxyProtocol::Naive);
+    assert!(matches!(
+        parsed.credential(),
+        StoredNodeCredential::Naive(credential) if credential.quic()
+    ));
+    assert!(parsed.node().tls.is_some());
+}
+
+#[test]
 fn dispatches_socks_links_to_the_socks_parser() {
     for uri in [
         "socks://edge.example.com:1080#Default",
@@ -178,7 +191,7 @@ fn a_subscription_style_https_uri_with_a_path_is_not_stolen_by_the_http_parser()
 #[test]
 fn rejects_an_unknown_scheme_before_reaching_a_parser() {
     assert!(matches!(
-        parse("naive://token@edge.example.com:443"),
+        parse("ssr://token@edge.example.com:443"),
         Err(ShareLinkParseError::UnsupportedScheme)
     ));
     assert!(matches!(

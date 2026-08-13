@@ -11,7 +11,7 @@ fn recognizes_the_anytls_scheme() {
     assert!(parser.can_parse("  anytls://password@example.com  "));
     assert!(!parser.can_parse("anytls2://password@example.com"));
     assert!(!parser.can_parse("ANYTLS://password@example.com"));
-    assert!(!parser.can_parse("naive://password@example.com"));
+    assert!(!parser.can_parse("ssr://password@example.com"));
 }
 
 #[test]

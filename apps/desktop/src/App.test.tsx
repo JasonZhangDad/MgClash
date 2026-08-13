@@ -1141,6 +1141,54 @@ describe("App", () => {
     );
   });
 
+  it("creates a Naive node with QUIC and SNI only", async () => {
+    createNodeMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([]);
+    await render();
+
+    await act(async () => {
+      selectValue("naive", createSelect("节点协议"));
+    });
+
+    expect(
+      container.querySelector("select[aria-label='传输方式']"),
+    ).toBeNull();
+    expect(
+      container.querySelector("input[aria-label='启用 Reality']"),
+    ).toBeNull();
+
+    await act(async () => {
+      typeInput("Naive Node", createField("新建节点名称"));
+      typeInput("edge.example.com", createField("新建节点服务器"));
+      typeInput("443", createField("新建节点端口"));
+      typeInput("alice", createField("代理用户名"));
+      typeInput("hunter2", createField("节点密码"));
+      container.querySelector<HTMLInputElement>("input[aria-label='启用 QUIC']")!.click();
+    });
+    await act(async () => {
+      selectValue("bbr", createSelect("Naive 拥塞控制"));
+      typeInput("cdn.example.com", createField("TLS SNI"));
+    });
+    await act(async () => button("创建节点").click());
+
+    expect(createNodeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credential: {
+          password: "hunter2",
+          protocol: "naive",
+          quic: true,
+          quicCongestionControl: "bbr",
+          username: "alice",
+        },
+        transport: null,
+        tls: expect.objectContaining({
+          serverName: "cdn.example.com",
+          type: "tls",
+        }),
+      }),
+    );
+  });
+
   it("hides the transport picker for TUIC and always sends TLS", async () => {
     createNodeMock.mockResolvedValue(SELECTED);
     loadNodesMock.mockResolvedValue([]);
@@ -3218,6 +3266,7 @@ describe("App", () => {
       "添加 HTTP 服务器",
       "添加 WireGuard 服务器",
       "添加 AnyTLS 服务器",
+      "添加 Naive 服务器",
       "手动创建",
     ]) {
       await act(async () => button(label).click());

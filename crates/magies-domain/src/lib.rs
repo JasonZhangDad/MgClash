@@ -26,6 +26,8 @@ pub enum ProxyProtocol {
     Http,
     WireGuard,
     AnyTls,
+    /// `NaiveProxy`, since sing-box 1.13.0; Xray ships no `naive` outbound.
+    Naive,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

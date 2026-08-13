@@ -60,7 +60,7 @@ fn parses_an_unpadded_base64_subscription() {
 fn rejects_the_whole_snapshot_when_any_line_is_invalid() {
     let content = format!(
         "vless://{USER_ID}@edge.example.com:443#Tokyo\n\
-         naive://token@edge.example.com:443"
+         ssr://token@edge.example.com:443"
     );
 
     let error = SubscriptionContentParser

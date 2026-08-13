@@ -4,10 +4,10 @@ use uuid::Uuid;
 
 use crate::{
     AnyTlsParseError, AnyTlsParser, HttpProxyParseError, HttpProxyParser, Hysteria2ParseError,
-    Hysteria2Parser, ShadowsocksParseError, ShadowsocksParser, SocksParseError, SocksParser,
-    StoredNodeCredential, TrojanParseError, TrojanParser, TuicParseError, TuicParser,
-    VlessParseError, VlessParser, VmessParseError, VmessParser, WireGuardParseError,
-    WireGuardParser,
+    Hysteria2Parser, NaiveParseError, NaiveParser, ShadowsocksParseError, ShadowsocksParser,
+    SocksParseError, SocksParser, StoredNodeCredential, TrojanParseError, TrojanParser,
+    TuicParseError, TuicParser, VlessParseError, VlessParser, VmessParseError, VmessParser,
+    WireGuardParseError, WireGuardParser,
 };
 
 /// A sharing URI resolved into the shared node model and its owned credential.
@@ -76,6 +76,7 @@ impl ShareLinkParser {
             HttpProxyParser => Http,
             WireGuardParser => WireGuard,
             AnyTlsParser => AnyTls,
+            NaiveParser => Naive,
         }
         Err(ShareLinkParseError::UnsupportedScheme)
     }
@@ -105,6 +106,8 @@ pub enum ShareLinkParseError {
     WireGuard(#[source] WireGuardParseError),
     #[error("failed to parse AnyTLS sharing URI")]
     AnyTls(#[source] AnyTlsParseError),
+    #[error("failed to parse Naive sharing URI")]
+    Naive(#[source] NaiveParseError),
     #[error("failed to build the shared node model")]
     Node(#[source] NodeModelError),
 }

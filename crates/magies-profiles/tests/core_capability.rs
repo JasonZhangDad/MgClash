@@ -28,6 +28,7 @@ fn sing_box_serves_every_v01_protocol() {
         ProxyProtocol::Shadowsocks,
         ProxyProtocol::Hysteria2,
         ProxyProtocol::AnyTls,
+        ProxyProtocol::Naive,
     ] {
         assert!(
             CoreCapabilityMatrix::supports(CoreType::SingBox, requirements(protocol, false)),
@@ -50,6 +51,22 @@ fn xray_has_no_anytls_outbound() {
         Ok(CoreType::SingBox)
     );
     assert_eq!(protocol_name(ProxyProtocol::AnyTls), "AnyTLS");
+}
+
+#[test]
+fn xray_has_no_naive_outbound() {
+    assert_eq!(
+        CoreCapabilityMatrix::rejection(CoreType::Xray, requirements(ProxyProtocol::Naive, false)),
+        Some(CoreRejection::ProtocolUnsupported {
+            core: CoreType::Xray,
+            protocol: ProxyProtocol::Naive,
+        })
+    );
+    assert_eq!(
+        CoreCapabilityMatrix::select(CorePreference::Auto, requirements(ProxyProtocol::Naive, false)),
+        Ok(CoreType::SingBox)
+    );
+    assert_eq!(protocol_name(ProxyProtocol::Naive), "Naive");
 }
 
 #[test]

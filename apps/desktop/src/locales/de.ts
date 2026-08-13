@@ -273,6 +273,8 @@ const DICTIONARY: Dictionary = {
   "用 | 分隔": "Mit | trennen",
   "XHTTP 路径": "XHTTP-Pfad",
   "XHTTP 模式": "XHTTP-Modus",
+  "启用 QUIC": "QUIC aktivieren",
+  "Naive 拥塞控制": "Naive-Staukontrolle",
   "AnyTLS 密码": "AnyTLS-Passwort",
   "用户名": "Benutzername",
   "代理用户名": "Proxy-Benutzername",

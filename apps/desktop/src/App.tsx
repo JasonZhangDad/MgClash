@@ -900,8 +900,10 @@ export default function App() {
           ? {}
           : {
               protocol,
-              // AnyTLS has no plaintext mode; open with TLS already on.
-              ...(protocol === "anytls" ? { tlsEnabled: true } : {}),
+              // AnyTLS / Naive have no plaintext mode; open with TLS already on.
+              ...(protocol === "anytls" || protocol === "naive"
+                ? { tlsEnabled: true }
+                : {}),
             }),
       });
       setDialog("create");
@@ -2523,6 +2525,7 @@ export default function App() {
               <option value="tuic">TUIC</option>
               <option value="wireguard">WireGuard</option>
               <option value="anytls">AnyTLS</option>
+              <option value="naive">Naive</option>
             </select>
           </label>
 
@@ -2646,7 +2649,9 @@ export default function App() {
             </label>
           )}
 
-          {(createForm.protocol === "socks" || createForm.protocol === "http") && (
+          {(createForm.protocol === "socks" ||
+            createForm.protocol === "http" ||
+            createForm.protocol === "naive") && (
             <label>
               {t("用户名")}
               <input
@@ -2665,7 +2670,8 @@ export default function App() {
             createForm.protocol === "shadowsocks" ||
             createForm.protocol === "socks" ||
             createForm.protocol === "http" ||
-            createForm.protocol === "anytls") && (
+            createForm.protocol === "anytls" ||
+            createForm.protocol === "naive") && (
             <label>
               {t("密码")}
               <input
@@ -2676,7 +2682,9 @@ export default function App() {
                 }
                 type="password"
                 placeholder={
-                  createForm.protocol === "socks" || createForm.protocol === "http"
+                  createForm.protocol === "socks" ||
+                  createForm.protocol === "http" ||
+                  createForm.protocol === "naive"
                     ? t("留空表示不使用")
                     : undefined
                 }
@@ -2687,6 +2695,45 @@ export default function App() {
                 }
               />
             </label>
+          )}
+
+          {createForm.protocol === "naive" && (
+            <>
+              <label>
+                <input
+                  aria-label={t("启用 QUIC")}
+                  type="checkbox"
+                  checked={createForm.quic}
+                  disabled={busy || connected}
+                  onChange={(event) =>
+                    updateCreateForm({ quic: event.target.checked })
+                  }
+                />
+                {t("启用 QUIC")}
+              </label>
+              {createForm.quic && (
+                <label>
+                  {t("拥塞控制")}
+                  <select
+                    aria-label={t("Naive 拥塞控制")}
+                    value={createForm.quicCongestionControl}
+                    disabled={busy || connected}
+                    onChange={(event) =>
+                      updateCreateForm({
+                        quicCongestionControl: event.target
+                          .value as ManualNodeForm["quicCongestionControl"],
+                      })
+                    }
+                  >
+                    <option value="">{t("默认")}</option>
+                    <option value="bbr">bbr</option>
+                    <option value="bbr2">bbr2</option>
+                    <option value="cubic">cubic</option>
+                    <option value="reno">reno</option>
+                  </select>
+                </label>
+              )}
+            </>
           )}
 
           {createForm.protocol === "hysteria2" && (
@@ -3142,7 +3189,8 @@ export default function App() {
             createForm.realityEnabled ||
             createForm.protocol === "hysteria2" ||
             createForm.protocol === "tuic" ||
-            createForm.protocol === "anytls") &&
+            createForm.protocol === "anytls" ||
+            createForm.protocol === "naive") &&
             createForm.protocol !== "shadowsocks" &&
             createForm.protocol !== "socks" && (
               <>
@@ -3158,6 +3206,8 @@ export default function App() {
                     }
                   />
                 </label>
+                {createForm.protocol !== "naive" && (
+                  <>
                 <label>
                   ALPN
                   <input
@@ -3247,6 +3297,8 @@ export default function App() {
                     />
                     {t("允许不安全证书")}
                   </label>
+                )}
+                  </>
                 )}
               </>
             )}

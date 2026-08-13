@@ -4,6 +4,7 @@ export type ProxyProtocol =
   | "anytls"
   | "hysteria2"
   | "http"
+  | "naive"
   | "shadowsocks"
   | "socks"
   | "trojan"
@@ -17,7 +18,8 @@ export interface NodeSummary {
   enabled: boolean;
   groupId: string | null;
   /// The stream transport; Hysteria2/TUIC report their own QUIC transport,
-  /// WireGuard its own tunnel, and AnyTLS its TLS session.
+  /// WireGuard its own tunnel, AnyTLS its TLS session, and Naive its HTTP/2 or
+  /// QUIC tunnel.
   transport: string;
   /// The TLS layer, or null for plaintext.
   tls: string | null;
@@ -167,7 +169,14 @@ export type ManualCredentialDraft =
       protocol: "wireguard";
       reserved: [number, number, number] | null;
     }
-  | { password: string; protocol: "anytls" };
+  | { password: string; protocol: "anytls" }
+  | {
+      password: string | null;
+      protocol: "naive";
+      quic: boolean;
+      quicCongestionControl: "bbr" | "bbr2" | "cubic" | "reno" | null;
+      username: string | null;
+    };
 
 export type TransportDraft =
   | { type: "tcp" }

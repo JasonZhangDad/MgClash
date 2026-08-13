@@ -351,6 +351,104 @@ fn rejects_an_empty_anytls_password() {
     );
 }
 
+fn naive() -> ManualCredentialDraft {
+    ManualCredentialDraft::Naive {
+        username: Some("alice".to_owned()),
+        password: Some("hunter2".to_owned()),
+        quic: false,
+        quic_congestion_control: None,
+    }
+}
+
+fn naive_draft() -> ManualNodeDraft {
+    let mut value = draft(naive());
+    value.transport = None;
+    value.tls = Some(TlsConfig::Tls {
+        server_name: Some("cdn.example.com".to_owned()),
+        allow_insecure: false,
+        alpn: Vec::new(),
+        fingerprint: None,
+        pinned_sha256: None,
+    });
+    value
+}
+
+#[test]
+fn builds_a_naive_node_with_quic() {
+    let mut value = naive_draft();
+    value.credential = ManualCredentialDraft::Naive {
+        username: Some("alice".to_owned()),
+        password: Some("hunter2".to_owned()),
+        quic: true,
+        quic_congestion_control: Some(magies_profiles::NaiveCongestionControl::Bbr),
+    };
+    let (node, credential) = build(value).unwrap();
+
+    assert_eq!(node.protocol_type, ProxyProtocol::Naive);
+    assert!(node.transport.is_none());
+    assert!(matches!(node.tls, Some(TlsConfig::Tls { .. })));
+    let StoredNodeCredential::Naive(credential) = credential else {
+        panic!("expected a Naive credential");
+    };
+    assert!(credential.quic());
+    assert_eq!(
+        credential.quic_congestion_control(),
+        Some(magies_profiles::NaiveCongestionControl::Bbr)
+    );
+}
+
+#[test]
+fn rejects_a_transport_for_naive() {
+    let mut value = naive_draft();
+    value.transport = Some(TransportConfig::Tcp);
+
+    assert_eq!(
+        build(value).unwrap_err(),
+        ManualNodeDraftError::NaiveRejectsTransport
+    );
+}
+
+#[test]
+fn rejects_naive_without_tls() {
+    let mut value = naive_draft();
+    value.tls = None;
+
+    assert_eq!(
+        build(value).unwrap_err(),
+        ManualNodeDraftError::NaiveRequiresTls
+    );
+}
+
+#[test]
+fn rejects_naive_reality_and_tls_extras() {
+    let mut reality = naive_draft();
+    reality.tls = Some(TlsConfig::Reality {
+        server_name: "edge.example.com".to_owned(),
+        public_key: "key".to_owned(),
+        short_id: None,
+        fingerprint: None,
+        alpn: Vec::new(),
+        spider_x: None,
+    });
+    assert_eq!(
+        build(reality).unwrap_err(),
+        ManualNodeDraftError::NaiveRejectsReality
+    );
+
+    let mut extras = naive_draft();
+    extras.tls = Some(TlsConfig::Tls {
+        server_name: None,
+        allow_insecure: true,
+        alpn: Vec::new(),
+        fingerprint: None,
+        pinned_sha256: None,
+    });
+    assert_eq!(
+        build(extras).unwrap_err(),
+        ManualNodeDraftError::NaiveRejectsTlsExtras
+    );
+}
+
 #[test]
 fn rejects_a_transport_for_wireguard() {
     let mut value = draft(wireguard());
@@ -520,6 +618,7 @@ fn every_accepted_draft_generates_a_sing_box_outbound() {
         }),
         hysteria2_draft(),
         anytls_draft(),
+        naive_draft(),
         draft(ManualCredentialDraft::Socks {
             username: Some("alice".to_owned()),
             password: Some("hunter2".to_owned()),

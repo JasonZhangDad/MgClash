@@ -274,6 +274,8 @@ const DICTIONARY: Dictionary = {
   "用 | 分隔": "以 | 分隔",
   "XHTTP 路径": "XHTTP 路徑",
   "XHTTP 模式": "XHTTP 模式",
+  "启用 QUIC": "啟用 QUIC",
+  "Naive 拥塞控制": "Naive 擁塞控制",
   "AnyTLS 密码": "AnyTLS 密碼",
   "用户名": "使用者名稱",
   "代理用户名": "代理使用者名稱",
