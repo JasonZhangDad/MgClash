@@ -49,6 +49,7 @@ fn a_fresh_install_uses_the_documented_defaults() {
     assert_eq!(settings.hotkey_next, "Ctrl+]");
     // Fragment changes the traffic shape, so it stays off until the user asks.
     assert!(!settings.fragment_enabled);
+    assert!(!settings.udp_noise_enabled);
 }
 
 #[test]
@@ -78,6 +79,7 @@ fn saved_settings_survive_a_restart() {
         hotkey_previous: "Alt+[".to_owned(),
         hotkey_next: "Alt+]".to_owned(),
         fragment_enabled: true,
+        udp_noise_enabled: true,
     };
 
     {
@@ -403,6 +405,22 @@ fn fragment_enabled_round_trips_through_storage() {
             .unwrap();
 
         assert_eq!(store.load().unwrap().fragment_enabled, enabled);
+    }
+}
+
+#[test]
+fn udp_noise_enabled_round_trips_through_storage() {
+    let store = SqliteAppSettingsStore::open_in_memory().unwrap();
+
+    for enabled in [true, false] {
+        store
+            .save(&AppSettings {
+                udp_noise_enabled: enabled,
+                ..AppSettings::default()
+            })
+            .unwrap();
+
+        assert_eq!(store.load().unwrap().udp_noise_enabled, enabled);
     }
 }
 

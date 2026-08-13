@@ -83,6 +83,7 @@ export interface AppSettings {
   clashApiPort: number;
   muxEnabled: boolean;
   fragmentEnabled: boolean;
+  udpNoiseEnabled: boolean;
   autoSelectLowestLatency: boolean;
   urlTestAddress: string;
   allowLan: boolean;

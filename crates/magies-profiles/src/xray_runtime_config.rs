@@ -15,11 +15,13 @@ use magies_domain::{CoreType, ProxyNode};
 use magies_routing::{RouteProfile, XrayRouteConfigGenerator};
 use serde_json::{Value, json};
 
+use crate::xray_outbound::{
+    XrayOutboundConfigGenerator, XrayOutboundError, apply_xray_fragment, apply_xray_mux,
+    xray_fragment_outbound_with_options,
+};
 use crate::{
     DnsProfile, GeneratedCoreConfig, LocalHttpConfigGenerator, LocalHttpProfile,
     LocalSocksConfigGenerator, LocalSocksProfile, NodeCredential, XrayDnsConfigGenerator,
-    XrayOutboundConfigGenerator, XrayOutboundError, apply_xray_fragment, apply_xray_mux,
-    xray_fragment_outbound,
 };
 
 /// The pool Xray hands out fake addresses from, matching sing-box's range so a
@@ -36,6 +38,7 @@ pub struct XrayRuntimeProfile<'a> {
     api_port: Option<NonZeroU16>,
     mux_enabled: bool,
     fragment_enabled: bool,
+    udp_noise_enabled: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -61,6 +64,7 @@ impl<'a> XrayRuntimeProfile<'a> {
             api_port: None,
             mux_enabled: false,
             fragment_enabled: false,
+            udp_noise_enabled: false,
         }
     }
 
@@ -75,6 +79,7 @@ impl<'a> XrayRuntimeProfile<'a> {
             api_port: None,
             mux_enabled: false,
             fragment_enabled: false,
+            udp_noise_enabled: false,
         }
     }
 
@@ -119,6 +124,14 @@ impl<'a> XrayRuntimeProfile<'a> {
         self.fragment_enabled = enabled;
         self
     }
+
+    /// Turns on Xray UDP noise (v2rayN-style freedom `noises`) for the next
+    /// generated config.
+    #[must_use]
+    pub const fn with_udp_noise(mut self, enabled: bool) -> Self {
+        self.udp_noise_enabled = enabled;
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -150,13 +163,16 @@ impl XrayRuntimeConfigGenerator {
                 if profile.mux_enabled {
                     apply_xray_mux(&mut outbound, selected.credential);
                 }
-                if profile.fragment_enabled {
+                if profile.fragment_enabled || profile.udp_noise_enabled {
                     apply_xray_fragment(&mut outbound);
                 }
                 outbound
             });
-            if profile.fragment_enabled {
-                outbounds.push(xray_fragment_outbound());
+            if profile.fragment_enabled || profile.udp_noise_enabled {
+                outbounds.push(xray_fragment_outbound_with_options(
+                    profile.fragment_enabled,
+                    profile.udp_noise_enabled,
+                ));
             }
         }
         outbounds.push(json!({ "protocol": "freedom", "tag": "direct" }));

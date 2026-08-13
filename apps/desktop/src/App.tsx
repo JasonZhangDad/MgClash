@@ -4256,6 +4256,23 @@ export default function App() {
             </p>
             <label className="checkbox-label">
               <input
+                aria-label={t("启用 UDP Noise")}
+                type="checkbox"
+                checked={settings.udpNoiseEnabled}
+                disabled={busy || connected}
+                onChange={(event) =>
+                  void onChangeSettings({
+                    udpNoiseEnabled: event.target.checked,
+                  })
+                }
+              />
+              {t("启用 UDP Noise 反检测（下次连接生效）")}
+            </label>
+            <p className="hint">
+              {t("在真实 UDP 数据前发送随机噪声包以规避嗅探；仅 Xray 生效（freedom noises），sing-box 无对应能力。默认 length 10-20、delay 10-16。")}
+            </p>
+            <label className="checkbox-label">
+              <input
                 aria-label={t("测速后自动选择最低延迟")}
                 type="checkbox"
                 checked={settings.autoSelectLowestLatency}

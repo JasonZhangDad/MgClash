@@ -169,16 +169,35 @@ pub const FRAGMENT_OUTBOUND_TAG: &str = "fragment";
 /// of 100-200 bytes, spaced 10-20ms apart.
 #[must_use]
 pub fn xray_fragment_outbound() -> Value {
+    xray_fragment_outbound_with_options(true, false)
+}
+
+/// Builds the freedom dialer outbound with optional Fragment and/or UDP noise.
+///
+/// Fragment uses Xray's `settings.fragment`; UDP noise uses `settings.noises`
+/// with v2rayN's defaults (`rand` length `10-20`, delay `10-16`). Either or both
+/// may be requested; at least one must be true for a useful outbound.
+#[must_use]
+pub fn xray_fragment_outbound_with_options(fragment: bool, udp_noise: bool) -> Value {
+    let mut settings = json!({});
+    if fragment {
+        settings["fragment"] = json!({
+            "packets": "tlshello",
+            "length": "100-200",
+            "interval": "10-20"
+        });
+    }
+    if udp_noise {
+        settings["noises"] = json!([{
+            "type": "rand",
+            "packet": "10-20",
+            "delay": "10-16"
+        }]);
+    }
     json!({
         "tag": FRAGMENT_OUTBOUND_TAG,
         "protocol": "freedom",
-        "settings": {
-            "fragment": {
-                "packets": "tlshello",
-                "length": "100-200",
-                "interval": "10-20"
-            }
-        }
+        "settings": settings
     })
 }
 

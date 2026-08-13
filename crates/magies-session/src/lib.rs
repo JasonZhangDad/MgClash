@@ -125,6 +125,9 @@ where
     if profile.fragment_enabled {
         runtime_profile = runtime_profile.with_fragment(true);
     }
+    if profile.udp_noise_enabled {
+        runtime_profile = runtime_profile.with_udp_noise(true);
+    }
     Ok(XrayRuntimeConfigGenerator::generate(&runtime_profile)
         .map_err(|source| DesktopSessionError::XrayConfig { source })?
         .json()
@@ -193,6 +196,10 @@ where
 }
 
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent session preference; collapsing them would hide meaning"
+)]
 pub struct DesktopSessionProfile {
     node: ProxyNode,
     core: CoreType,
@@ -206,6 +213,7 @@ pub struct DesktopSessionProfile {
     system_proxy: SystemProxyMode,
     mux_enabled: bool,
     fragment_enabled: bool,
+    udp_noise_enabled: bool,
 }
 
 impl DesktopSessionProfile {
@@ -226,6 +234,7 @@ impl DesktopSessionProfile {
             system_proxy: SystemProxyMode::Unchanged,
             mux_enabled: false,
             fragment_enabled: false,
+            udp_noise_enabled: false,
         }
     }
 
@@ -265,6 +274,13 @@ impl DesktopSessionProfile {
     #[must_use]
     pub const fn with_fragment(mut self, enabled: bool) -> Self {
         self.fragment_enabled = enabled;
+        self
+    }
+
+    /// Turns on Xray UDP noise (v2rayN-style freedom `noises`) for this session.
+    #[must_use]
+    pub const fn with_udp_noise(mut self, enabled: bool) -> Self {
+        self.udp_noise_enabled = enabled;
         self
     }
 
