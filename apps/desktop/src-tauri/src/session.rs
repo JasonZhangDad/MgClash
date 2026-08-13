@@ -1311,7 +1311,11 @@ where
     ///
     /// The caller validates first: a change that is rejected must leave the
     /// session running, not drop it for a setting that was never applied.
-    fn restarting(
+    ///
+    /// # Errors
+    ///
+    /// Returns the change's own error, or a typed stop/start error.
+    pub fn restarting(
         &mut self,
         change: impl FnOnce(&mut Self) -> Result<(), SessionCommandError<C::Error, P::Error>>,
     ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
@@ -1955,18 +1959,7 @@ where
         http_port: u16,
         clash_api_port: u16,
     ) -> Result<(), SessionCommandError<C::Error, P::Error>> {
-        if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
-        }
-        if socks_port == http_port || socks_port == clash_api_port || http_port == clash_api_port {
-            return Err(SessionCommandError::DuplicateLocalProxyPort {
-                port: if socks_port == http_port || socks_port == clash_api_port {
-                    socks_port
-                } else {
-                    http_port
-                },
-            });
-        }
+        self.check_local_proxies(socks_port, http_port, clash_api_port)?;
         self.defaults.socks = LocalSocksProfile::new(u32::from(socks_port))
             .map_err(SessionCommandError::LocalProxyConfig)?
             .with_allow_lan(self.defaults.socks.allow_lan())
@@ -1979,6 +1972,38 @@ where
         self.defaults.clash_api_port = LocalSocksProfile::new(u32::from(clash_api_port))
             .map_err(SessionCommandError::LocalProxyConfig)?
             .port();
+        Ok(())
+    }
+
+    /// Validates a port triple without applying it.
+    ///
+    /// Split out of [`Self::set_local_proxies`] so a caller that restarts the
+    /// session around the change can reject bad ports while still connected.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed duplicate-port or invalid-port error.
+    pub fn check_local_proxies(
+        &self,
+        socks_port: u16,
+        http_port: u16,
+        clash_api_port: u16,
+    ) -> Result<(), SessionCommandError<C::Error, P::Error>> {
+        if socks_port == http_port || socks_port == clash_api_port || http_port == clash_api_port {
+            return Err(SessionCommandError::DuplicateLocalProxyPort {
+                port: if socks_port == http_port || socks_port == clash_api_port {
+                    socks_port
+                } else {
+                    http_port
+                },
+            });
+        }
+        LocalSocksProfile::new(u32::from(socks_port))
+            .map_err(SessionCommandError::LocalProxyConfig)?;
+        LocalHttpProfile::new(u32::from(http_port))
+            .map_err(SessionCommandError::LocalProxyConfig)?;
+        LocalSocksProfile::new(u32::from(clash_api_port))
+            .map_err(SessionCommandError::LocalProxyConfig)?;
         Ok(())
     }
 

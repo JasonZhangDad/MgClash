@@ -146,9 +146,7 @@ pub async fn probe_download_speed(
             UrlTestError::Request(source.without_url())
         }
     })?;
-    let bytes_read = u64::try_from(body.len())
-        .unwrap_or(u64::MAX)
-        .min(max_bytes);
+    let bytes_read = u64::try_from(body.len()).unwrap_or(u64::MAX).min(max_bytes);
 
     let elapsed = started.elapsed();
     let elapsed_ms = u32::try_from(elapsed.as_millis()).unwrap_or(u32::MAX);

@@ -948,12 +948,36 @@ describe("App", () => {
     expect(container.textContent).toContain("Xray 不支持 Hysteria2");
   });
 
-  it("locks the Core picker while connected", async () => {
+  it("changes the Core while connected", async () => {
     loadSessionStatusMock.mockResolvedValue(CONNECTED);
     loadNodesMock.mockResolvedValue([CONNECTED.node]);
     await render();
 
-    expect(createSelect("Core 选择").disabled).toBe(true);
+    const core = createSelect("Core 选择");
+    expect(core.disabled).toBe(false);
+    await act(async () => selectValue("sing-box", core));
+
+    expect(saveAppSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ corePreference: "sing-box" }),
+    );
+  });
+
+  it("switches the system proxy mode while connected", async () => {
+    loadSessionStatusMock.mockResolvedValue(CONNECTED);
+    loadNodesMock.mockResolvedValue([CONNECTED.node]);
+    await render();
+
+    const pac = [...container.querySelectorAll("button")].find(
+      (candidate) =>
+        candidate.textContent === "PAC" &&
+        candidate.closest(".proxy-mode-group") !== null,
+    );
+    expect(pac?.disabled).toBe(false);
+    await act(async () => pac?.click());
+
+    expect(saveAppSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ systemProxyMode: "pac" }),
+    );
   });
 
   it("seeds the log filter from the saved level", async () => {

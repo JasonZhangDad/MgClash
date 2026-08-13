@@ -697,13 +697,9 @@ pub fn normalize_hotkey(value: impl AsRef<str>) -> String {
         .map(str::trim)
         .filter(|part| !part.is_empty())
         .map(|part| {
-            if part.eq_ignore_ascii_case("ctrl")
-                || part.eq_ignore_ascii_case("control")
-            {
+            if part.eq_ignore_ascii_case("ctrl") || part.eq_ignore_ascii_case("control") {
                 "Ctrl".to_owned()
-            } else if part.eq_ignore_ascii_case("alt")
-                || part.eq_ignore_ascii_case("option")
-            {
+            } else if part.eq_ignore_ascii_case("alt") || part.eq_ignore_ascii_case("option") {
                 "Alt".to_owned()
             } else if part.eq_ignore_ascii_case("shift") {
                 "Shift".to_owned()
@@ -718,9 +714,7 @@ pub fn normalize_hotkey(value: impl AsRef<str>) -> String {
                 // Keep multi-character keys like Enter / ArrowLeft readable.
                 let mut chars = part.chars();
                 match chars.next() {
-                    Some(first) => {
-                        first.to_ascii_uppercase().to_string() + chars.as_str()
-                    }
+                    Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
                     None => String::new(),
                 }
             }
@@ -731,12 +725,11 @@ pub fn normalize_hotkey(value: impl AsRef<str>) -> String {
 
 /// Reads a stored inbound port, rejecting zero and out-of-range values.
 fn parse_stored_port(value: i64) -> Result<u16, AppSettingsStoreError> {
-    u16::try_from(value)
-        .ok()
-        .filter(|port| *port != 0)
-        .ok_or(AppSettingsStoreError::InvalidStoredValue {
+    u16::try_from(value).ok().filter(|port| *port != 0).ok_or(
+        AppSettingsStoreError::InvalidStoredValue {
             value: value.to_string(),
-        })
+        },
+    )
 }
 
 #[must_use]

@@ -120,9 +120,7 @@ impl ProfileBundle {
             .map_err(ProfileBackupError::InvalidDns)?;
         for entry in &bundle.manual_nodes {
             if entry.node.subscription_id.is_some() {
-                return Err(ProfileBackupError::SubscriptionManualNode {
-                    id: entry.node.id,
-                });
+                return Err(ProfileBackupError::SubscriptionManualNode { id: entry.node.id });
             }
         }
         Ok(bundle)

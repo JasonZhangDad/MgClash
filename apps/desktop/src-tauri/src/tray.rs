@@ -288,13 +288,11 @@ fn tray_tooltip(model: &TrayMenuModel) -> String {
 
 fn sort_nodes_for_tray(nodes: &[NodeSummary]) -> Vec<NodeSummary> {
     let mut ordered = nodes.to_vec();
-    ordered.sort_by(|left, right| {
-        match (left.latency_ms, right.latency_ms) {
-            (Some(left_ms), Some(right_ms)) => left_ms.cmp(&right_ms),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => left.name.cmp(&right.name),
-        }
+    ordered.sort_by(|left, right| match (left.latency_ms, right.latency_ms) {
+        (Some(left_ms), Some(right_ms)) => left_ms.cmp(&right_ms),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => left.name.cmp(&right.name),
     });
     ordered
 }
@@ -354,7 +352,10 @@ mod tests {
     use magies_routing::RoutingMode;
     use uuid::Uuid;
 
-    use super::{TrayAction, action_for_menu_id, format_tray_node_label, menu_model, node_menu_id, sort_nodes_for_tray, tray_tooltip};
+    use super::{
+        TrayAction, action_for_menu_id, format_tray_node_label, menu_model, node_menu_id,
+        sort_nodes_for_tray, tray_tooltip,
+    };
     use crate::session::{NodeSummary, RouteSchemeSummary, SessionStatus};
     use crate::traffic::TrafficSnapshot;
 
@@ -383,7 +384,12 @@ mod tests {
             .expect("selected node should appear in the tray list");
         assert!(selected_entry.selected);
         assert!(!selected_entry.enabled);
-        assert!(model.nodes.iter().any(|node| node.id == other.id && node.enabled));
+        assert!(
+            model
+                .nodes
+                .iter()
+                .any(|node| node.id == other.id && node.enabled)
+        );
         assert_eq!(
             action_for_menu_id(&node_menu_id(other.id)),
             Some(TrayAction::SelectNode(other.id))
@@ -455,15 +461,17 @@ mod tests {
             &[selected, other.clone()],
             TrafficSnapshot::default(),
         );
-        assert!(model.nodes.iter().any(|entry| entry.id == other.id && entry.enabled));
+        assert!(
+            model
+                .nodes
+                .iter()
+                .any(|entry| entry.id == other.id && entry.enabled)
+        );
     }
 
     #[test]
     fn tray_node_labels_include_latency_when_measured() {
-        assert_eq!(
-            format_tray_node_label("Tokyo", Some(32)),
-            "Tokyo · 32 ms"
-        );
+        assert_eq!(format_tray_node_label("Tokyo", Some(32)), "Tokyo · 32 ms");
         assert_eq!(format_tray_node_label("Tokyo", None), "Tokyo · --");
     }
 

@@ -7,12 +7,12 @@ pub mod core_install;
 pub mod core_update;
 pub mod diagnostics;
 pub mod dns_settings;
+pub mod geo_assets;
 pub mod logs;
 pub mod node_latency;
 pub mod platform_proxy;
 pub mod preferences_backup;
 pub mod profile_backup;
-pub mod geo_assets;
 pub mod route_settings;
 pub mod routing_mode;
 pub mod session;
@@ -47,20 +47,19 @@ use uuid::Uuid;
 
 use crate::app_settings::{AppSettings, SqliteAppSettingsStore, SystemProxyModeSetting};
 use crate::connections::{
-    ConnectionSnapshot, ConnectionsError, close_all_connections, close_connection,
-    load_connections,
+    ConnectionSnapshot, ConnectionsError, close_all_connections, close_connection, load_connections,
 };
 use crate::core_control::{HostCoreControl, describe};
+use crate::core_install::{CoreInstallStatus, CoreInstallStore, CoreKind};
+use crate::core_update::{CoreUpdateCheck, check_core_updates};
 use crate::diagnostics::DiagnosticBundle;
 use crate::dns_settings::{DnsSettings, SqliteDnsSettingsStore};
+use crate::geo_assets::{GeoAssetsStatus, GeoAssetsStore};
 use crate::logs::{
     LogBuffer, LogBufferLayer, LogEntry, LogLevel, LogSource, spawn_core_log_reader,
 };
 use crate::node_latency::{TcpLatencyError, probe_tcp};
 use crate::platform_proxy::{PlatformProxyControl, PlatformProxyError, SystemProxyStartupStatus};
-use crate::core_install::{CoreInstallStatus, CoreInstallStore, CoreKind};
-use crate::core_update::{CoreUpdateCheck, check_core_updates};
-use crate::geo_assets::{GeoAssetsStatus, GeoAssetsStore};
 use crate::preferences_backup::PreferencesBundle;
 use crate::profile_backup::ProfileBundle;
 use crate::route_settings::{RouteSettings, SqliteRouteSettingsStore};
@@ -934,8 +933,13 @@ async fn session_speed_test(
         .url_test_target()
         .map_err(|error| command_error(&error))?;
     let proxy_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), target.http_port);
-    let probe =
-        probe_download_speed(&url, proxy_address, SPEED_TEST_TIMEOUT, SPEED_TEST_MAX_BYTES).await;
+    let probe = probe_download_speed(
+        &url,
+        proxy_address,
+        SPEED_TEST_TIMEOUT,
+        SPEED_TEST_MAX_BYTES,
+    )
+    .await;
     if let Err(error) = &probe {
         tracing::debug!("speed test did not succeed: {}", describe(error));
     }
@@ -1524,22 +1528,35 @@ fn set_app_settings(
     // to reach back into the settings on every call.
     {
         let mut service = state.service();
-        service.set_core_preference(settings.core_preference.preference());
-        service.set_tun_enabled(settings.tun_enabled);
-        service.set_mux_enabled(settings.mux_enabled);
-        service.set_fragment_enabled(settings.fragment_enabled);
-        service.set_final_fragment_enabled(settings.final_fragment_enabled);
-        service.set_udp_noise_enabled(settings.udp_noise_enabled);
-        service.set_url_test_address(settings.url_test_address.clone());
-        service.set_allow_lan(settings.allow_lan);
-        service.set_inbound_udp_enabled(settings.inbound_udp_enabled);
-        service.set_system_proxy_mode(settings.system_proxy_mode.mode(pac_url.as_deref()));
+        // Rejected before anything stops: a bad port must not cost the user
+        // their connection.
         service
-            .set_local_proxies(
+            .check_local_proxies(
                 settings.socks_port,
                 settings.http_port,
                 settings.clash_api_port,
             )
+            .map_err(|error| command_error(&error))?;
+        // The Core reads all of this at startup, so a running session is
+        // restarted around the change rather than blocking it.
+        service
+            .restarting(|service| {
+                service.set_core_preference(settings.core_preference.preference());
+                service.set_tun_enabled(settings.tun_enabled);
+                service.set_mux_enabled(settings.mux_enabled);
+                service.set_fragment_enabled(settings.fragment_enabled);
+                service.set_final_fragment_enabled(settings.final_fragment_enabled);
+                service.set_udp_noise_enabled(settings.udp_noise_enabled);
+                service.set_url_test_address(settings.url_test_address.clone());
+                service.set_allow_lan(settings.allow_lan);
+                service.set_inbound_udp_enabled(settings.inbound_udp_enabled);
+                service.set_system_proxy_mode(settings.system_proxy_mode.mode(pac_url.as_deref()));
+                service.set_local_proxies(
+                    settings.socks_port,
+                    settings.http_port,
+                    settings.clash_api_port,
+                )
+            })
             .map_err(|error| command_error(&error))?;
     }
     tracing::info!("application settings updated");
@@ -1549,7 +1566,10 @@ fn set_app_settings(
 /// Starts or stops the PAC server to match the selected mode.
 ///
 /// Returns the URL to point the host at, or `None` when PAC is not selected.
-fn apply_pac_mode(state: &AppState, settings: &AppSettings) -> Result<Option<String>, CommandError> {
+fn apply_pac_mode(
+    state: &AppState,
+    settings: &AppSettings,
+) -> Result<Option<String>, CommandError> {
     let mut server = lock(&state.pac);
     if settings.system_proxy_mode != SystemProxyModeSetting::Pac {
         // Dropping it releases the port and joins the accept thread.
@@ -1748,12 +1768,13 @@ struct ProfileImportResult {
 fn export_profile(state: State<'_, AppState>) -> Result<PathBuf, CommandError> {
     let app = lock(&state.settings).clone();
     let status = state.service().status();
-    let nodes = state.service().export_profile_nodes().map_err(|error| {
-        CommandError {
+    let nodes = state
+        .service()
+        .export_profile_nodes()
+        .map_err(|error| CommandError {
             code: error.code(),
             message: describe(&error),
-        }
-    })?;
+        })?;
     let subscriptions = state
         .subscriptions
         .export_backup_entries()
@@ -1776,12 +1797,11 @@ fn import_profile(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<ProfileImportResult, CommandError> {
-    let bundle = ProfileBundle::read_from(std::path::Path::new(&path)).map_err(|error| {
-        CommandError {
+    let bundle =
+        ProfileBundle::read_from(std::path::Path::new(&path)).map_err(|error| CommandError {
             code: error.code(),
             message: describe(&error),
-        }
-    })?;
+        })?;
     if state.service().status().connected {
         return Err(CommandError {
             code: "session_active",

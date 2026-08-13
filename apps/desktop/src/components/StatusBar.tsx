@@ -74,7 +74,6 @@ export function StatusBar({
           checked={settings?.tunEnabled ?? false}
           disabled={
             busy ||
-            connected ||
             settings === null ||
             platform?.tunAvailability === "unavailableInUnsignedBuild"
           }
@@ -108,7 +107,7 @@ export function StatusBar({
             key={mode.id}
             type="button"
             className={proxyMode === mode.id ? "active" : undefined}
-            disabled={busy || connected || settings === null}
+            disabled={busy || settings === null}
             aria-pressed={proxyMode === mode.id}
             title={
               mode.id === "pac"
@@ -123,7 +122,7 @@ export function StatusBar({
         <select
           aria-label={t("状态栏系统代理")}
           className="proxy-mode-select"
-          disabled={busy || connected || settings === null}
+          disabled={busy || settings === null}
           value={proxyMode}
           onChange={(event) =>
             onChangeSettings({

@@ -1093,6 +1093,39 @@ fn changes_the_route_while_disconnected_and_uses_it_for_the_next_connection() {
 }
 
 #[test]
+fn changes_local_ports_while_connected_by_restarting_the_core() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    service.connect().unwrap();
+
+    let status = service
+        .restarting(|service| service.set_local_proxies(11_080, 11_081, 9_090))
+        .unwrap();
+
+    assert!(status.connected);
+    assert_eq!(status.socks_port, 11_080);
+    assert_eq!(status.http_port, 11_081);
+    assert_eq!(status.clash_api_port, 9_090);
+    let config: serde_json::Value =
+        serde_json::from_slice(&fs::read(service.runtime_config_path().unwrap()).unwrap()).unwrap();
+    assert_eq!(config["inbounds"][0]["listen_port"], 11_080);
+}
+
+#[test]
+fn rejects_duplicate_ports_while_connected_without_dropping_the_session() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    service.connect().unwrap();
+
+    let error = service
+        .check_local_proxies(11_080, 11_080, 9_090)
+        .unwrap_err();
+
+    assert_eq!(error.code(), "invalid_local_proxy_port");
+    assert!(service.status().connected);
+}
+
+#[test]
 fn changes_the_route_while_connected_by_restarting_the_core() {
     let (mut service, _runtime, _fail_start) = service();
     service.import_node(SHADOWSOCKS_LINK).unwrap();

@@ -2801,7 +2801,7 @@ export default function App() {
           aria-label={t("分享链接")}
           rows={3}
           value={uri}
-          disabled={busy || connected}
+          disabled={busy}
           placeholder="vless:// vmess:// trojan:// ss:// hysteria2:// tuic://"
           onChange={(event) => setUri(event.target.value)}
         />
@@ -2809,7 +2809,7 @@ export default function App() {
         <div className="actions">
           <button
             type="button"
-            disabled={busy || connected}
+            disabled={busy}
             onClick={() => void onImport()}
           >
             {t("导入")}
@@ -2826,7 +2826,7 @@ export default function App() {
           aria-label={t("批量节点列表")}
           rows={4}
           value={bulkText}
-          disabled={busy || connected}
+          disabled={busy}
           placeholder={t("每行一个链接，或粘贴 Base64 订阅正文")}
           onChange={(event) => setBulkText(event.target.value)}
         />
@@ -2834,7 +2834,7 @@ export default function App() {
         <div className="actions">
           <button
             type="button"
-            disabled={busy || connected}
+            disabled={busy}
             onClick={() => void runBulkImport(bulkText)}
           >
             {t("批量导入")}
@@ -2845,7 +2845,7 @@ export default function App() {
               aria-label={t("从文件导入节点")}
               type="file"
               accept=".txt,.text,text/plain"
-              disabled={busy || connected}
+              disabled={busy}
               onChange={(event) => {
                 const file = event.target.files?.[0];
                 // Clear the value so picking the same file twice still fires.
@@ -2860,7 +2860,7 @@ export default function App() {
               aria-label={t("从二维码图片导入节点")}
               type="file"
               accept="image/png,image/jpeg"
-              disabled={busy || connected}
+              disabled={busy}
               onChange={(event) => {
                 const file = event.target.files?.[0];
                 event.target.value = "";
@@ -2916,7 +2916,7 @@ export default function App() {
             <select
               aria-label={t("节点协议")}
               value={createForm.protocol}
-              disabled={busy || connected}
+              disabled={busy}
               onChange={(event) =>
                 updateCreateForm({
                   protocol: event.target.value as ProxyProtocol,
@@ -2943,7 +2943,7 @@ export default function App() {
             <input
               aria-label={t("新建节点名称")}
               value={createForm.name}
-              disabled={busy || connected}
+              disabled={busy}
               onChange={(event) => updateCreateForm({ name: event.target.value })}
             />
           </label>
@@ -2955,7 +2955,7 @@ export default function App() {
             <input
               aria-label={t("新建节点服务器")}
               value={createForm.server}
-              disabled={busy || connected}
+              disabled={busy}
               onChange={(event) =>
                 updateCreateForm({ server: event.target.value })
               }
@@ -2968,7 +2968,7 @@ export default function App() {
               aria-label={t("新建节点端口")}
               inputMode="numeric"
               value={createForm.port}
-              disabled={busy || connected}
+              disabled={busy}
               onChange={(event) => updateCreateForm({ port: event.target.value })}
             />
           </label>
@@ -2985,7 +2985,7 @@ export default function App() {
                 <select
                   aria-label={t("自定义 Core 类型")}
                   value={createForm.customCore}
-                  disabled={busy || connected}
+                  disabled={busy}
                   onChange={(event) =>
                     updateCreateForm({
                       customCore: event.target.value as "sing-box" | "xray",
@@ -3003,7 +3003,7 @@ export default function App() {
                   rows={16}
                   spellCheck={false}
                   value={createForm.customDocument}
-                  disabled={busy || connected}
+                  disabled={busy}
                   onChange={(event) =>
                     updateCreateForm({ customDocument: event.target.value })
                   }
@@ -3020,7 +3020,7 @@ export default function App() {
               <input
                 aria-label={t("节点 UUID")}
                 value={createForm.userId}
-                disabled={busy || connected}
+                disabled={busy}
                 onChange={(event) =>
                   updateCreateForm({ userId: event.target.value })
                 }
@@ -3035,7 +3035,7 @@ export default function App() {
                 aria-label="VLESS flow"
                 placeholder={t("留空表示不使用")}
                 value={createForm.flow}
-                disabled={busy || connected}
+                disabled={busy}
                 onChange={(event) =>
                   updateCreateForm({ flow: event.target.value })
                 }
@@ -3050,7 +3050,7 @@ export default function App() {
                 <select
                   aria-label={t("VMess 加密方式")}
                   value={createForm.security}
-                  disabled={busy || connected}
+                  disabled={busy}
                   onChange={(event) =>
                     updateCreateForm({
                       security: event.target.value as VmessSecurity,
@@ -3070,7 +3070,7 @@ export default function App() {
                   aria-label="VMess alterId"
                   inputMode="numeric"
                   value={createForm.alterId}
-                  disabled={busy || connected}
+                  disabled={busy}
                   onChange={(event) =>
                     updateCreateForm({ alterId: event.target.value })
                   }
@@ -3085,7 +3085,7 @@ export default function App() {
               <select
                 aria-label={t("Shadowsocks 加密方式")}
                 value={createForm.method}
-                disabled={busy || connected}
+                disabled={busy}
                 onChange={(event) =>
                   updateCreateForm({ method: event.target.value })
                 }
@@ -3108,7 +3108,7 @@ export default function App() {
                 aria-label={t("代理用户名")}
                 placeholder={t("留空表示不使用")}
                 value={createForm.username}
-                disabled={busy || connected}
+                disabled={busy}
                 onChange={(event) =>
                   updateCreateForm({ username: event.target.value })
                 }
@@ -3139,7 +3139,7 @@ export default function App() {
                     : undefined
                 }
                 value={createForm.password}
-                disabled={busy || connected}
+                disabled={busy}
                 onChange={(event) =>
                   updateCreateForm({ password: event.target.value })
                 }
@@ -3154,7 +3154,7 @@ export default function App() {
                   aria-label={t("启用 QUIC")}
                   type="checkbox"
                   checked={createForm.quic}
-                  disabled={busy || connected}
+                  disabled={busy}
                   onChange={(event) =>
                     updateCreateForm({ quic: event.target.checked })
                   }
@@ -3167,7 +3167,7 @@ export default function App() {
                   <select
                     aria-label={t("Naive 拥塞控制")}
                     value={createForm.quicCongestionControl}
-                    disabled={busy || connected}
+                    disabled={busy}
                     onChange={(event) =>
                       updateCreateForm({
                         quicCongestionControl: event.target
@@ -3195,7 +3195,7 @@ export default function App() {
                   type="password"
                   placeholder={t("留空表示不使用")}
                   value={createForm.authentication}
-                  disabled={busy || connected}
+                  disabled={busy}
                   onChange={(event) =>
                     updateCreateForm({ authentication: event.target.value })
                   }
@@ -3206,7 +3206,7 @@ export default function App() {
                   aria-label={t("启用混淆")}
                   type="checkbox"
                   checked={createForm.obfsEnabled}
-                  disabled={busy || connected}
+                  disabled={busy}
                   onChange={(event) =>
                     updateCreateForm({ obfsEnabled: event.target.checked })
                   }
@@ -3220,7 +3220,7 @@ export default function App() {
                     <select
                       aria-label={t("混淆方式")}
                       value={createForm.obfsMethod}
-                      disabled={busy || connected}
+                      disabled={busy}
                       onChange={(event) =>
                         updateCreateForm({
                           obfsMethod: event.target.value as ObfuscationMethod,
@@ -3237,7 +3237,7 @@ export default function App() {
                       aria-label={t("混淆密码")}
                       type="password"
                       value={createForm.obfsPassword}
-                      disabled={busy || connected}
+                      disabled={busy}
                       onChange={(event) =>
                         updateCreateForm({ obfsPassword: event.target.value })
                       }
@@ -3257,7 +3257,7 @@ export default function App() {
                   type="password"
                   placeholder={t("留空表示不使用")}
                   value={createForm.password}
-                  disabled={busy || connected}
+                  disabled={busy}
                   onChange={(event) =>
                     updateCreateForm({ password: event.target.value })
                   }
@@ -3268,7 +3268,7 @@ export default function App() {
                 <select
                   aria-label={t("拥塞控制")}
                   value={createForm.congestionControl}
-                  disabled={busy || connected}
+                  disabled={busy}
                   onChange={(event) =>
                     updateCreateForm({
                       congestionControl: event.target.value as
@@ -3290,7 +3290,7 @@ export default function App() {
                 <select
                   aria-label={t("UDP 中继模式")}
                   value={createForm.udpRelayMode}
-                  disabled={busy || connected || createForm.udpOverStream}
+                  disabled={busy || createForm.udpOverStream}
                   onChange={(event) =>
                     updateCreateForm({
                       udpRelayMode: event.target.value as
@@ -3310,7 +3310,7 @@ export default function App() {
                   aria-label={t("UDP over stream")}
                   type="checkbox"
                   checked={createForm.udpOverStream}
-                  disabled={busy || connected}
+                  disabled={busy}
                   onChange={(event) =>
                     updateCreateForm({
                       udpOverStream: event.target.checked,
@@ -3327,7 +3327,7 @@ export default function App() {
                   aria-label={t("0-RTT 握手")}
                   type="checkbox"
                   checked={createForm.zeroRttHandshake}
-                  disabled={busy || connected}
+                  disabled={busy}
                   onChange={(event) =>
                     updateCreateForm({
                       zeroRttHandshake: event.target.checked,
@@ -3347,7 +3347,7 @@ export default function App() {
                   aria-label={t("WireGuard 私钥")}
                   type="password"
                   value={createForm.privateKey}
-                  disabled={busy || connected}
+                  disabled={busy}
                   onChange={(event) =>
                     updateCreateForm({ privateKey: event.target.value })
                   }
@@ -3358,7 +3358,7 @@ export default function App() {
                 <input
                   aria-label={t("WireGuard 对端公钥")}
                   value={createForm.peerPublicKey}
-                  disabled={busy || connected}
+                  disabled={busy}
                   onChange={(event) =>
                     updateCreateForm({ peerPublicKey: event.target.value })
                   }
@@ -3371,7 +3371,7 @@ export default function App() {
                   type="password"
                   placeholder={t("留空表示不使用")}
                   value={createForm.preSharedKey}
-                  disabled={busy || connected}
+                  disabled={busy}
                   onChange={(event) =>
                     updateCreateForm({ preSharedKey: event.target.value })
                   }
@@ -3383,7 +3383,7 @@ export default function App() {
                   aria-label={t("WireGuard 本地地址")}
                   placeholder={t("逗号分隔，如 10.0.0.2/32")}
                   value={createForm.localAddress}
-                  disabled={busy || connected}
+                  disabled={busy}
                   onChange={(event) =>
                     updateCreateForm({ localAddress: event.target.value })
                   }
@@ -3396,7 +3396,7 @@ export default function App() {
                   inputMode="numeric"
                   placeholder={t("留空表示不使用")}
                   value={createForm.mtu}
-                  disabled={busy || connected}
+                  disabled={busy}
                   onChange={(event) =>
                     updateCreateForm({ mtu: event.target.value })
                   }
@@ -3408,7 +3408,7 @@ export default function App() {
                   aria-label="WireGuard reserved"
                   placeholder={t("留空表示不使用，如 1,2,3")}
                   value={createForm.reserved}
-                  disabled={busy || connected}
+                  disabled={busy}
                   onChange={(event) =>
                     updateCreateForm({ reserved: event.target.value })
                   }
@@ -3462,7 +3462,7 @@ export default function App() {
                           : t("WebSocket 路径")
                     }
                     value={createForm.wsPath}
-                    disabled={busy || connected}
+                    disabled={busy}
                     onChange={(event) =>
                       updateCreateForm({ wsPath: event.target.value })
                     }
@@ -3480,7 +3480,7 @@ export default function App() {
                     }
                     placeholder={t("留空表示不使用")}
                     value={createForm.wsHost}
-                    disabled={busy || connected}
+                    disabled={busy}
                     onChange={(event) =>
                       updateCreateForm({ wsHost: event.target.value })
                     }
@@ -3496,7 +3496,7 @@ export default function App() {
                 <select
                   aria-label={t("XHTTP 模式")}
                   value={createForm.xhttpMode}
-                  disabled={busy || connected}
+                  disabled={busy}
                   onChange={(event) =>
                     updateCreateForm({
                       xhttpMode: event.target.value as XhttpMode,
@@ -3519,7 +3519,7 @@ export default function App() {
                   <input
                     aria-label="gRPC serviceName"
                     value={createForm.grpcServiceName}
-                    disabled={busy || connected}
+                    disabled={busy}
                     onChange={(event) =>
                       updateCreateForm({ grpcServiceName: event.target.value })
                     }
@@ -3530,7 +3530,7 @@ export default function App() {
                   <select
                     aria-label={t("gRPC 模式")}
                     value={createForm.grpcMode}
-                    disabled={busy || connected}
+                    disabled={busy}
                     onChange={(event) =>
                       updateCreateForm({
                         grpcMode: event.target.value as GrpcMode,
@@ -3548,7 +3548,7 @@ export default function App() {
                     aria-label="gRPC authority"
                     placeholder={t("留空表示不使用")}
                     value={createForm.grpcAuthority}
-                    disabled={busy || connected}
+                    disabled={busy}
                     onChange={(event) =>
                       updateCreateForm({ grpcAuthority: event.target.value })
                     }
@@ -3566,7 +3566,7 @@ export default function App() {
                     aria-label={t("mKCP mtu")}
                     placeholder={t("留空表示使用默认")}
                     value={createForm.kcpMtu}
-                    disabled={busy || connected}
+                    disabled={busy}
                     onChange={(event) =>
                       updateCreateForm({ kcpMtu: event.target.value })
                     }
@@ -3578,7 +3578,7 @@ export default function App() {
                     aria-label={t("mKCP tti")}
                     placeholder={t("留空表示使用默认")}
                     value={createForm.kcpTti}
-                    disabled={busy || connected}
+                    disabled={busy}
                     onChange={(event) =>
                       updateCreateForm({ kcpTti: event.target.value })
                     }
@@ -3590,7 +3590,7 @@ export default function App() {
                     aria-label={t("mKCP uplinkCapacity")}
                     placeholder={t("留空表示使用默认")}
                     value={createForm.kcpUplinkCapacity}
-                    disabled={busy || connected}
+                    disabled={busy}
                     onChange={(event) =>
                       updateCreateForm({ kcpUplinkCapacity: event.target.value })
                     }
@@ -3602,7 +3602,7 @@ export default function App() {
                     aria-label={t("mKCP downlinkCapacity")}
                     placeholder={t("留空表示使用默认")}
                     value={createForm.kcpDownlinkCapacity}
-                    disabled={busy || connected}
+                    disabled={busy}
                     onChange={(event) =>
                       updateCreateForm({
                         kcpDownlinkCapacity: event.target.value,
@@ -3615,7 +3615,7 @@ export default function App() {
                   <select
                     aria-label={t("mKCP 伪装类型")}
                     value={createForm.kcpHeaderType}
-                    disabled={busy || connected}
+                    disabled={busy}
                     onChange={(event) =>
                       updateCreateForm({
                         kcpHeaderType: event.target.value as KcpHeaderType,
@@ -3637,7 +3637,7 @@ export default function App() {
                     aria-label={t("mKCP seed")}
                     placeholder={t("留空表示不使用")}
                     value={createForm.kcpSeed}
-                    disabled={busy || connected}
+                    disabled={busy}
                     onChange={(event) =>
                       updateCreateForm({ kcpSeed: event.target.value })
                     }
@@ -3648,7 +3648,7 @@ export default function App() {
                     aria-label={t("mKCP 拥塞控制")}
                     type="checkbox"
                     checked={createForm.kcpCongestion}
-                    disabled={busy || connected}
+                    disabled={busy}
                     onChange={(event) =>
                       updateCreateForm({ kcpCongestion: event.target.checked })
                     }
@@ -3667,7 +3667,7 @@ export default function App() {
                     aria-label={t("启用 TLS")}
                     type="checkbox"
                     checked={createForm.tlsEnabled || createForm.realityEnabled}
-                    disabled={busy || connected}
+                    disabled={busy}
                     onChange={(event) =>
                       updateCreateForm({
                         tlsEnabled: event.target.checked,
@@ -3685,7 +3685,7 @@ export default function App() {
                       aria-label={t("启用 Reality")}
                       type="checkbox"
                       checked={createForm.realityEnabled}
-                      disabled={busy || connected}
+                      disabled={busy}
                       onChange={(event) =>
                         updateCreateForm({
                           realityEnabled: event.target.checked,
@@ -3707,7 +3707,7 @@ export default function App() {
                   aria-label={t("启用 TLS")}
                   type="checkbox"
                   checked={createForm.tlsEnabled || createForm.realityEnabled}
-                  disabled={busy || connected}
+                  disabled={busy}
                   onChange={(event) =>
                     updateCreateForm({
                       tlsEnabled: event.target.checked,
@@ -3724,7 +3724,7 @@ export default function App() {
                   aria-label={t("启用 Reality")}
                   type="checkbox"
                   checked={createForm.realityEnabled}
-                  disabled={busy || connected}
+                  disabled={busy}
                   onChange={(event) =>
                     updateCreateForm({
                       realityEnabled: event.target.checked,
@@ -3752,7 +3752,7 @@ export default function App() {
                     aria-label="TLS SNI"
                     placeholder={t("留空表示使用服务器地址")}
                     value={createForm.serverName}
-                    disabled={busy || connected}
+                    disabled={busy}
                     onChange={(event) =>
                       updateCreateForm({ serverName: event.target.value })
                     }
@@ -3766,7 +3766,7 @@ export default function App() {
                     aria-label="TLS ALPN"
                     placeholder={t("逗号分隔，如 h2,http/1.1")}
                     value={createForm.alpn}
-                    disabled={busy || connected}
+                    disabled={busy}
                     onChange={(event) =>
                       updateCreateForm({ alpn: event.target.value })
                     }
@@ -3778,7 +3778,7 @@ export default function App() {
                     aria-label={t("TLS 指纹")}
                     placeholder={t("留空表示不使用")}
                     value={createForm.fingerprint}
-                    disabled={busy || connected}
+                    disabled={busy}
                     onChange={(event) =>
                       updateCreateForm({ fingerprint: event.target.value })
                     }
@@ -3791,7 +3791,7 @@ export default function App() {
                       aria-label={t("证书固定 pinSHA256")}
                       placeholder={t("留空表示不使用")}
                       value={createForm.pinnedSha256}
-                      disabled={busy || connected}
+                      disabled={busy}
                       onChange={(event) =>
                         updateCreateForm({ pinnedSha256: event.target.value })
                       }
@@ -3805,7 +3805,7 @@ export default function App() {
                       <input
                         aria-label={t("Reality publicKey")}
                         value={createForm.publicKey}
-                        disabled={busy || connected}
+                        disabled={busy}
                         onChange={(event) =>
                           updateCreateForm({ publicKey: event.target.value })
                         }
@@ -3817,7 +3817,7 @@ export default function App() {
                         aria-label={t("Reality shortId")}
                         placeholder={t("留空表示不使用")}
                         value={createForm.shortId}
-                        disabled={busy || connected}
+                        disabled={busy}
                         onChange={(event) =>
                           updateCreateForm({ shortId: event.target.value })
                         }
@@ -3829,7 +3829,7 @@ export default function App() {
                         aria-label={t("Reality spiderX")}
                         placeholder={t("留空表示不使用")}
                         value={createForm.spiderX}
-                        disabled={busy || connected}
+                        disabled={busy}
                         onChange={(event) =>
                           updateCreateForm({ spiderX: event.target.value })
                         }
@@ -3842,7 +3842,7 @@ export default function App() {
                       aria-label={t("允许不安全证书")}
                       type="checkbox"
                       checked={createForm.allowInsecure}
-                      disabled={busy || connected}
+                      disabled={busy}
                       onChange={(event) =>
                         updateCreateForm({ allowInsecure: event.target.checked })
                       }
@@ -3860,7 +3860,7 @@ export default function App() {
               aria-label={t("启用 UDP")}
               type="checkbox"
               checked={createForm.udpEnabled}
-              disabled={busy || connected}
+              disabled={busy}
               onChange={(event) =>
                 updateCreateForm({ udpEnabled: event.target.checked })
               }
@@ -3877,7 +3877,7 @@ export default function App() {
                   rows={4}
                   placeholder={t("留空使用全局 Final Fragment 默认 mask")}
                   value={createForm.xrayFinalmaskJson}
-                  disabled={busy || connected}
+                  disabled={busy}
                   onChange={(event) =>
                     updateCreateForm({ xrayFinalmaskJson: event.target.value })
                   }
@@ -3892,14 +3892,14 @@ export default function App() {
           <div className="actions">
             <button
               type="button"
-              disabled={busy || connected}
+              disabled={busy}
               onClick={() => void onCreateNode()}
             >
               {editingNodeId === null ? t("创建节点") : t("保存节点")}
             </button>
             <button
               type="button"
-              disabled={busy || connected}
+              disabled={busy}
               onClick={() =>
                 setCreateForm(
                   blankManualNodeForm({
@@ -4770,7 +4770,7 @@ export default function App() {
               <select
                 aria-label={t("Core 选择")}
                 value={settings.corePreference}
-                disabled={busy || connected}
+                disabled={busy}
                 onChange={(event) =>
                   void onChangeSettings({
                     corePreference: event.target.value as CorePreference,
@@ -4809,7 +4809,7 @@ export default function App() {
                 aria-label={t("允许来自局域网的连接")}
                 type="checkbox"
                 checked={settings.allowLan}
-                disabled={busy || connected}
+                disabled={busy}
                 onChange={(event) =>
                   void onChangeSettings({ allowLan: event.target.checked })
                 }
@@ -4824,7 +4824,7 @@ export default function App() {
                 aria-label={t("启用入站 UDP")}
                 type="checkbox"
                 checked={settings.inboundUdpEnabled}
-                disabled={busy || connected}
+                disabled={busy}
                 onChange={(event) =>
                   void onChangeSettings({
                     inboundUdpEnabled: event.target.checked,
@@ -4838,7 +4838,7 @@ export default function App() {
                 aria-label={t("启用 Mux")}
                 type="checkbox"
                 checked={settings.muxEnabled}
-                disabled={busy || connected}
+                disabled={busy}
                 onChange={(event) =>
                   void onChangeSettings({ muxEnabled: event.target.checked })
                 }
@@ -4853,7 +4853,7 @@ export default function App() {
                 aria-label={t("启用 Fragment")}
                 type="checkbox"
                 checked={settings.fragmentEnabled}
-                disabled={busy || connected}
+                disabled={busy}
                 onChange={(event) =>
                   void onChangeSettings({
                     fragmentEnabled: event.target.checked,
@@ -4870,7 +4870,7 @@ export default function App() {
                 aria-label={t("启用 Final Fragment")}
                 type="checkbox"
                 checked={settings.finalFragmentEnabled}
-                disabled={busy || connected}
+                disabled={busy}
                 onChange={(event) =>
                   void onChangeSettings({
                     finalFragmentEnabled: event.target.checked,
@@ -4887,7 +4887,7 @@ export default function App() {
                 aria-label={t("启用 UDP Noise")}
                 type="checkbox"
                 checked={settings.udpNoiseEnabled}
-                disabled={busy || connected}
+                disabled={busy}
                 onChange={(event) =>
                   void onChangeSettings({
                     udpNoiseEnabled: event.target.checked,
@@ -5059,7 +5059,7 @@ export default function App() {
                 type="number"
                 min="1"
                 max="65535"
-                disabled={busy || connected}
+                disabled={busy}
                 value={settings.socksPort}
                 onChange={(event) =>
                   void onChangeSettings({
@@ -5075,7 +5075,7 @@ export default function App() {
                 type="number"
                 min="1"
                 max="65535"
-                disabled={busy || connected}
+                disabled={busy}
                 value={settings.httpPort}
                 onChange={(event) =>
                   void onChangeSettings({
@@ -5091,7 +5091,7 @@ export default function App() {
                 type="number"
                 min="1"
                 max="65535"
-                disabled={busy || connected}
+                disabled={busy}
                 value={settings.clashApiPort}
                 onChange={(event) =>
                   void onChangeSettings({

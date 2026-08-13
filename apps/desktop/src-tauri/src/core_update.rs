@@ -20,8 +20,7 @@ pub const PINNED_SING_BOX_VERSION: &str = "1.13.18";
 /// Xray version this build was tested against.
 pub const PINNED_XRAY_VERSION: &str = "26.3.27";
 
-const SING_BOX_RELEASE_API: &str =
-    "https://api.github.com/repos/SagerNet/sing-box/releases/latest";
+const SING_BOX_RELEASE_API: &str = "https://api.github.com/repos/SagerNet/sing-box/releases/latest";
 const XRAY_RELEASE_API: &str = "https://api.github.com/repos/XTLS/Xray-core/releases/latest";
 const SING_BOX_RELEASE_HTML: &str = "https://github.com/SagerNet/sing-box/releases";
 const XRAY_RELEASE_HTML: &str = "https://github.com/XTLS/Xray-core/releases";
@@ -115,20 +114,18 @@ fn build_entry_impl<E>(
     } else {
         release.tag_name.clone()
     };
-    let latest = ReleaseVersion::parse(&latest_tag).map_err(|source| {
-        CoreUpdateError::MalformedVersion {
+    let latest =
+        ReleaseVersion::parse(&latest_tag).map_err(|source| CoreUpdateError::MalformedVersion {
             core: name.to_owned(),
             value: latest_tag.clone(),
             source,
-        }
-    })?;
-    let current_version = ReleaseVersion::parse(&current).map_err(|source| {
-        CoreUpdateError::MalformedVersion {
+        })?;
+    let current_version =
+        ReleaseVersion::parse(&current).map_err(|source| CoreUpdateError::MalformedVersion {
             core: name.to_owned(),
             value: current.clone(),
             source,
-        }
-    })?;
+        })?;
     Ok(CoreVersionCheck {
         name: name.to_owned(),
         current,
@@ -150,23 +147,25 @@ async fn fetch_release_body(
     client: &reqwest::Client,
     url: &str,
 ) -> Result<String, CoreUpdateError> {
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|source| CoreUpdateError::RequestFailed {
-            url: url.to_owned(),
-            source: source.without_url(),
-        })?;
+    let response =
+        client
+            .get(url)
+            .send()
+            .await
+            .map_err(|source| CoreUpdateError::RequestFailed {
+                url: url.to_owned(),
+                source: source.without_url(),
+            })?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(String::new());
     }
-    let response = response
-        .error_for_status()
-        .map_err(|source| CoreUpdateError::RequestFailed {
-            url: url.to_owned(),
-            source: source.without_url(),
-        })?;
+    let response =
+        response
+            .error_for_status()
+            .map_err(|source| CoreUpdateError::RequestFailed {
+                url: url.to_owned(),
+                source: source.without_url(),
+            })?;
     response
         .text()
         .await
@@ -197,12 +196,11 @@ pub enum CoreUpdateError {
     #[error("failed to build the Core release-check client")]
     ClientBuild { source: reqwest::Error },
     #[error("failed to download {url}")]
-    RequestFailed {
-        url: String,
-        source: reqwest::Error,
-    },
+    RequestFailed { url: String, source: reqwest::Error },
     #[error("failed to read the Core install manifest")]
-    InstallStatus { source: crate::core_install::CoreInstallError },
+    InstallStatus {
+        source: crate::core_install::CoreInstallError,
+    },
     #[error("failed to parse a GitHub release response")]
     ParseRelease { source: serde_json::Error },
     #[error("{core} reported version {value:?} is not MAJOR.MINOR.PATCH")]

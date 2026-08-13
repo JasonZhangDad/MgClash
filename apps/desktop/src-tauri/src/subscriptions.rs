@@ -514,13 +514,40 @@ mod tests {
         let store = SqliteSubscriptionStore::open_in_memory().unwrap();
         let controller = DesktopSubscriptionController::new(store, MemorySecretStore::default());
         let due = controller
-            .create("Due", "https://example.com/due", 60, true, None, "", "", None)
+            .create(
+                "Due",
+                "https://example.com/due",
+                60,
+                true,
+                None,
+                "",
+                "",
+                None,
+            )
             .unwrap();
         let manual = controller
-            .create("Manual", "https://example.com/manual", 60, false, None, "", "", None)
+            .create(
+                "Manual",
+                "https://example.com/manual",
+                60,
+                false,
+                None,
+                "",
+                "",
+                None,
+            )
             .unwrap();
         let future = controller
-            .create("Future", "https://example.com/future", 60, true, None, "", "", None)
+            .create(
+                "Future",
+                "https://example.com/future",
+                60,
+                true,
+                None,
+                "",
+                "",
+                None,
+            )
             .unwrap();
         controller
             .store()
@@ -580,7 +607,10 @@ mod tests {
         assert!(exported[0].url.contains("secret"));
         assert_eq!(exported[0].user_agent.as_deref(), Some("custom-agent"));
         assert_eq!(exported[0].include_keywords, "hk");
-        assert_eq!(exported[0].subconverter_url.as_deref(), Some("https://sub.example.com"));
+        assert_eq!(
+            exported[0].subconverter_url.as_deref(),
+            Some("https://sub.example.com")
+        );
 
         controller.replace_from_backup(&exported).unwrap();
         let listed = controller.list().unwrap();
@@ -597,7 +627,16 @@ mod tests {
             secrets.clone(),
         );
         let created = controller
-            .create("Broken", "https://example.com/?token=url-secret", 60, true, None, "", "", None)
+            .create(
+                "Broken",
+                "https://example.com/?token=url-secret",
+                60,
+                true,
+                None,
+                "",
+                "",
+                None,
+            )
             .unwrap();
         let url_ref =
             magies_domain::CredentialRef::new(format!("subscription/{}/url", created.id)).unwrap();
@@ -622,16 +661,54 @@ mod tests {
             secrets.clone(),
         );
         let broken = controller
-            .create("Broken", "https://example.com/broken", 60, true, None, "", "", None)
+            .create(
+                "Broken",
+                "https://example.com/broken",
+                60,
+                true,
+                None,
+                "",
+                "",
+                None,
+            )
             .unwrap();
         let also_broken = controller
-            .create("Also broken", "https://example.com/also-broken", 60, true, None, "", "", None)
+            .create(
+                "Also broken",
+                "https://example.com/also-broken",
+                60,
+                true,
+                None,
+                "",
+                "",
+                None,
+            )
             .unwrap();
         let disabled = controller
-            .create("Disabled", "https://example.com/disabled", 60, true, None, "", "", None)
+            .create(
+                "Disabled",
+                "https://example.com/disabled",
+                60,
+                true,
+                None,
+                "",
+                "",
+                None,
+            )
             .unwrap();
         controller
-            .update(disabled.id, "Disabled", 60, true, false, None, None, "", "", None)
+            .update(
+                disabled.id,
+                "Disabled",
+                60,
+                true,
+                false,
+                None,
+                None,
+                "",
+                "",
+                None,
+            )
             .unwrap();
         for id in [broken.id, also_broken.id] {
             let url_ref =

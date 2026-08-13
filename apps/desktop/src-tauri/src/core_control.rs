@@ -241,12 +241,12 @@ impl HostCoreControl {
 
     /// Reloads Core paths after a user-triggered install.
     pub fn apply_install_store(&mut self, install: &crate::core_install::CoreInstallStore) {
-        self.sing_box.replace_settings(crate::core_install::sing_box_settings_with_store(
-            Some(install),
-        ));
-        self.xray.replace_settings(crate::core_install::xray_settings_with_store(
-            Some(install),
-        ));
+        self.sing_box
+            .replace_settings(crate::core_install::sing_box_settings_with_store(Some(
+                install,
+            )));
+        self.xray
+            .replace_settings(crate::core_install::xray_settings_with_store(Some(install)));
     }
 
     /// Points Xray at the desktop Geo assets directory.
@@ -509,9 +509,7 @@ pub fn read_sing_box_version_from_settings() -> Result<String, SingBoxVersionRea
     read_sing_box_version_from_settings_with_store(None)
 }
 
-fn read_version_from_settings(
-    settings: &CoreSettings,
-) -> Result<String, SingBoxVersionReadError> {
+fn read_version_from_settings(settings: &CoreSettings) -> Result<String, SingBoxVersionReadError> {
     let target = TargetPlatform::parse(std::env::consts::OS, std::env::consts::ARCH)
         .map_err(SingBoxVersionReadError::Target)?;
     let binary = locate_core_binary(

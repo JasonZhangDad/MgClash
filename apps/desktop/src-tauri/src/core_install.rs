@@ -21,12 +21,11 @@ use thiserror::Error;
 use zip::ZipArchive;
 
 use crate::core_control::{
-    CoreSettings, CoreSettingsError, XRAY_BINARY_VARIABLE, XRAY_SHA256_VARIABLE,
-    BINARY_PATH_VARIABLE, SHA256_VARIABLE,
+    BINARY_PATH_VARIABLE, CoreSettings, CoreSettingsError, SHA256_VARIABLE, XRAY_BINARY_VARIABLE,
+    XRAY_SHA256_VARIABLE,
 };
 
-const SING_BOX_RELEASE_API: &str =
-    "https://api.github.com/repos/SagerNet/sing-box/releases/latest";
+const SING_BOX_RELEASE_API: &str = "https://api.github.com/repos/SagerNet/sing-box/releases/latest";
 const XRAY_RELEASE_API: &str = "https://api.github.com/repos/XTLS/Xray-core/releases/latest";
 const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 const MAX_ARCHIVE_BYTES: usize = 150 * 1024 * 1024;
@@ -219,10 +218,7 @@ impl CoreInstallStore {
 
 impl InstalledCoreEntry {
     fn into_settings(self) -> Result<CoreSettings, CoreSettingsError> {
-        CoreSettings::from_values(
-            Some(PathBuf::from(self.binary)),
-            Some(self.sha256),
-        )
+        CoreSettings::from_values(Some(PathBuf::from(self.binary)), Some(self.sha256))
     }
 }
 
@@ -508,8 +504,10 @@ async fn download_optional_asset(
         return Ok(None);
     };
     let body = download_url(&asset.browser_download_url).await?;
-    Ok(Some(String::from_utf8(body).map_err(|_| CoreInstallError::InvalidChecksumFile {
-        name: name.to_owned(),
+    Ok(Some(String::from_utf8(body).map_err(|_| {
+        CoreInstallError::InvalidChecksumFile {
+            name: name.to_owned(),
+        }
     })?))
 }
 
@@ -550,7 +548,9 @@ async fn download_url(url: &str) -> Result<Vec<u8>, CoreInstallError> {
         });
     }
     if bytes.is_empty() {
-        return Err(CoreInstallError::EmptyBody { url: url.to_owned() });
+        return Err(CoreInstallError::EmptyBody {
+            url: url.to_owned(),
+        });
     }
     Ok(bytes.into())
 }
@@ -600,10 +600,12 @@ fn extract_sing_box_archive(
     if asset.archive_name.ends_with(".tar.gz") {
         let decoder = GzDecoder::new(archive_bytes);
         let mut archive = Archive::new(decoder);
-        archive.unpack(destination).map_err(|source| CoreInstallError::Extract {
-            archive: asset.archive_name.clone(),
-            source,
-        })
+        archive
+            .unpack(destination)
+            .map_err(|source| CoreInstallError::Extract {
+                archive: asset.archive_name.clone(),
+                source,
+            })
     } else {
         extract_zip(archive_bytes, destination, Some(&asset.extract_dir))
     }
@@ -618,12 +620,13 @@ fn extract_xray_archive(
     extract_zip(archive_bytes, destination, None)?;
     let binary = destination.join(&asset.binary_name);
     if !binary.is_file() {
-        return Err(CoreInstallError::BinaryMissing {
-            path: binary,
-        });
+        return Err(CoreInstallError::BinaryMissing { path: binary });
     }
     if let Some(geo_directory) = geo_directory {
-        copy_if_present(&destination.join(GEOIP_FILE), &geo_directory.join(GEOIP_FILE))?;
+        copy_if_present(
+            &destination.join(GEOIP_FILE),
+            &geo_directory.join(GEOIP_FILE),
+        )?;
         copy_if_present(
             &destination.join(GEOSITE_FILE),
             &geo_directory.join(GEOSITE_FILE),
@@ -638,13 +641,12 @@ fn extract_zip(
     nested_prefix: Option<&str>,
 ) -> Result<(), CoreInstallError> {
     let reader = Cursor::new(archive_bytes);
-    let mut archive = ZipArchive::new(reader).map_err(|source| CoreInstallError::ExtractZip {
-        source,
-    })?;
+    let mut archive =
+        ZipArchive::new(reader).map_err(|source| CoreInstallError::ExtractZip { source })?;
     for index in 0..archive.len() {
-        let mut file = archive.by_index(index).map_err(|source| CoreInstallError::ExtractZip {
-            source,
-        })?;
+        let mut file = archive
+            .by_index(index)
+            .map_err(|source| CoreInstallError::ExtractZip { source })?;
         let Some(name) = file.enclosed_name().map(PathBuf::from) else {
             continue;
         };
@@ -731,18 +733,14 @@ fn verify_sing_box_config(binary: &Path, directory: &Path) -> Result<(), CoreIns
     let config_path = write_smoke_config(directory, "sing-box", SING_BOX_SMOKE_CONFIG)?;
     let result = SingBoxAdapter::new(read_validated_binary(binary)?).validate_config(&config_path);
     let _ = fs::remove_file(&config_path);
-    result
-        .map(|_| ())
-        .map_err(CoreInstallError::SingBoxVersion)
+    result.map(|_| ()).map_err(CoreInstallError::SingBoxVersion)
 }
 
 fn verify_xray_config(binary: &Path, directory: &Path) -> Result<(), CoreInstallError> {
     let config_path = write_smoke_config(directory, "xray", XRAY_SMOKE_CONFIG)?;
     let result = XrayAdapter::new(read_validated_binary(binary)?).validate_config(&config_path);
     let _ = fs::remove_file(&config_path);
-    result
-        .map(|_| ())
-        .map_err(CoreInstallError::XrayVersion)
+    result.map(|_| ()).map_err(CoreInstallError::XrayVersion)
 }
 
 fn write_smoke_config(
@@ -875,20 +873,19 @@ fn archive_previous(
     Ok(backup)
 }
 
-fn write_manifest(directory: &Path, manifest: &CoreInstallManifest) -> Result<(), CoreInstallError> {
+fn write_manifest(
+    directory: &Path,
+    manifest: &CoreInstallManifest,
+) -> Result<(), CoreInstallError> {
     let path = directory.join(MANIFEST_FILE);
     let temporary = path.with_extension("json.partial");
-    let body = serde_json::to_string_pretty(manifest).map_err(|source| CoreInstallError::WriteManifest {
-        source,
-    })?;
+    let body = serde_json::to_string_pretty(manifest)
+        .map_err(|source| CoreInstallError::WriteManifest { source })?;
     fs::write(&temporary, body).map_err(|source| CoreInstallError::Write {
         path: temporary.clone(),
         source,
     })?;
-    fs::rename(&temporary, &path).map_err(|source| CoreInstallError::Write {
-        path,
-        source,
-    })?;
+    fs::rename(&temporary, &path).map_err(|source| CoreInstallError::Write { path, source })?;
     Ok(())
 }
 
@@ -989,10 +986,7 @@ pub enum CoreInstallError {
         actual: String,
     },
     #[error("failed to extract {archive}: {source}")]
-    Extract {
-        archive: String,
-        source: io::Error,
-    },
+    Extract { archive: String, source: io::Error },
     #[error("failed to extract zip archive: {source}")]
     ExtractZip { source: zip::result::ZipError },
     #[error("extracted Core binary is missing at {}", path.display())]

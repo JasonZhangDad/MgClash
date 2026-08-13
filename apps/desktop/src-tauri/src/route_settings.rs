@@ -389,10 +389,7 @@ impl SqliteRouteSettingsStore {
     /// # Errors
     ///
     /// Returns a typed validation, encoding, or database error.
-    pub fn save_bundle(
-        &self,
-        bundle: &RouteSchemeBundle,
-    ) -> Result<(), RouteSettingsStoreError> {
+    pub fn save_bundle(&self, bundle: &RouteSchemeBundle) -> Result<(), RouteSettingsStoreError> {
         bundle
             .profile(RoutingMode::Rule)
             .map_err(RouteSettingsStoreError::InvalidSettings)?;
@@ -412,8 +409,7 @@ impl SqliteRouteSettingsStore {
                 },
             ));
         }
-        let value =
-            serde_json::to_string(bundle).map_err(RouteSettingsStoreError::Encode)?;
+        let value = serde_json::to_string(bundle).map_err(RouteSettingsStoreError::Encode)?;
         self.connection.execute(
             "INSERT INTO route_settings (id, settings_json) VALUES (1, ?1)
              ON CONFLICT(id) DO UPDATE SET settings_json = excluded.settings_json",
