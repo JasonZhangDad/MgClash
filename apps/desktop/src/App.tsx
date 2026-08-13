@@ -909,6 +909,14 @@ export default function App() {
               ...(protocol === "anytls" || protocol === "naive"
                 ? { tlsEnabled: true }
                 : {}),
+              ...(protocol === "custom"
+                ? {
+                    customCore: "sing-box" as const,
+                    customDocument: "",
+                    server: "127.0.0.1",
+                    port: "443",
+                  }
+                : {}),
             }),
       });
       setDialog("create");
@@ -2564,6 +2572,7 @@ export default function App() {
               <option value="wireguard">WireGuard</option>
               <option value="anytls">AnyTLS</option>
               <option value="naive">Naive</option>
+              <option value="custom">Custom</option>
             </select>
           </label>
 
@@ -2577,6 +2586,8 @@ export default function App() {
             />
           </label>
 
+          {createForm.protocol !== "custom" && (
+            <>
           <label>
             {t("服务器")}
             <input
@@ -2599,6 +2610,45 @@ export default function App() {
               onChange={(event) => updateCreateForm({ port: event.target.value })}
             />
           </label>
+            </>
+          )}
+
+          {createForm.protocol === "custom" && (
+            <>
+              <p className="form-hint">
+                {t("自定义节点使用完整 Core JSON，忽略 Mux、Fragment、DNS 与路由设置；请自行保证 SOCKS/HTTP 端口与设置页一致。")}
+              </p>
+              <label>
+                {t("Core 类型")}
+                <select
+                  aria-label={t("自定义 Core 类型")}
+                  value={createForm.customCore}
+                  disabled={busy || connected}
+                  onChange={(event) =>
+                    updateCreateForm({
+                      customCore: event.target.value as "sing-box" | "xray",
+                    })
+                  }
+                >
+                  <option value="sing-box">sing-box</option>
+                  <option value="xray">Xray</option>
+                </select>
+              </label>
+              <label>
+                {t("Core JSON 配置")}
+                <textarea
+                  aria-label={t("Core JSON 配置")}
+                  rows={16}
+                  spellCheck={false}
+                  value={createForm.customDocument}
+                  disabled={busy || connected}
+                  onChange={(event) =>
+                    updateCreateForm({ customDocument: event.target.value })
+                  }
+                />
+              </label>
+            </>
+          )}
 
           {(createForm.protocol === "vless" ||
             createForm.protocol === "vmess" ||

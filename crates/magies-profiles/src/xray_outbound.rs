@@ -115,6 +115,12 @@ impl XrayOutboundConfigGenerator {
                     protocol: ProxyProtocol::Naive,
                 });
             }
+            NodeCredential::Custom(_) => {
+                // Custom nodes write the full runtime document directly.
+                return Err(XrayOutboundError::ProtocolUnsupported {
+                    protocol: ProxyProtocol::Custom,
+                });
+            }
             NodeCredential::Socks(credential) => {
                 user_pass_settings(node, credential.username(), credential.password())
             }
@@ -418,7 +424,8 @@ fn protocol_name(protocol: ProxyProtocol) -> Result<&'static str, XrayOutboundEr
         | ProxyProtocol::Tuic
         | ProxyProtocol::WireGuard
         | ProxyProtocol::AnyTls
-        | ProxyProtocol::Naive => Err(XrayOutboundError::ProtocolUnsupported { protocol }),
+        | ProxyProtocol::Naive
+        | ProxyProtocol::Custom => Err(XrayOutboundError::ProtocolUnsupported { protocol }),
     }
 }
 

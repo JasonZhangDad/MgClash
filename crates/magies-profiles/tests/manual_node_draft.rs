@@ -967,6 +967,121 @@ fn defaults_optional_json_fields_when_omitted() {
 }
 
 #[test]
+fn builds_a_custom_node_with_placeholder_endpoint() {
+    let document = r#"{"inbounds":[],"outbounds":[{"type":"direct"}]}"#;
+    let value = ManualNodeDraft {
+        name: "My JSON".to_owned(),
+        server: "ignored.example.com".to_owned(),
+        port: 8443,
+        udp_enabled: true,
+        transport: None,
+        tls: None,
+        credential: ManualCredentialDraft::Custom {
+            core: magies_domain::CoreType::SingBox,
+            document: document.to_owned(),
+        },
+    };
+    let (node, credential) = value.build(node_id(), credential_ref()).unwrap();
+    assert_eq!(node.protocol_type, ProxyProtocol::Custom);
+    assert_eq!(node.server.as_str(), "127.0.0.1");
+    assert_eq!(node.port.get(), 443);
+    assert!(node.transport.is_none());
+    assert!(node.tls.is_none());
+    let StoredNodeCredential::Custom(stored) = credential else {
+        panic!("expected a Custom credential");
+    };
+    assert_eq!(stored.core(), magies_domain::CoreType::SingBox);
+    assert_eq!(stored.document(), document);
+}
+
+#[test]
+fn rejects_custom_without_document() {
+    let value = ManualNodeDraft {
+        name: "Empty".to_owned(),
+        server: "127.0.0.1".to_owned(),
+        port: 443,
+        udp_enabled: false,
+        transport: None,
+        tls: None,
+        credential: ManualCredentialDraft::Custom {
+            core: magies_domain::CoreType::Xray,
+            document: "   ".to_owned(),
+        },
+    };
+    assert_eq!(
+        value.build(node_id(), credential_ref()).unwrap_err(),
+        ManualNodeDraftError::MissingCustomDocument
+    );
+}
+
+#[test]
+fn rejects_custom_with_invalid_json() {
+    let value = ManualNodeDraft {
+        name: "Bad".to_owned(),
+        server: "127.0.0.1".to_owned(),
+        port: 443,
+        udp_enabled: false,
+        transport: None,
+        tls: None,
+        credential: ManualCredentialDraft::Custom {
+            core: magies_domain::CoreType::SingBox,
+            document: "{not json".to_owned(),
+        },
+    };
+    assert!(matches!(
+        value.build(node_id(), credential_ref()).unwrap_err(),
+        ManualNodeDraftError::InvalidCustomDocument { .. }
+    ));
+}
+
+#[test]
+fn rejects_custom_with_non_object_json() {
+    let value = ManualNodeDraft {
+        name: "Array".to_owned(),
+        server: "127.0.0.1".to_owned(),
+        port: 443,
+        udp_enabled: false,
+        transport: None,
+        tls: None,
+        credential: ManualCredentialDraft::Custom {
+            core: magies_domain::CoreType::SingBox,
+            document: "[]".to_owned(),
+        },
+    };
+    assert_eq!(
+        value.build(node_id(), credential_ref()).unwrap_err(),
+        ManualNodeDraftError::InvalidCustomDocumentNotObject
+    );
+}
+
+#[test]
+fn rejects_transport_and_tls_for_custom() {
+    let mut value = ManualNodeDraft {
+        name: "Custom".to_owned(),
+        server: "127.0.0.1".to_owned(),
+        port: 443,
+        udp_enabled: false,
+        transport: None,
+        tls: None,
+        credential: ManualCredentialDraft::Custom {
+            core: magies_domain::CoreType::SingBox,
+            document: r#"{"outbounds":[]}"#.to_owned(),
+        },
+    };
+    value.transport = Some(TransportConfig::Tcp);
+    assert_eq!(
+        value.clone().build(node_id(), credential_ref()).unwrap_err(),
+        ManualNodeDraftError::CustomRejectsTransport
+    );
+    value.transport = None;
+    value.tls = Some(plain_tls());
+    assert_eq!(
+        value.build(node_id(), credential_ref()).unwrap_err(),
+        ManualNodeDraftError::CustomRejectsTls
+    );
+}
+
+#[test]
 fn redacts_the_draft_debug_output() {
     let value = draft(ManualCredentialDraft::Trojan {
         password: "hunter2".to_owned(),

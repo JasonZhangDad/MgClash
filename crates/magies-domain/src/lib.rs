@@ -28,6 +28,8 @@ pub enum ProxyProtocol {
     AnyTls,
     /// `NaiveProxy`, since sing-box 1.13.0; Xray ships no `naive` outbound.
     Naive,
+    /// Full Core JSON supplied by the user (v2rayN `AddServer2` style).
+    Custom,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

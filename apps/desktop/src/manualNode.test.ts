@@ -330,6 +330,52 @@ describe("buildManualNodeDraft", () => {
     ).toBe("Naive 不支持跳过证书校验");
   });
 
+  it("builds a custom Core JSON node with placeholder endpoint", () => {
+    const document = '{"inbounds":[],"outbounds":[{"type":"direct"}]}';
+    const draft = draftOf({
+      customCore: "xray",
+      customDocument: document,
+      name: "My JSON",
+      protocol: "custom",
+      server: "ignored.example.com",
+      port: "8443",
+    });
+
+    expect(draft.server).toBe("127.0.0.1");
+    expect(draft.port).toBe(443);
+    expect(draft.transport).toBeNull();
+    expect(draft.tls).toBeNull();
+    expect(draft.credential).toEqual({
+      core: "xray",
+      document,
+      protocol: "custom",
+    });
+  });
+
+  it("rejects empty or invalid custom JSON", () => {
+    expect(
+      errorOf({
+        customDocument: " ",
+        name: "Empty",
+        protocol: "custom",
+      }),
+    ).toBe("请填写完整的 Core JSON 配置");
+    expect(
+      errorOf({
+        customDocument: "{bad",
+        name: "Bad",
+        protocol: "custom",
+      }),
+    ).toBe("Core JSON 格式无效");
+    expect(
+      errorOf({
+        customDocument: "[]",
+        name: "Array",
+        protocol: "custom",
+      }),
+    ).toBe("Core JSON 必须是 JSON 对象");
+  });
+
   it("always sends TLS and no transport for Hysteria2", () => {
     const draft = draftOf({
       authentication: "token",
@@ -452,7 +498,7 @@ describe("buildManualNodeDraft", () => {
   });
 
   it("rejects a missing name or server", () => {
-    expect(errorOf({ name: "  " })).toBe("请填写节点名称和服务器");
+    expect(errorOf({ name: "  " })).toBe("请填写节点名称");
     expect(errorOf({ server: "" })).toBe("请填写节点名称和服务器");
   });
 

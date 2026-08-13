@@ -413,3 +413,19 @@ fn a_kcp_node_is_routed_to_xray() {
         })
     );
 }
+
+#[test]
+fn custom_is_available_on_both_cores_without_tun_on_xray() {
+    let plain = requirements(ProxyProtocol::Custom, false);
+    assert!(CoreCapabilityMatrix::supports(CoreType::SingBox, plain));
+    assert!(CoreCapabilityMatrix::supports(CoreType::Xray, plain));
+
+    let tun = requirements(ProxyProtocol::Custom, true);
+    assert!(CoreCapabilityMatrix::supports(CoreType::SingBox, tun));
+    assert_eq!(
+        CoreCapabilityMatrix::rejection(CoreType::Xray, tun),
+        Some(CoreRejection::TunUnsupported {
+            core: CoreType::Xray
+        })
+    );
+}

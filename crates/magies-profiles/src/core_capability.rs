@@ -50,6 +50,8 @@ const SING_BOX_CAPABILITIES: &[CoreCapability] = &[
     // Added in sing-box 1.13.0, carried by the pinned 1.13.18. Xray ships no
     // Naive outbound at all, so this stays sing-box-only.
     capability(ProxyProtocol::Naive, true, false),
+    // User-supplied full document; sing-box can run TUN when the JSON includes it.
+    capability(ProxyProtocol::Custom, true, false),
 ];
 
 /// Xray covers the stream protocols but has no Hysteria2 or TUIC outbound and
@@ -66,6 +68,8 @@ const XRAY_CAPABILITIES: &[CoreCapability] = &[
     capability(ProxyProtocol::Shadowsocks, false, true),
     capability(ProxyProtocol::Socks, false, true),
     capability(ProxyProtocol::Http, false, true),
+    // User-supplied full document; Xray has no TUN inbound of its own.
+    capability(ProxyProtocol::Custom, false, false),
 ];
 
 const fn capability(
@@ -275,6 +279,11 @@ pub enum CoreRejection {
         core: CoreType,
         architecture: CpuArchitecture,
     },
+    /// The user picked a Core that disagrees with the custom node's credential.
+    CustomCoreMismatch {
+        chosen: CoreType,
+        required: CoreType,
+    },
 }
 
 impl Display for CoreRejection {
@@ -309,6 +318,12 @@ impl Display for CoreRejection {
                 "{} has no build for {}",
                 core_name(*core),
                 architecture_name(*architecture)
+            ),
+            Self::CustomCoreMismatch { chosen, required } => write!(
+                formatter,
+                "custom node requires {}, not {}",
+                core_name(*required),
+                core_name(*chosen)
             ),
         }
     }
@@ -368,6 +383,7 @@ pub const fn protocol_name(protocol: ProxyProtocol) -> &'static str {
         ProxyProtocol::WireGuard => "WireGuard",
         ProxyProtocol::AnyTls => "AnyTLS",
         ProxyProtocol::Naive => "Naive",
+        ProxyProtocol::Custom => "Custom",
     }
 }
 

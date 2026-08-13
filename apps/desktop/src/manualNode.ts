@@ -84,6 +84,10 @@ export interface ManualNodeForm {
   wsPath: string;
   xhttpMode: XhttpMode;
   zeroRttHandshake: boolean;
+  /** Which Core the custom JSON targets; only used when `protocol === "custom"`. */
+  customCore: "sing-box" | "xray";
+  /** Full sing-box or Xray runtime JSON; only used when `protocol === "custom"`. */
+  customDocument: string;
 }
 
 export const emptyManualNodeForm: ManualNodeForm = {
@@ -139,6 +143,8 @@ export const emptyManualNodeForm: ManualNodeForm = {
   wsPath: "",
   xhttpMode: "auto",
   zeroRttHandshake: false,
+  customCore: "sing-box",
+  customDocument: "",
 };
 
 /** Seeds a blank form, optionally applying saved create-node TLS defaults. */
@@ -186,8 +192,8 @@ const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 /**
- * Hysteria2 / TUIC / WireGuard / AnyTLS / Naive carry their own tunnel and do
- * not use a selectable stream transport.
+ * Hysteria2 / TUIC / WireGuard / AnyTLS / Naive / Custom carry their own tunnel
+ * and do not use a selectable stream transport.
  */
 export function usesStreamTransport(protocol: ProxyProtocol): boolean {
   return (
@@ -195,7 +201,8 @@ export function usesStreamTransport(protocol: ProxyProtocol): boolean {
     protocol !== "tuic" &&
     protocol !== "wireguard" &&
     protocol !== "anytls" &&
-    protocol !== "naive"
+    protocol !== "naive" &&
+    protocol !== "custom"
   );
 }
 
@@ -356,6 +363,25 @@ function buildCredential(
             ? form.quicCongestionControl
             : null,
         username,
+      };
+    }
+    case "custom": {
+      const document = form.customDocument.trim();
+      if (document === "") {
+        return { error: "请填写完整的 Core JSON 配置" };
+      }
+      try {
+        const parsed: unknown = JSON.parse(document);
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          return { error: "Core JSON 必须是 JSON 对象" };
+        }
+      } catch {
+        return { error: "Core JSON 格式无效" };
+      }
+      return {
+        core: form.customCore,
+        document,
+        protocol: "custom",
       };
     }
   }
@@ -569,8 +595,30 @@ export function buildManualNodeDraft(
   form: ManualNodeForm,
 ): ManualNodeDraftResult {
   const name = form.name.trim();
+  if (name === "") {
+    return { error: "请填写节点名称" };
+  }
+
+  if (form.protocol === "custom") {
+    const credential = buildCredential(form);
+    if (hasError(credential)) {
+      return credential;
+    }
+    return {
+      draft: {
+        credential,
+        name,
+        port: 443,
+        server: "127.0.0.1",
+        tls: null,
+        transport: null,
+        udpEnabled: false,
+      },
+    };
+  }
+
   const server = form.server.trim();
-  if (name === "" || server === "") {
+  if (server === "") {
     return { error: "请填写节点名称和服务器" };
   }
   const port = Number(form.port);
@@ -683,6 +731,11 @@ export function formFromManualNodeDraft(draft: ManualNodeDraft): ManualNodeForm 
       form.password = draft.credential.password ?? "";
       form.quic = draft.credential.quic;
       form.quicCongestionControl = draft.credential.quicCongestionControl ?? "";
+      break;
+    case "custom":
+      form.protocol = "custom";
+      form.customCore = draft.credential.core;
+      form.customDocument = draft.credential.document;
       break;
   }
 

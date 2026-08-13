@@ -37,6 +37,22 @@ use magies_storage::{SecretStore, SecretStoreError};
 use thiserror::Error;
 use uuid::Uuid;
 
+/// Parses a custom node's full Core JSON into a runtime document.
+fn parse_custom_document<C, P>(
+    document: &str,
+) -> Result<serde_json::Value, DesktopSessionError<C, P>>
+where
+    C: Error + 'static,
+    P: Error + 'static,
+{
+    let value: serde_json::Value = serde_json::from_str(document.trim())
+        .map_err(|source| DesktopSessionError::InvalidCustomDocument { source })?;
+    if !value.is_object() {
+        return Err(DesktopSessionError::InvalidCustomDocumentNotObject);
+    }
+    Ok(value)
+}
+
 /// Builds the sing-box document for one profile.
 fn generate_sing_box<C, P>(
     profile: &DesktopSessionProfile,
@@ -404,9 +420,20 @@ where
             .map_err(|source| DesktopSessionError::Secret { source })?;
         let credential = CredentialCodec::decode(&payload)
             .map_err(|source| DesktopSessionError::Credential { source })?;
-        let generated = match profile.core {
-            CoreType::SingBox => generate_sing_box(profile, &credential)?,
-            CoreType::Xray => generate_xray(profile, &credential)?,
+        let generated = match &credential {
+            StoredNodeCredential::Custom(custom) => {
+                if profile.core != custom.core() {
+                    return Err(DesktopSessionError::CustomCoreMismatch {
+                        profile: profile.core,
+                        required: custom.core(),
+                    });
+                }
+                parse_custom_document(custom.document())?
+            }
+            _ => match profile.core {
+                CoreType::SingBox => generate_sing_box(profile, &credential)?,
+                CoreType::Xray => generate_xray(profile, &credential)?,
+            },
         };
         let bytes = serde_json::to_vec(&generated)
             .map_err(|source| DesktopSessionError::Serialize { source })?;
@@ -550,6 +577,18 @@ where
         #[source]
         source: CredentialCodecError,
     },
+    #[error("custom node requires {required:?}, not {profile:?}")]
+    CustomCoreMismatch {
+        profile: CoreType,
+        required: CoreType,
+    },
+    #[error("custom Core JSON is malformed")]
+    InvalidCustomDocument {
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("custom Core JSON must be a JSON object")]
+    InvalidCustomDocumentNotObject,
     #[error("{core:?} cannot provide TUN mode")]
     TunUnsupportedByCore { core: CoreType },
     #[error("failed to generate the Xray runtime configuration")]

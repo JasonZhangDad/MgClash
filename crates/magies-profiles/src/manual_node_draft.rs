@@ -13,12 +13,13 @@
 
 use std::fmt::{Debug, Formatter};
 
-use magies_domain::{CredentialRef, NodeModelError, ProxyNode, TlsConfig, TransportConfig};
+use magies_domain::{CredentialRef, CoreType, NodeModelError, ProxyNode, TlsConfig, TransportConfig};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::anytls::AnyTlsCredential;
+use crate::custom::CustomCredential;
 use crate::http_proxy::HttpCredential;
 use crate::hysteria2::{Hysteria2Credential, Hysteria2Obfuscation, Hysteria2ObfuscationMethod};
 use crate::naive::{NaiveCongestionControl, NaiveCredential};
@@ -88,12 +89,16 @@ impl ManualNodeDraft {
         let credential = self.credential.build()?;
         let transport = resolve_transport(&credential, self.transport)?;
         let tls = resolve_tls(&credential, self.tls)?;
+        let (server, port) = match &credential {
+            StoredNodeCredential::Custom(_) => ("127.0.0.1".to_owned(), 443),
+            _ => (self.server, self.port),
+        };
         let mut node = ProxyNode::new(
             id,
             self.name,
             credential.protocol(),
-            self.server,
-            self.port,
+            server,
+            port,
             Some(credential_ref),
         )?;
         node.transport = transport;
@@ -143,6 +148,12 @@ fn resolve_transport(
         StoredNodeCredential::Naive(_) => {
             if transport.is_some() {
                 return Err(ManualNodeDraftError::NaiveRejectsTransport);
+            }
+            Ok(None)
+        }
+        StoredNodeCredential::Custom(_) => {
+            if transport.is_some() {
+                return Err(ManualNodeDraftError::CustomRejectsTransport);
             }
             Ok(None)
         }
@@ -196,6 +207,10 @@ fn resolve_tls(
             Err(ManualNodeDraftError::AnyTlsRequiresTls)
         }
         StoredNodeCredential::Naive(_) => validate_naive_tls(tls),
+        StoredNodeCredential::Custom(_) if tls.is_some() => {
+            Err(ManualNodeDraftError::CustomRejectsTls)
+        }
+        StoredNodeCredential::Custom(_) => Ok(None),
         _ => Ok(tls),
     }
 }
@@ -311,6 +326,11 @@ pub enum ManualCredentialDraft {
         #[serde(default)]
         quic_congestion_control: Option<NaiveCongestionControl>,
     },
+    #[serde(rename_all = "camelCase")]
+    Custom {
+        core: CoreType,
+        document: String,
+    },
 }
 
 impl ManualCredentialDraft {
@@ -371,6 +391,10 @@ impl ManualCredentialDraft {
                 password: value.password().map(str::to_owned),
                 quic: value.quic(),
                 quic_congestion_control: value.quic_congestion_control(),
+            },
+            StoredNodeCredential::Custom(value) => Self::Custom {
+                core: value.core(),
+                document: value.document().to_owned(),
             },
         }
     }
@@ -522,6 +546,25 @@ impl ManualCredentialDraft {
                     quic_congestion_control,
                 }))
             }
+            Self::Custom { core, document } => {
+                let document = required(&document, ManualNodeDraftError::MissingCustomDocument)?;
+                let trimmed = document.trim();
+                if trimmed.is_empty() {
+                    return Err(ManualNodeDraftError::MissingCustomDocument);
+                }
+                let value: serde_json::Value = serde_json::from_str(trimmed).map_err(|error| {
+                    ManualNodeDraftError::InvalidCustomDocument {
+                        message: error.to_string(),
+                    }
+                })?;
+                if !value.is_object() {
+                    return Err(ManualNodeDraftError::InvalidCustomDocumentNotObject);
+                }
+                Ok(StoredNodeCredential::Custom(CustomCredential {
+                    core,
+                    document: trimmed.to_owned(),
+                }))
+            }
         }
     }
 }
@@ -638,6 +681,16 @@ pub enum ManualNodeDraftError {
     NaiveRejectsTlsExtras,
     #[error("Naive password requires a username")]
     NaivePasswordRequiresUsername,
+    #[error("custom Core JSON is required")]
+    MissingCustomDocument,
+    #[error("custom Core JSON is malformed: {message}")]
+    InvalidCustomDocument { message: String },
+    #[error("custom Core JSON must be a JSON object")]
+    InvalidCustomDocumentNotObject,
+    #[error("custom nodes carry a full Core document and accept no transport setting")]
+    CustomRejectsTransport,
+    #[error("custom nodes carry a full Core document and accept no TLS setting")]
+    CustomRejectsTls,
 }
 
 const fn enabled_by_default() -> bool {

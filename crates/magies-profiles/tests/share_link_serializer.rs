@@ -301,3 +301,36 @@ fn a_vmess_alter_id_survives_the_export() {
     };
     assert_eq!(vmess.alter_id(), 4);
 }
+
+#[test]
+fn custom_nodes_cannot_be_exported_as_sharing_links() {
+    use magies_domain::{NodeName, ProxyNode, ServerAddress};
+    use magies_profiles::CustomCredential;
+    use std::num::NonZeroU16;
+
+    let node = ProxyNode {
+        id: Uuid::parse_str(NODE_ID).unwrap(),
+        name: NodeName::new("Custom").unwrap(),
+        protocol_type: ProxyProtocol::Custom,
+        server: ServerAddress::new("127.0.0.1").unwrap(),
+        port: NonZeroU16::new(443).unwrap(),
+        credential_ref: CredentialRef::new("node/custom").unwrap(),
+        transport: None,
+        tls: None,
+        udp_enabled: false,
+        subscription_id: None,
+        group_id: None,
+        latency_ms: None,
+        last_tested_at: None,
+        enabled: true,
+    };
+    let credential = StoredNodeCredential::Custom(CustomCredential {
+        core: magies_domain::CoreType::SingBox,
+        document: r#"{"outbounds":[]}"#.to_owned(),
+    });
+
+    assert_eq!(
+        ShareLinkSerializer::serialize(&node, &credential),
+        Err(ShareLinkSerializerError::UnrepresentableCustomNode)
+    );
+}

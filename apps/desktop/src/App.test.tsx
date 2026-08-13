@@ -1202,6 +1202,46 @@ describe("App", () => {
     );
   });
 
+  it("creates a custom Core JSON node", async () => {
+    createNodeMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([]);
+    await render();
+
+    await act(async () => {
+      selectValue("custom", createSelect("节点协议"));
+    });
+
+    expect(container.querySelector("input[aria-label='新建节点服务器']")).toBeNull();
+    expect(container.querySelector("select[aria-label='传输方式']")).toBeNull();
+
+    await act(async () => {
+      typeInput("Full JSON", createField("新建节点名称"));
+      selectValue("xray", createSelect("自定义 Core 类型"));
+      type(
+        '{"inbounds":[],"outbounds":[{"type":"direct"}]}',
+        container.querySelector<HTMLTextAreaElement>(
+          "textarea[aria-label='Core JSON 配置']",
+        )!,
+      );
+    });
+    await act(async () => button("创建节点").click());
+
+    expect(createNodeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credential: {
+          core: "xray",
+          document: '{"inbounds":[],"outbounds":[{"type":"direct"}]}',
+          protocol: "custom",
+        },
+        name: "Full JSON",
+        port: 443,
+        server: "127.0.0.1",
+        tls: null,
+        transport: null,
+      }),
+    );
+  });
+
   it("hides the transport picker for TUIC and always sends TLS", async () => {
     createNodeMock.mockResolvedValue(SELECTED);
     loadNodesMock.mockResolvedValue([]);

@@ -348,6 +348,93 @@ fn profile_without_stored_credential() -> DesktopSessionProfile {
     DesktopSessionProfile::new(node, system_dns(), global_route())
 }
 
+#[test]
+fn writes_a_custom_document_verbatim_without_generators() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let store = MemorySecretStore::default();
+    let document = r#"{"inbounds":[],"outbounds":[{"type":"direct","tag":"direct"}],"marker":"custom-verbatim"}"#;
+    let credential_ref = CredentialRef::new("secret://nodes/custom").unwrap();
+    store
+        .put(
+            &credential_ref,
+            &CredentialCodec::encode(&StoredNodeCredential::Custom(
+                magies_profiles::CustomCredential {
+                    core: CoreType::SingBox,
+                    document: document.to_owned(),
+                },
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+    let node = magies_domain::ProxyNode::new(
+        Uuid::nil(),
+        "Custom",
+        ProxyProtocol::Custom,
+        "127.0.0.1",
+        443,
+        Some(credential_ref),
+    )
+    .unwrap();
+    let profile = DesktopSessionProfile::new(node, system_dns(), global_route())
+        .with_core(CoreType::SingBox);
+    let runtime = RuntimeDirectory::new("custom-session");
+    let mut session = DesktopSession::new(
+        store,
+        FakeCoreForCustom::new(events.clone()),
+        FakeProxy::new(events.clone()),
+        runtime.path(),
+    );
+
+    session.start(&profile).unwrap();
+    let config = fs::read_to_string(session.config_path().unwrap()).unwrap();
+    assert!(config.contains("custom-verbatim"));
+    assert!(!config.contains("runtime-secret"));
+    session.stop().unwrap();
+}
+
+#[test]
+fn rejects_custom_core_mismatch() {
+    let store = MemorySecretStore::default();
+    let credential_ref = CredentialRef::new("secret://nodes/custom-xray").unwrap();
+    store
+        .put(
+            &credential_ref,
+            &CredentialCodec::encode(&StoredNodeCredential::Custom(
+                magies_profiles::CustomCredential {
+                    core: CoreType::Xray,
+                    document: r#"{"outbounds":[]}"#.to_owned(),
+                },
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+    let node = magies_domain::ProxyNode::new(
+        Uuid::nil(),
+        "Custom",
+        ProxyProtocol::Custom,
+        "127.0.0.1",
+        443,
+        Some(credential_ref),
+    )
+    .unwrap();
+    let profile = DesktopSessionProfile::new(node, system_dns(), global_route())
+        .with_core(CoreType::SingBox);
+    let runtime = RuntimeDirectory::new("custom-mismatch");
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut session = DesktopSession::new(
+        store,
+        FakeCore::new(events.clone()),
+        FakeProxy::new(events.clone()),
+        runtime.path(),
+    );
+
+    assert!(matches!(
+        session.start(&profile),
+        Err(DesktopSessionError::CustomCoreMismatch { .. })
+    ));
+    assert!(events.lock().unwrap().is_empty());
+}
+
 fn system_dns() -> DnsProfile {
     DnsProfile::new(
         vec![DnsServer::system("system").unwrap()],
@@ -417,6 +504,33 @@ impl CoreSessionControl for FakeCore {
         } else {
             Ok(())
         }
+    }
+}
+
+/// Like [`FakeCore`], but does not assert Shadowsocks-specific config content.
+struct FakeCoreForCustom {
+    events: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl FakeCoreForCustom {
+    fn new(events: Arc<Mutex<Vec<&'static str>>>) -> Self {
+        Self { events }
+    }
+}
+
+impl CoreSessionControl for FakeCoreForCustom {
+    type Error = FakeError;
+    type Output = &'static str;
+
+    fn start(&mut self, config_path: &Path) -> Result<Self::Output, Self::Error> {
+        self.events.lock().unwrap().push("core_start");
+        assert!(config_path.exists());
+        Ok("core-output")
+    }
+
+    fn stop(&mut self) -> Result<(), Self::Error> {
+        self.events.lock().unwrap().push("core_stop");
+        Ok(())
     }
 }
 
