@@ -4,6 +4,8 @@ import { isCommandError } from "./session";
 
 export const REFRESH_INTERVAL_MS = 3_000;
 export const TRAFFIC_REFRESH_INTERVAL_MS = 1_000;
+/// Only polled while the connection tab is open, so it can be brisk.
+export const CONNECTIONS_REFRESH_INTERVAL_MS = 2_000;
 
 export const UNSIGNED_NOTICE_KEY = "mgclash.unsignedNoticeDismissed";
 export const URL_TEST_ADDRESS_KEY = "mgclash.urlTestAddress";
@@ -25,6 +27,7 @@ export type DialogId =
   | null;
 
 export type MainLayout = "horizontal" | "vertical" | "tab";
+export type MainTab = "profiles" | "connections" | "msg";
 export type ThemeMode = "light" | "dark";
 
 export const TUN_LABEL: Record<PlatformSummary["tunAvailability"], string> = {

@@ -58,6 +58,9 @@ const refreshAllSubscriptionsMock = vi.hoisted(() => vi.fn());
 const setNodeEnabledMock = vi.hoisted(() => vi.fn());
 const deleteSubscriptionMock = vi.hoisted(() => vi.fn());
 const syncGlobalHotkeysMock = vi.hoisted(() => vi.fn());
+const loadConnectionsMock = vi.hoisted(() => vi.fn());
+const closeConnectionMock = vi.hoisted(() => vi.fn());
+const closeConnectionsMock = vi.hoisted(() => vi.fn());
 const clearGlobalHotkeysMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./globalHotkeys", () => ({
@@ -73,6 +76,9 @@ vi.mock("./session", async () => {
   const actual = await vi.importActual<typeof import("./session")>("./session");
   return {
     clearLogs: clearLogsMock,
+    loadConnections: loadConnectionsMock,
+    closeConnection: closeConnectionMock,
+    closeConnections: closeConnectionsMock,
     clearTraffic: clearTrafficMock,
     connectSession: connectSessionMock,
     createNode: createNodeMock,
@@ -288,6 +294,9 @@ describe("App", () => {
     refreshSubscriptionMock.mockReset();
     refreshAllSubscriptionsMock.mockReset();
     deleteSubscriptionMock.mockReset();
+    loadConnectionsMock.mockReset();
+    closeConnectionMock.mockReset();
+    closeConnectionsMock.mockReset();
 
     loadPlatformSummaryMock.mockResolvedValue({
       artifactIdentifier: "macos-x86_64",
@@ -321,6 +330,13 @@ describe("App", () => {
     dismissSystemProxyRecoveryMock.mockResolvedValue("clean");
     loadSubscriptionsMock.mockResolvedValue([]);
     testAllNodesMock.mockResolvedValue(undefined);
+    loadConnectionsMock.mockResolvedValue({
+      uploadTotalBytes: 0,
+      downloadTotalBytes: 0,
+      connections: [],
+    });
+    closeConnectionMock.mockResolvedValue(undefined);
+    closeConnectionsMock.mockResolvedValue(undefined);
 
     localStorage.clear();
     container = document.createElement("div");
@@ -3431,6 +3447,63 @@ describe("App", () => {
     await act(async () => button("浅色主题").click());
 
     expect(document.documentElement.dataset.theme).toBe("light");
+  });
+
+  it("lists live connections and closes them from the connections tab", async () => {
+    loadSessionStatusMock.mockResolvedValue(CONNECTED);
+    loadConnectionsMock.mockResolvedValue({
+      uploadTotalBytes: 2_048,
+      downloadTotalBytes: 4_096,
+      connections: [
+        {
+          id: "0f9c1f7e-0000-4000-8000-000000000001",
+          host: "example.com",
+          destination: "93.184.216.34:443",
+          network: "tcp",
+          process: "Safari",
+          rule: "rule_set(geosite-geolocation-!cn)",
+          chain: "tokyo → proxy",
+          uploadBytes: 120,
+          downloadBytes: 340,
+          start: "2026-08-13T00:00:00Z",
+        },
+      ],
+    });
+    await render();
+
+    await act(async () => button("连接列表").click());
+
+    const rows = [
+      ...container.querySelectorAll("[aria-label='连接列表'] tbody tr"),
+    ];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.textContent).toContain("example.com");
+    expect(rows[0]?.textContent).toContain("Safari");
+    expect(rows[0]?.textContent).toContain("tokyo → proxy");
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          "[aria-label='关闭连接 example.com']",
+        )
+        ?.click(),
+    );
+    expect(closeConnectionMock).toHaveBeenCalledWith(
+      "0f9c1f7e-0000-4000-8000-000000000001",
+    );
+
+    await act(async () => button("全部关闭").click());
+    expect(closeConnectionsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("explains an empty connection list rather than showing a blank table", async () => {
+    loadSessionStatusMock.mockResolvedValue(IDLE);
+    await render();
+
+    await act(async () => button("连接列表").click());
+
+    expect(container.querySelector("[aria-label='连接列表']")).toBeNull();
+    expect(container.textContent).toContain("连接后才会有连接记录");
   });
 
   it("changes the main window layout from the menu", async () => {

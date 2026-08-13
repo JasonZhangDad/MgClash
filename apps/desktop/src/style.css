@@ -246,6 +246,17 @@ button {
   border-right: 1px solid var(--line);
 }
 
+/* The connection table replaces both panes of the split while its tab is open. */
+.connections-pane {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  background: var(--surface);
+}
+
 /* The group rail owns the left column and both rows, so the toolbar and the
    node workspace stack to its right the way v2rayN lays out its group list. */
 .profiles-pane {

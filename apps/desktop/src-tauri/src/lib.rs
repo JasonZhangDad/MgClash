@@ -1,6 +1,7 @@
 //! `MgClash` Tauri desktop shell.
 
 pub mod app_settings;
+pub mod connections;
 pub mod core_control;
 pub mod core_install;
 pub mod core_update;
@@ -45,6 +46,10 @@ use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
 use crate::app_settings::{AppSettings, SqliteAppSettingsStore, SystemProxyModeSetting};
+use crate::connections::{
+    ConnectionSnapshot, ConnectionsError, close_all_connections, close_connection,
+    load_connections,
+};
 use crate::core_control::{HostCoreControl, describe};
 use crate::diagnostics::DiagnosticBundle;
 use crate::dns_settings::{DnsSettings, SqliteDnsSettingsStore};
@@ -109,6 +114,10 @@ const TRAFFIC_SAMPLE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Avoid a hot retry loop while the session is stopped or the Core API fails.
 const TRAFFIC_RETRY_DELAY: Duration = Duration::from_secs(1);
+
+/// The connection list is polled while its tab is open; keep it short so a
+/// stalled Core cannot freeze the table.
+const CONNECTIONS_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -953,6 +962,49 @@ fn session_clear_traffic(state: State<'_, AppState>) -> Result<TrafficSnapshot, 
         .clear(Local::now().date_naive(), Instant::now())
         .map_err(|error| traffic_counter_command_error(&error))?;
     Ok(traffic.snapshot())
+}
+
+fn connections_error(error: &ConnectionsError) -> CommandError {
+    CommandError {
+        code: "connections_unavailable",
+        message: describe(error),
+    }
+}
+
+/// The Clash API address of the running session, or the inactive-session error.
+fn connections_api_address(state: &AppState) -> Result<SocketAddr, CommandError> {
+    lock(&state.service)
+        .traffic_api_address()
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+async fn session_connections(
+    state: State<'_, AppState>,
+) -> Result<ConnectionSnapshot, CommandError> {
+    let api_address = connections_api_address(&state)?;
+    load_connections(api_address, CONNECTIONS_TIMEOUT)
+        .await
+        .map_err(|error| connections_error(&error))
+}
+
+#[tauri::command]
+async fn session_close_connection(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let api_address = connections_api_address(&state)?;
+    close_connection(api_address, &id, CONNECTIONS_TIMEOUT)
+        .await
+        .map_err(|error| connections_error(&error))
+}
+
+#[tauri::command]
+async fn session_close_connections(state: State<'_, AppState>) -> Result<(), CommandError> {
+    let api_address = connections_api_address(&state)?;
+    close_all_connections(api_address, CONNECTIONS_TIMEOUT)
+        .await
+        .map_err(|error| connections_error(&error))
 }
 
 fn parse_node_id(id: &str) -> Result<Uuid, CommandError> {
@@ -2155,6 +2207,9 @@ pub fn run() {
             session_url_test,
             session_speed_test,
             session_traffic,
+            session_connections,
+            session_close_connection,
+            session_close_connections,
             session_clear_traffic,
             session_select_node,
             session_switch_node,

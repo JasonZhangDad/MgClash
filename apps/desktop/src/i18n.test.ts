@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 // used to be one file across App.tsx and its components, so every file that
 // can call `t(...)` has to be scanned, not just App.tsx.
 import appSource from "./App.tsx?raw";
+import connectionsViewSource from "./components/ConnectionsView.tsx?raw";
 import dialogSource from "./components/Dialog.tsx?raw";
 import menuBarSource from "./components/MenuBar.tsx?raw";
 import msgViewSource from "./components/MsgView.tsx?raw";
@@ -29,6 +30,7 @@ import {
 function usedKeys(): string[] {
   const source = [
     appSource,
+    connectionsViewSource,
     menuBarSource,
     statusBarSource,
     msgViewSource,

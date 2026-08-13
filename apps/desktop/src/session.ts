@@ -461,6 +461,38 @@ export function clearTraffic(): Promise<TrafficSnapshot> {
   return invoke<TrafficSnapshot>("session_clear_traffic");
 }
 
+/** One live connection as the Core's API reports it. */
+export interface ConnectionSummary {
+  chain: string;
+  destination: string;
+  downloadBytes: number;
+  host: string;
+  id: string;
+  network: string;
+  process: string;
+  rule: string;
+  start: string;
+  uploadBytes: number;
+}
+
+export interface ConnectionSnapshot {
+  connections: ConnectionSummary[];
+  downloadTotalBytes: number;
+  uploadTotalBytes: number;
+}
+
+export function loadConnections(): Promise<ConnectionSnapshot> {
+  return invoke<ConnectionSnapshot>("session_connections");
+}
+
+export function closeConnection(id: string): Promise<void> {
+  return invoke<void>("session_close_connection", { id });
+}
+
+export function closeConnections(): Promise<void> {
+  return invoke<void>("session_close_connections");
+}
+
 export async function testAllNodes(
   ids: string[],
   onResult: (result: NodeTestResult) => void,

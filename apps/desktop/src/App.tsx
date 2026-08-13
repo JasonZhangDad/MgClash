@@ -38,6 +38,9 @@ import {
   importProfile,
   clearLogs,
   clearTraffic,
+  closeConnection,
+  closeConnections,
+  loadConnections,
   importNode,
   importNodes,
   loadAppSettings,
@@ -99,6 +102,7 @@ import {
   type InstalledCoreEntry,
   type GeoAssetsStatus,
   type TrafficSnapshot,
+  type ConnectionSnapshot,
 } from "./session";
 import {
   createSubscription,
@@ -131,6 +135,7 @@ import {
   matchesHotkey,
   THEME_KEY,
   TRAFFIC_REFRESH_INTERVAL_MS,
+  CONNECTIONS_REFRESH_INTERVAL_MS,
   TUN_NOTICE,
   REFRESH_INTERVAL_MS,
   TUN_LABEL,
@@ -138,6 +143,7 @@ import {
   URL_TEST_ADDRESS_KEY,
   type DialogId,
   type MainLayout,
+  type MainTab,
   type NodeMenuPosition,
   type ThemeMode,
 } from "./appHelpers";
@@ -148,6 +154,7 @@ import {
 import { MenuBar } from "./components/MenuBar";
 import { StatusBar } from "./components/StatusBar";
 import { MsgView } from "./components/MsgView";
+import { ConnectionsView } from "./components/ConnectionsView";
 import { Dialog } from "./components/Dialog";
 
 function nodeGroupStrategyBadge(
@@ -232,7 +239,11 @@ export default function App() {
   const [theme, setTheme] = useState<ThemeMode>(() => savedTheme());
   const [layout, setLayout] = useState<MainLayout>(() => savedLayout());
   const [msgVisible, setMsgVisible] = useState(true);
-  const [mainTab, setMainTab] = useState<"profiles" | "msg">("profiles");
+  const [mainTab, setMainTab] = useState<MainTab>("profiles");
+  const [connections, setConnections] = useState<ConnectionSnapshot | null>(
+    null,
+  );
+  const [connectionQuery, setConnectionQuery] = useState("");
   const [nodeQuery, setNodeQuery] = useState("");
   const [inspectedId, setInspectedId] = useState<string | null>(null);
   const [bulkText, setBulkText] = useState("");
@@ -408,6 +419,34 @@ export default function App() {
       clearInterval(timer);
     };
   }, []);
+
+  // Only polled while the tab is open: the list is long, and nobody is reading
+  // it from behind the node table.
+  useEffect(() => {
+    if (mainTab !== "connections" || status?.connected !== true) {
+      setConnections(null);
+      return undefined;
+    }
+    let active = true;
+    const refresh = () => {
+      loadConnections().then(
+        (snapshot) => {
+          if (active) {
+            setConnections(snapshot);
+          }
+        },
+        (failure: unknown) => {
+          console.warn("connection refresh failed", failure);
+        },
+      );
+    };
+    refresh();
+    const timer = setInterval(refresh, CONNECTIONS_REFRESH_INTERVAL_MS);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [mainTab, status?.connected]);
 
   const run = useCallback(
     async (command: () => Promise<SessionStatus | void>) => {
@@ -1892,7 +1931,8 @@ export default function App() {
         )}
 
         <div className={`main-split layout-${layout}`}>
-          {(layout !== "tab" || mainTab === "profiles") && (
+          {mainTab !== "connections" &&
+            (layout !== "tab" || mainTab === "profiles") && (
             <section className="profiles-pane">
               <nav className="group-rail" aria-label={t("节点分组筛选")}>
                 <button
@@ -2559,7 +2599,36 @@ export default function App() {
               </div>
             </section>
           )}
-          {msgVisible && (layout !== "tab" || mainTab === "msg") && (
+          {mainTab === "connections" && (
+            <ConnectionsView
+              busy={busy}
+              connected={connected}
+              snapshot={connections}
+              query={connectionQuery}
+              t={t}
+              onQuery={setConnectionQuery}
+              onRefresh={() =>
+                void loadConnections().then(setConnections, (failure: unknown) => {
+                  console.warn("connection refresh failed", failure);
+                })
+              }
+              onClose={(id) =>
+                void run(async () => {
+                  await closeConnection(id);
+                  setConnections(await loadConnections());
+                })
+              }
+              onCloseAll={() =>
+                void run(async () => {
+                  await closeConnections();
+                  setConnections(await loadConnections());
+                })
+              }
+            />
+          )}
+          {mainTab !== "connections" &&
+            msgVisible &&
+            (layout !== "tab" || mainTab === "msg") && (
             <MsgView
               busy={busy}
               logs={logs}
@@ -2574,15 +2643,22 @@ export default function App() {
             />
           )}
         </div>
-        {layout === "tab" && (
-          <div className="main-tabs">
-            <button
-              type="button"
-              className={mainTab === "profiles" ? "active" : undefined}
-              onClick={() => setMainTab("profiles")}
-            >
-              {t("服务器")}
-            </button>
+        <div className="main-tabs">
+          <button
+            type="button"
+            className={mainTab === "profiles" ? "active" : undefined}
+            onClick={() => setMainTab("profiles")}
+          >
+            {t("服务器")}
+          </button>
+          <button
+            type="button"
+            className={mainTab === "connections" ? "active" : undefined}
+            onClick={() => setMainTab("connections")}
+          >
+            {t("连接列表")}
+          </button>
+          {layout === "tab" && (
             <button
               type="button"
               className={mainTab === "msg" ? "active" : undefined}
@@ -2590,8 +2666,8 @@ export default function App() {
             >
               {t("消息")}
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       <StatusBar
