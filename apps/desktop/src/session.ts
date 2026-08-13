@@ -43,6 +43,19 @@ export type LogSource = "app" | "core";
 export type CorePreference = "auto" | "sing-box" | "xray";
 
 /** Three of v2rayN's four System Proxy choices; PAC has no counterpart yet. */
+/** The language the window renders in. */
+export type Locale =
+  | "en"
+  | "zh-Hans"
+  | "zh-Hant"
+  | "de"
+  | "fr"
+  | "es"
+  | "it"
+  | "ru"
+  | "ja"
+  | "ko";
+
 export type SystemProxyMode = "managed" | "pac" | "cleared" | "unchanged";
 
 export interface AppSettings {
@@ -53,6 +66,7 @@ export interface AppSettings {
   tunEnabled: boolean;
   logLevel: LogLevel;
   systemProxyMode: SystemProxyMode;
+  locale: Locale;
 }
 
 export interface LogEntry {

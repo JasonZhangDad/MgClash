@@ -7,9 +7,9 @@ use std::process::id;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use magies_desktop_lib::app_settings::{
-    AppSettings, AppSettingsStoreError, CorePreferenceSetting, SqliteAppSettingsStore,
-    SystemProxyModeSetting, log_level_name, parse_core_preference, parse_log_level,
-    parse_system_proxy_mode,
+    AppSettings, AppSettingsStoreError, CorePreferenceSetting, LocaleSetting,
+    SqliteAppSettingsStore, SystemProxyModeSetting, log_level_name, parse_core_preference,
+    parse_locale, parse_log_level, parse_system_proxy_mode,
 };
 use magies_desktop_lib::logs::LogLevel;
 use magies_session::SystemProxyMode;
@@ -43,6 +43,7 @@ fn saved_settings_survive_a_restart() {
         tun_enabled: true,
         log_level: LogLevel::Debug,
         system_proxy_mode: SystemProxyModeSetting::Cleared,
+        locale: LocaleSetting::Japanese,
     };
 
     {
@@ -330,4 +331,48 @@ fn pac_without_a_served_url_falls_back_to_the_managed_proxy() {
         SystemProxyModeSetting::Pac.mode(Some("http://127.0.0.1:1/proxy.pac")),
         SystemProxyMode::Pac("http://127.0.0.1:1/proxy.pac".to_owned())
     );
+}
+
+#[test]
+fn every_language_round_trips_and_defaults_to_english() {
+    let store = SqliteAppSettingsStore::open_in_memory().unwrap();
+
+    // English is what the window opens in; Chinese is what the source strings
+    // are written in, which is not the same thing.
+    assert_eq!(store.load().unwrap().locale, LocaleSetting::English);
+
+    for locale in LocaleSetting::ALL.iter().copied() {
+        store
+            .save(AppSettings {
+                locale,
+                ..AppSettings::default()
+            })
+            .unwrap();
+
+        assert_eq!(store.load().unwrap().locale, locale);
+        // The stored value is a BCP 47 tag, so it means the same thing to
+        // anything else that reads the database.
+        assert_eq!(parse_locale(locale.name()), Some(locale));
+    }
+}
+
+#[test]
+fn an_unknown_language_is_a_typed_error() {
+    let database = TestDatabase::new("app-settings-locale");
+    {
+        let store = SqliteAppSettingsStore::open(database.path()).unwrap();
+        store.save(AppSettings::default()).unwrap();
+    }
+    let connection = rusqlite::Connection::open(database.path()).unwrap();
+    connection
+        .execute("UPDATE app_settings SET locale = 'kl' WHERE id = 1", [])
+        .unwrap();
+    drop(connection);
+
+    let store = SqliteAppSettingsStore::open(database.path()).unwrap();
+
+    assert!(matches!(
+        store.load(),
+        Err(AppSettingsStoreError::InvalidStoredValue { .. })
+    ));
 }
