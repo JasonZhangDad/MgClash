@@ -53,6 +53,7 @@ const DICTIONARY: Dictionary = {
   "全部": "Tous",
   "全部更新": "Tout mettre à jour",
   "全部测速": "Tout tester",
+  "序号": "N°",
   "按延迟排序": "Trier par latence",
   "允许来自局域网的连接": "Autoriser les connexions du LAN",
   "开启后本地 SOCKS/HTTP 监听 0.0.0.0，局域网设备可使用本机代理；Clash API 仍仅本机可访问。下次连接生效。": "Si activé, SOCKS/HTTP écoutent sur 0.0.0.0 pour le LAN ; l’API Clash reste locale. Prend effet à la prochaine connexion.",

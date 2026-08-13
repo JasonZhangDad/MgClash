@@ -1781,6 +1781,49 @@ describe("App", () => {
     ]);
   });
 
+  it("lists the groups in a left rail instead of toolbar chips", async () => {
+    const work = {
+      id: "00000000-0000-0000-0000-000000000020",
+      name: "Work",
+      strategy: "select",
+    };
+    loadNodeGroupsMock.mockResolvedValue([work]);
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    await render();
+
+    expect(
+      container.querySelector(".profiles-toolbar [aria-label='节点分组筛选']"),
+    ).toBeNull();
+    const rail = container.querySelector(
+      ".group-rail[aria-label='节点分组筛选']",
+    );
+    if (!rail) {
+      throw new Error("the group rail is missing");
+    }
+    expect(
+      [...rail.querySelectorAll("button")].map((entry) => entry.textContent),
+    ).toEqual(["全部", "未分组", "Work"]);
+  });
+
+  it("numbers the rows of the server table", async () => {
+    const osaka = {
+      ...SELECTED.node!,
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Osaka",
+    };
+    loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
+    await render();
+
+    const headers = [
+      ...container.querySelectorAll("[aria-label='节点列表'] thead th"),
+    ].map((cell) => cell.textContent);
+    expect(headers[1]).toBe("序号");
+    const indices = [
+      ...container.querySelectorAll("[aria-label='节点列表'] tbody tr"),
+    ].map((row) => row.querySelectorAll("td")[1]?.textContent);
+    expect(indices).toEqual(["1", "2"]);
+  });
+
   it("assigns and filters named node groups", async () => {
     const work = {
       id: "00000000-0000-0000-0000-000000000020",

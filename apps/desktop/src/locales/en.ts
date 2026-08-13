@@ -54,6 +54,7 @@ const DICTIONARY: Dictionary = {
   "全部": "All",
   "全部更新": "Update all",
   "全部测速": "Test all",
+  "序号": "Index",
   "按延迟排序": "Sort by latency",
   "允许来自局域网的连接": "Allow connections from the LAN",
   "开启后本地 SOCKS/HTTP 监听 0.0.0.0，局域网设备可使用本机代理；Clash API 仍仅本机可访问。下次连接生效。": "When enabled, local SOCKS/HTTP listen on 0.0.0.0 so LAN devices can use this proxy; Clash API stays localhost-only. Applies on next connect.",

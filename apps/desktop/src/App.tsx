@@ -1894,42 +1894,43 @@ export default function App() {
         <div className={`main-split layout-${layout}`}>
           {(layout !== "tab" || mainTab === "profiles") && (
             <section className="profiles-pane">
-              <div className="profiles-toolbar">
-                <div className="group-chips" aria-label={t("节点分组筛选")}>
+              <nav className="group-rail" aria-label={t("节点分组筛选")}>
+                <button
+                  type="button"
+                  className={nodeGroupFilter === "all" ? "active" : undefined}
+                  onClick={() => setNodeGroupFilter("all")}
+                >
+                  {t("全部")}
+                </button>
+                <button
+                  type="button"
+                  className={
+                    nodeGroupFilter === "ungrouped" ? "active" : undefined
+                  }
+                  onClick={() => setNodeGroupFilter("ungrouped")}
+                >
+                  {t("未分组")}
+                </button>
+                {nodeGroups.map((group) => (
                   <button
-                    type="button"
-                    className={nodeGroupFilter === "all" ? "active" : undefined}
-                    onClick={() => setNodeGroupFilter("all")}
-                  >
-                    {t("全部")}
-                  </button>
-                  <button
+                    key={group.id}
                     type="button"
                     className={
-                      nodeGroupFilter === "ungrouped" ? "active" : undefined
+                      nodeGroupFilter === group.id ? "active" : undefined
                     }
-                    onClick={() => setNodeGroupFilter("ungrouped")}
+                    onClick={() => setNodeGroupFilter(group.id)}
                   >
-                    {t("未分组")}
+                    {(() => {
+                      const badge = nodeGroupStrategyBadge(group.strategy, t);
+                      return badge === ""
+                        ? group.name
+                        : `${group.name} · ${badge}`;
+                    })()}
                   </button>
-                  {nodeGroups.map((group) => (
-                    <button
-                      key={group.id}
-                      type="button"
-                      className={
-                        nodeGroupFilter === group.id ? "active" : undefined
-                      }
-                      onClick={() => setNodeGroupFilter(group.id)}
-                    >
-                      {(() => {
-                        const badge = nodeGroupStrategyBadge(group.strategy, t);
-                        return badge === ""
-                          ? group.name
-                          : `${group.name} · ${badge}`;
-                      })()}
-                    </button>
-                  ))}
-                </div>
+                ))}
+              </nav>
+
+              <div className="profiles-toolbar">
                 <input
                   className="toolbar-search"
                   aria-label={t("搜索节点名称 / 服务器 / 协议")}
@@ -2039,6 +2040,7 @@ export default function App() {
                             }
                           />
                         </th>
+                        <th className="node-index">{t("序号")}</th>
                         <th>{t("名称")}</th>
                         <th>{t("协议")}</th>
                         <th>{t("传输")}</th>
@@ -2055,7 +2057,7 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {visibleNodes.map((candidate) => {
+                      {visibleNodes.map((candidate, rowNumber) => {
                         const index = nodes.findIndex((node) => node.id === candidate.id);
                         const selected = candidate.id === node?.id;
                         const testResult = nodeTests[candidate.id];
@@ -2120,6 +2122,7 @@ export default function App() {
                                 onChange={() => toggleCheckedNode(candidate.id)}
                               />
                             </td>
+                            <td className="node-index">{rowNumber + 1}</td>
                             <td>
                               <span
                                 className={

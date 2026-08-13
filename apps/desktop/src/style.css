@@ -246,6 +246,15 @@ button {
   border-right: 1px solid var(--line);
 }
 
+/* The group rail owns the left column and both rows, so the toolbar and the
+   node workspace stack to its right the way v2rayN lays out its group list. */
+.profiles-pane {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
 .layout-vertical .profiles-pane,
 .layout-vertical .msg-view {
   border-right: 0;
@@ -267,22 +276,31 @@ button {
   background: var(--surface-2);
 }
 
-.group-chips {
+.group-rail {
+  grid-row: 1 / span 2;
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  align-items: center;
+  flex-direction: column;
+  min-width: 120px;
+  max-width: 200px;
+  overflow: auto;
+  padding: 4px;
+  gap: 2px;
+  border-right: 1px solid var(--line);
+  background: var(--surface-2);
 }
 
-.group-chips button {
-  border: 1px solid var(--line);
-  background: var(--surface);
+.group-rail button {
+  border: 0;
+  background: transparent;
   border-radius: 4px;
-  padding: 4px 10px;
+  padding: 5px 8px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.group-chips button.active {
-  border-color: var(--accent);
+.group-rail button.active {
   color: var(--accent);
   background: var(--row-hover);
 }
