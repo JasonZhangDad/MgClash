@@ -195,6 +195,58 @@ fn xhttp_mode_defaults_to_auto_when_absent() {
 }
 
 #[test]
+fn round_trips_kcp_transport_with_its_fields() {
+    let mut node = ProxyNode::new(
+        node_id(),
+        "KCP Edge",
+        ProxyProtocol::Vless,
+        "203.0.113.10",
+        443,
+        Some(credential_ref()),
+    )
+    .unwrap();
+    node.transport = Some(TransportConfig::Kcp {
+        mtu: Some(1350),
+        tti: Some(50),
+        uplink_capacity: Some(5),
+        downlink_capacity: Some(20),
+        congestion: true,
+        header_type: Some("wechat-video".to_owned()),
+        seed: Some("s3cr3t".to_owned()),
+    });
+
+    let encoded = serde_json::to_value(&node).unwrap();
+
+    assert_eq!(encoded["transport"]["type"], json!("kcp"));
+    assert_eq!(encoded["transport"]["mtu"], json!(1350));
+    assert_eq!(encoded["transport"]["headerType"], json!("wechat-video"));
+    assert_eq!(encoded["transport"]["seed"], json!("s3cr3t"));
+    assert_eq!(serde_json::from_value::<ProxyNode>(encoded).unwrap(), node);
+}
+
+#[test]
+fn kcp_optional_fields_default_to_absent_when_omitted() {
+    let stored = json!({
+        "type": "kcp",
+    });
+
+    let transport: TransportConfig = serde_json::from_value(stored).unwrap();
+
+    assert_eq!(
+        transport,
+        TransportConfig::Kcp {
+            mtu: None,
+            tti: None,
+            uplink_capacity: None,
+            downlink_capacity: None,
+            congestion: false,
+            header_type: None,
+            seed: None,
+        }
+    );
+}
+
+#[test]
 fn rejects_invalid_required_fields() {
     for name in ["", "  \n"] {
         assert_eq!(

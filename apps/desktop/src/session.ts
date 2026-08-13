@@ -81,6 +81,7 @@ export interface AppSettings {
   httpPort: number;
   clashApiPort: number;
   muxEnabled: boolean;
+  fragmentEnabled: boolean;
   autoSelectLowestLatency: boolean;
   urlTestAddress: string;
   allowLan: boolean;
@@ -193,6 +194,16 @@ export type TransportDraft =
       mode: "gun" | "multi" | "guna";
       serviceName: string;
       type: "grpc";
+    }
+  | {
+      congestion: boolean;
+      downlinkCapacity: number | null;
+      headerType: string | null;
+      mtu: number | null;
+      seed: string | null;
+      tti: number | null;
+      type: "kcp";
+      uplinkCapacity: number | null;
     };
 
 export type TlsDraft =

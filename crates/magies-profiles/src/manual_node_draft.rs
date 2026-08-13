@@ -201,9 +201,7 @@ fn resolve_tls(
 }
 
 /// Naive requires plain TLS and only `server_name` — sing-box rejects the rest.
-fn validate_naive_tls(
-    tls: Option<TlsConfig>,
-) -> Result<Option<TlsConfig>, ManualNodeDraftError> {
+fn validate_naive_tls(tls: Option<TlsConfig>) -> Result<Option<TlsConfig>, ManualNodeDraftError> {
     match tls {
         Some(TlsConfig::Tls {
             server_name,

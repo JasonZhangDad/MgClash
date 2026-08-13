@@ -47,6 +47,8 @@ fn a_fresh_install_uses_the_documented_defaults() {
     assert_eq!(settings.hotkey_connect, "Ctrl+Enter");
     assert_eq!(settings.hotkey_previous, "Ctrl+[");
     assert_eq!(settings.hotkey_next, "Ctrl+]");
+    // Fragment changes the traffic shape, so it stays off until the user asks.
+    assert!(!settings.fragment_enabled);
 }
 
 #[test]
@@ -75,6 +77,7 @@ fn saved_settings_survive_a_restart() {
         hotkey_connect: "Ctrl+T".to_owned(),
         hotkey_previous: "Alt+[".to_owned(),
         hotkey_next: "Alt+]".to_owned(),
+        fragment_enabled: true,
     };
 
     {
@@ -385,6 +388,52 @@ fn every_language_round_trips_and_defaults_to_english() {
         // anything else that reads the database.
         assert_eq!(parse_locale(locale.name()), Some(locale));
     }
+}
+
+#[test]
+fn fragment_enabled_round_trips_through_storage() {
+    let store = SqliteAppSettingsStore::open_in_memory().unwrap();
+
+    for enabled in [true, false] {
+        store
+            .save(&AppSettings {
+                fragment_enabled: enabled,
+                ..AppSettings::default()
+            })
+            .unwrap();
+
+        assert_eq!(store.load().unwrap().fragment_enabled, enabled);
+    }
+}
+
+#[test]
+fn a_database_written_before_fragment_still_opens() {
+    let database = TestDatabase::new("app-settings-fragment-migration");
+    {
+        // The schema exactly as it was before the Fragment toggle was added.
+        let connection = rusqlite::Connection::open(database.path()).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE app_settings (
+                     id INTEGER PRIMARY KEY CHECK (id = 1),
+                     connect_on_launch INTEGER NOT NULL,
+                     close_to_tray INTEGER NOT NULL,
+                     core_preference TEXT NOT NULL,
+                     tun_enabled INTEGER NOT NULL,
+                     launch_at_login INTEGER NOT NULL,
+                     log_level TEXT NOT NULL
+                 );
+                 INSERT INTO app_settings VALUES (1, 1, 0, 'xray', 0, 1, 'debug');",
+            )
+            .unwrap();
+    }
+
+    let store = SqliteAppSettingsStore::open(database.path()).unwrap();
+    let settings = store.load().unwrap();
+
+    // An existing install must not gain Fragment for free: the traffic shape
+    // it already had should not change without the user asking.
+    assert!(!settings.fragment_enabled);
 }
 
 #[test]

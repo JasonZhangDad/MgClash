@@ -205,6 +205,57 @@ fn an_xhttp_transport_becomes_xhttp_settings() {
 }
 
 #[test]
+fn a_kcp_transport_becomes_kcp_settings() {
+    let (mut node, credential) = build_node(vless(), None);
+    node.transport = Some(TransportConfig::Kcp {
+        mtu: Some(1350),
+        tti: Some(50),
+        uplink_capacity: Some(5),
+        downlink_capacity: Some(20),
+        congestion: true,
+        header_type: Some("wechat-video".to_owned()),
+        seed: Some("s3cr3t".to_owned()),
+    });
+
+    let outbound = generate(&node, &credential);
+
+    let stream = &outbound["streamSettings"];
+    assert_eq!(stream["network"], "kcp");
+    assert_eq!(stream["kcpSettings"]["mtu"], 1350);
+    assert_eq!(stream["kcpSettings"]["tti"], 50);
+    assert_eq!(stream["kcpSettings"]["uplinkCapacity"], 5);
+    assert_eq!(stream["kcpSettings"]["downlinkCapacity"], 20);
+    assert_eq!(stream["kcpSettings"]["congestion"], true);
+    assert_eq!(stream["kcpSettings"]["header"]["type"], "wechat-video");
+    assert_eq!(stream["kcpSettings"]["seed"], "s3cr3t");
+}
+
+#[test]
+fn a_kcp_transport_with_no_optionals_omits_them_and_defaults_the_header() {
+    let (mut node, credential) = build_node(vless(), None);
+    node.transport = Some(TransportConfig::Kcp {
+        mtu: None,
+        tti: None,
+        uplink_capacity: None,
+        downlink_capacity: None,
+        congestion: false,
+        header_type: None,
+        seed: None,
+    });
+
+    let outbound = generate(&node, &credential);
+
+    let settings = &outbound["streamSettings"]["kcpSettings"];
+    assert!(settings["mtu"].is_null());
+    assert!(settings["tti"].is_null());
+    assert!(settings["uplinkCapacity"].is_null());
+    assert!(settings["downlinkCapacity"].is_null());
+    assert_eq!(settings["congestion"], false);
+    assert_eq!(settings["header"]["type"], "none");
+    assert!(settings["seed"].is_null());
+}
+
+#[test]
 fn a_websocket_without_a_host_omits_the_header() {
     let (mut node, credential) = build_node(vless(), None);
     node.transport = Some(TransportConfig::WebSocket {

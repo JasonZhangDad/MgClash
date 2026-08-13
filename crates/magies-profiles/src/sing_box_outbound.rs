@@ -222,6 +222,22 @@ pub fn apply_sing_box_multiplex(outbound: &mut Value, protocol: ProxyProtocol) {
     });
 }
 
+/// Enables sing-box TLS `ClientHello` fragmentation on a generated outbound
+/// when the user asked for it, v2rayN's Fragment toggle style.
+///
+/// `fragment` and `record_fragment` are outbound TLS fields (since sing-box
+/// 1.12), so this only has anything to set on outbounds that carry a `tls`
+/// object; protocols with no TLS (Shadowsocks, plain SOCKS/HTTP, `WireGuard`)
+/// are skipped silently rather than gaining a `tls` block that was never
+/// there.
+pub fn apply_sing_box_fragment(outbound: &mut Value) {
+    let Some(tls) = outbound.get_mut("tls").filter(|tls| tls.is_object()) else {
+        return;
+    };
+    tls["fragment"] = Value::Bool(true);
+    tls["record_fragment"] = Value::Bool(true);
+}
+
 fn base_outbound(node: &ProxyNode) -> Value {
     json!({
         "type": protocol_name(node.protocol_type),
@@ -661,6 +677,10 @@ fn generated_transport(transport: &TransportConfig) -> Result<Option<Value>, Out
         // Pinned sing-box 1.13.18 has no XHTTP transport; the capability
         // matrix routes these nodes to Xray instead of inventing a wire format.
         TransportConfig::XHttp { .. } => Err(OutboundConfigError::XhttpUnsupported),
+        // Pinned sing-box 1.13.18 has no mKCP transport either; the
+        // capability matrix routes these nodes to Xray the same way it does
+        // for XHTTP.
+        TransportConfig::Kcp { .. } => Err(OutboundConfigError::KcpUnsupported),
     }
 }
 
@@ -770,4 +790,6 @@ pub enum OutboundConfigError {
     UnsupportedHysteria2PacketSizes,
     #[error("XHTTP transport is unsupported by sing-box")]
     XhttpUnsupported,
+    #[error("mKCP transport is unsupported by sing-box")]
+    KcpUnsupported,
 }

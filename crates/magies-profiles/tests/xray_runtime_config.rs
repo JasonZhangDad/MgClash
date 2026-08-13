@@ -177,6 +177,59 @@ fn enables_outbound_mux_when_requested() {
 }
 
 #[test]
+fn enables_fragment_dialer_and_adds_the_freedom_outbound_when_requested() {
+    let (node, credential) = node();
+    let dns = dns(false);
+    let route = global_route();
+
+    let config = generate(
+        &XrayRuntimeProfile::new(&node, credential.as_node_credential(), &dns, &route)
+            .with_fragment(true),
+    );
+    let outbounds = config["outbounds"].as_array().unwrap();
+    let proxy = outbounds
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert_eq!(proxy["streamSettings"]["sockopt"]["dialerProxy"], "fragment");
+
+    let fragment = outbounds
+        .iter()
+        .find(|outbound| outbound["tag"] == "fragment")
+        .unwrap();
+    assert_eq!(fragment["protocol"], "freedom");
+    assert_eq!(fragment["settings"]["fragment"]["packets"], "tlshello");
+    assert_eq!(fragment["settings"]["fragment"]["length"], "100-200");
+    assert_eq!(fragment["settings"]["fragment"]["interval"], "10-20");
+}
+
+#[test]
+fn no_fragment_outbound_appears_when_fragment_is_off() {
+    let (node, credential) = node();
+    let dns = dns(false);
+    let route = global_route();
+
+    let config = generate(&XrayRuntimeProfile::new(
+        &node,
+        credential.as_node_credential(),
+        &dns,
+        &route,
+    ));
+
+    let outbounds = config["outbounds"].as_array().unwrap();
+    assert!(
+        !outbounds
+            .iter()
+            .any(|outbound| outbound["tag"] == "fragment")
+    );
+    let proxy = outbounds
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert!(proxy["streamSettings"]["sockopt"].is_null());
+}
+
+#[test]
 fn duplicate_local_ports_are_refused() {
     let dns = dns(false);
     let route = direct_route();

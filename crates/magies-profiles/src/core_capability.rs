@@ -86,6 +86,10 @@ const fn capability(
 
 /// What a session needs from a Core before it can start.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent, orthogonal requirement the matrix checks; a bitset would hide the meaning"
+)]
 pub struct CoreRequirements {
     pub protocol: ProxyProtocol,
     pub tun: bool,
@@ -93,6 +97,8 @@ pub struct CoreRequirements {
     pub certificate_pin: bool,
     /// Whether the node uses XHTTP (Xray-only on the pinned Core versions).
     pub xhttp: bool,
+    /// Whether the node uses mKCP (Xray-only on the pinned Core versions).
+    pub kcp: bool,
     pub architecture: CpuArchitecture,
 }
 
@@ -104,6 +110,7 @@ impl CoreRequirements {
             tun,
             certificate_pin: false,
             xhttp: false,
+            kcp: false,
             architecture,
         }
     }
@@ -124,6 +131,12 @@ impl CoreRequirements {
             xhttp: true,
             ..self
         }
+    }
+
+    /// The same requirements for a node that speaks mKCP.
+    #[must_use]
+    pub const fn with_kcp(self) -> Self {
+        Self { kcp: true, ..self }
     }
 }
 
@@ -188,6 +201,11 @@ impl CoreCapabilityMatrix {
         if requirements.xhttp && matches!(core, CoreType::SingBox) {
             return Some(CoreRejection::XhttpUnsupported { core });
         }
+        // mKCP is the same story: every Xray stream protocol can carry it,
+        // and the pinned sing-box build has no mKCP transport at all.
+        if requirements.kcp && matches!(core, CoreType::SingBox) {
+            return Some(CoreRejection::KcpUnsupported { core });
+        }
         if !capability
             .architectures
             .contains(&requirements.architecture)
@@ -228,6 +246,7 @@ impl CoreCapabilityMatrix {
                     tun: requirements.tun,
                     certificate_pin: requirements.certificate_pin,
                     xhttp: requirements.xhttp,
+                    kcp: requirements.kcp,
                 }),
         }
     }
@@ -247,6 +266,9 @@ pub enum CoreRejection {
         core: CoreType,
     },
     XhttpUnsupported {
+        core: CoreType,
+    },
+    KcpUnsupported {
         core: CoreType,
     },
     ArchitectureUnsupported {
@@ -277,6 +299,11 @@ impl Display for CoreRejection {
                 "{} does not support XHTTP transport",
                 core_name(*core)
             ),
+            Self::KcpUnsupported { core } => write!(
+                formatter,
+                "{} does not support mKCP transport",
+                core_name(*core)
+            ),
             Self::ArchitectureUnsupported { core, architecture } => write!(
                 formatter,
                 "{} has no build for {}",
@@ -292,17 +319,19 @@ pub enum CoreSelectionError {
     #[error("the selected Core cannot run this node: {rejection}")]
     ChosenCoreUnusable { rejection: CoreRejection },
     #[error(
-        "no available Core supports {} with TUN {}{}{}",
+        "no available Core supports {} with TUN {}{}{}{}",
         protocol_name(*protocol),
         if *tun { "on" } else { "off" },
         if *certificate_pin { " and a pinned certificate" } else { "" },
-        if *xhttp { " and XHTTP transport" } else { "" }
+        if *xhttp { " and XHTTP transport" } else { "" },
+        if *kcp { " and mKCP transport" } else { "" }
     )]
     NoUsableCore {
         protocol: ProxyProtocol,
         tun: bool,
         certificate_pin: bool,
         xhttp: bool,
+        kcp: bool,
     },
 }
 

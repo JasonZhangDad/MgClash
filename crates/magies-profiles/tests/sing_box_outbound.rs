@@ -103,6 +103,31 @@ fn refuses_xhttp_because_the_pinned_sing_box_has_none() {
 }
 
 #[test]
+fn refuses_kcp_because_the_pinned_sing_box_has_none() {
+    let parsed = VlessParser
+        .parse(&format!(
+            "vless://{USER_ID}@edge.example.com:443?type=tcp&security=tls&sni=www.example.com"
+        ))
+        .unwrap();
+    let mut node = node(ProxyProtocol::Vless);
+    node.transport = Some(TransportConfig::Kcp {
+        mtu: None,
+        tti: None,
+        uplink_capacity: None,
+        downlink_capacity: None,
+        congestion: false,
+        header_type: None,
+        seed: None,
+    });
+    node.tls = parsed.tls().cloned();
+
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(&node, NodeCredential::from(parsed.credential())),
+        Err(OutboundConfigError::KcpUnsupported)
+    );
+}
+
+#[test]
 fn generates_vmess_grpc_reality() {
     let parsed = VmessParser
         .parse(&format!(
@@ -369,10 +394,7 @@ fn rejects_naive_tls_extras_and_transport() {
         pinned_sha256: None,
     });
     assert_eq!(
-        SingBoxOutboundConfigGenerator::generate(
-            &extras,
-            NodeCredential::from(naive.credential())
-        ),
+        SingBoxOutboundConfigGenerator::generate(&extras, NodeCredential::from(naive.credential())),
         Err(OutboundConfigError::UnsupportedTls {
             protocol: ProxyProtocol::Naive
         })

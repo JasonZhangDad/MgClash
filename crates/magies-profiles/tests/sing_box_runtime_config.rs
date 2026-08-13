@@ -5,7 +5,7 @@ use magies_platform::OperatingSystem;
 use magies_profiles::{
     DnsProfile, DnsServer, DnsStrategy, LocalHttpProfile, LocalSocksProfile, NodeCredential,
     OutboundConfigError, RuntimeConfigError, ShadowsocksParser, SingBoxRuntimeConfigGenerator,
-    SingBoxRuntimeProfile, TunProfile,
+    SingBoxRuntimeProfile, TunProfile, VlessParser,
 };
 use magies_routing::{RouteOutbound, RouteProfile, RoutingMode, RoutingRule};
 use serde_json::json;
@@ -158,6 +158,65 @@ fn enables_outbound_multiplex_when_requested() {
         proxy["multiplex"],
         json!({ "enabled": true, "protocol": "h2mux" })
     );
+}
+
+#[test]
+fn enables_tls_fragment_on_a_tls_carrying_outbound_when_requested() {
+    let user_id = "b0dd64e4-0fbd-4038-9139-d1f32a68a0dc";
+    let parsed = VlessParser
+        .parse(&format!(
+            "vless://{user_id}@edge.example.com:443?type=tcp&security=tls&sni=www.example.com"
+        ))
+        .unwrap();
+    let mut node = shadowsocks_node(true);
+    node.protocol_type = ProxyProtocol::Vless;
+    node.transport = Some(parsed.transport().clone());
+    node.tls = parsed.tls().cloned();
+    let dns = system_dns();
+    let route = RouteProfile::new(RoutingMode::Global, Vec::new(), RouteOutbound::Proxy).unwrap();
+    let profile = SingBoxRuntimeProfile::new(
+        &node,
+        NodeCredential::from(parsed.credential()),
+        &dns,
+        &route,
+    )
+    .with_fragment(true);
+
+    let generated = SingBoxRuntimeConfigGenerator::generate(&profile).unwrap();
+    let proxy = generated.json()["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert_eq!(proxy["tls"]["fragment"], true);
+    assert_eq!(proxy["tls"]["record_fragment"], true);
+}
+
+#[test]
+fn fragment_is_skipped_silently_when_the_outbound_has_no_tls() {
+    let parsed = ShadowsocksParser
+        .parse("ss://aes-256-gcm:proxy-secret@edge.example.com:8388")
+        .unwrap();
+    let node = shadowsocks_node(true);
+    let dns = system_dns();
+    let route = RouteProfile::new(RoutingMode::Global, Vec::new(), RouteOutbound::Proxy).unwrap();
+    let profile = SingBoxRuntimeProfile::new(
+        &node,
+        NodeCredential::from(parsed.credential()),
+        &dns,
+        &route,
+    )
+    .with_fragment(true);
+
+    let generated = SingBoxRuntimeConfigGenerator::generate(&profile).unwrap();
+    let proxy = generated.json()["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert!(proxy["tls"].is_null());
 }
 
 #[test]

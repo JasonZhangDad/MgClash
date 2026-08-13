@@ -47,7 +47,10 @@ fn xray_has_no_anytls_outbound() {
         })
     );
     assert_eq!(
-        CoreCapabilityMatrix::select(CorePreference::Auto, requirements(ProxyProtocol::AnyTls, false)),
+        CoreCapabilityMatrix::select(
+            CorePreference::Auto,
+            requirements(ProxyProtocol::AnyTls, false)
+        ),
         Ok(CoreType::SingBox)
     );
     assert_eq!(protocol_name(ProxyProtocol::AnyTls), "AnyTLS");
@@ -63,7 +66,10 @@ fn xray_has_no_naive_outbound() {
         })
     );
     assert_eq!(
-        CoreCapabilityMatrix::select(CorePreference::Auto, requirements(ProxyProtocol::Naive, false)),
+        CoreCapabilityMatrix::select(
+            CorePreference::Auto,
+            requirements(ProxyProtocol::Naive, false)
+        ),
         Ok(CoreType::SingBox)
     );
     assert_eq!(protocol_name(ProxyProtocol::Naive), "Naive");
@@ -258,6 +264,7 @@ fn the_unreachable_rejections_still_read_correctly() {
             tun: true,
             certificate_pin: false,
             xhttp: false,
+            kcp: false,
         }
         .to_string(),
         "no available Core supports Hysteria2 with TUN on"
@@ -268,6 +275,7 @@ fn the_unreachable_rejections_still_read_correctly() {
             tun: false,
             certificate_pin: false,
             xhttp: false,
+            kcp: false,
         }
         .to_string(),
         "no available Core supports VLESS with TUN off"
@@ -280,9 +288,21 @@ fn the_unreachable_rejections_still_read_correctly() {
             tun: false,
             certificate_pin: true,
             xhttp: false,
+            kcp: false,
         }
         .to_string(),
         "no available Core supports Hysteria2 with TUN off and a pinned certificate"
+    );
+    assert_eq!(
+        CoreSelectionError::NoUsableCore {
+            protocol: ProxyProtocol::Vless,
+            tun: false,
+            certificate_pin: false,
+            xhttp: false,
+            kcp: true,
+        }
+        .to_string(),
+        "no available Core supports VLESS with TUN off and mKCP transport"
     );
 }
 
@@ -363,6 +383,31 @@ fn an_xhttp_node_is_routed_to_xray() {
         CoreCapabilityMatrix::select(CorePreference::Fixed(CoreType::SingBox), xhttp),
         Err(CoreSelectionError::ChosenCoreUnusable {
             rejection: CoreRejection::XhttpUnsupported {
+                core: CoreType::SingBox
+            }
+        })
+    );
+}
+
+#[test]
+fn a_kcp_node_is_routed_to_xray() {
+    let kcp =
+        CoreRequirements::new(ProxyProtocol::Vless, false, CpuArchitecture::X86_64).with_kcp();
+
+    assert_eq!(
+        CoreCapabilityMatrix::select(CorePreference::Auto, kcp).unwrap(),
+        CoreType::Xray
+    );
+    assert_eq!(
+        CoreCapabilityMatrix::rejection(CoreType::SingBox, kcp),
+        Some(CoreRejection::KcpUnsupported {
+            core: CoreType::SingBox
+        })
+    );
+    assert_eq!(
+        CoreCapabilityMatrix::select(CorePreference::Fixed(CoreType::SingBox), kcp),
+        Err(CoreSelectionError::ChosenCoreUnusable {
+            rejection: CoreRejection::KcpUnsupported {
                 core: CoreType::SingBox
             }
         })

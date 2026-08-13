@@ -257,6 +257,31 @@ describe("buildManualNodeDraft", () => {
     );
   });
 
+  it("builds an mKCP transport draft", () => {
+    const draft = draftOf({
+      kcpCongestion: true,
+      kcpHeaderType: "srtp",
+      kcpMtu: "1350",
+      kcpSeed: "secret",
+      kcpTti: "50",
+      password: "hunter2",
+      protocol: "trojan",
+      tlsEnabled: true,
+      transport: "kcp",
+    });
+
+    expect(draft.transport).toEqual({
+      congestion: true,
+      downlinkCapacity: null,
+      headerType: "srtp",
+      mtu: 1350,
+      seed: "secret",
+      tti: 50,
+      type: "kcp",
+      uplinkCapacity: null,
+    });
+  });
+
   it("builds a Naive draft with SNI-only TLS and optional QUIC", () => {
     const draft = draftOf({
       password: "hunter2",

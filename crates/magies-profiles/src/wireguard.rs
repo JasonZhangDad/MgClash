@@ -70,8 +70,11 @@ impl WireGuardParser {
         let peer_public_key = parameters
             .take_required_non_empty("publickey")
             .map_err(invalid_uri)?;
-        let local_address =
-            parse_local_address(parameters.take_required_non_empty("address").map_err(invalid_uri)?)?;
+        let local_address = parse_local_address(
+            parameters
+                .take_required_non_empty("address")
+                .map_err(invalid_uri)?,
+        )?;
         let mtu = parse_mtu(&mut parameters)?;
         let pre_shared_key = parse_pre_shared_key(&mut parameters)?;
         let reserved = parse_reserved(&mut parameters)?;

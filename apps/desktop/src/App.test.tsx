@@ -192,6 +192,7 @@ const DEFAULT_SETTINGS = {
   httpPort: 10809,
   clashApiPort: 9090,
   muxEnabled: false,
+  fragmentEnabled: false,
   autoSelectLowestLatency: false,
   urlTestAddress: "https://www.gstatic.com/generate_204",
   allowLan: false,
@@ -1966,6 +1967,14 @@ describe("App", () => {
     await act(async () => createField("允许来自局域网的连接").click());
     expect(saveAppSettingsMock).toHaveBeenCalledWith(
       expect.objectContaining({ allowLan: true }),
+    );
+  });
+
+  it("persists the Fragment anti-detection toggle from settings", async () => {
+    await render();
+    await act(async () => createField("启用 Fragment").click());
+    expect(saveAppSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ fragmentEnabled: true }),
     );
   });
 

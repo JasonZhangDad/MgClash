@@ -671,6 +671,42 @@ fn generates_an_outbound_for_a_grpc_node() {
 }
 
 #[test]
+fn builds_a_vless_node_with_kcp_transport() {
+    let mut value = draft(vless());
+    value.transport = Some(TransportConfig::Kcp {
+        mtu: Some(1350),
+        tti: Some(50),
+        uplink_capacity: None,
+        downlink_capacity: None,
+        congestion: false,
+        header_type: Some("none".to_owned()),
+        seed: Some("s3cr3t".to_owned()),
+    });
+
+    let (node, credential) = build(value).unwrap();
+
+    assert_eq!(
+        node.transport,
+        Some(TransportConfig::Kcp {
+            mtu: Some(1350),
+            tti: Some(50),
+            uplink_capacity: None,
+            downlink_capacity: None,
+            congestion: false,
+            header_type: Some("none".to_owned()),
+            seed: Some("s3cr3t".to_owned()),
+        })
+    );
+
+    // The pinned sing-box build has no mKCP transport at all; the capability
+    // matrix (covered separately) is what routes this node to Xray instead.
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(&node, credential.as_node_credential()),
+        Err(magies_profiles::OutboundConfigError::KcpUnsupported)
+    );
+}
+
+#[test]
 fn carries_transport_and_tls_onto_the_node() {
     let mut value = draft(vless());
     value.transport = Some(TransportConfig::WebSocket {

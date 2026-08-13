@@ -130,6 +130,78 @@ fn parses_xhttp_and_legacy_splithttp_transports() {
 }
 
 #[test]
+fn parses_kcp_and_mkcp_transports() {
+    let kcp = VlessParser
+        .parse(&format!(
+            "vless://{USER_ID}@edge.example.com:443?type=kcp\
+             &mtu=1350&tti=50&uplinkCapacity=5&downlinkCapacity=20\
+             &congestion=1&headerType=wechat-video&seed=s3cr3t#KCP"
+        ))
+        .unwrap();
+    assert_eq!(
+        kcp.transport(),
+        &TransportConfig::Kcp {
+            mtu: Some(1350),
+            tti: Some(50),
+            uplink_capacity: Some(5),
+            downlink_capacity: Some(20),
+            congestion: true,
+            header_type: Some("wechat-video".to_owned()),
+            seed: Some("s3cr3t".to_owned()),
+        }
+    );
+
+    let mkcp = VlessParser
+        .parse(&format!(
+            "vless://{USER_ID}@edge.example.com:443?type=mkcp#mKCP"
+        ))
+        .unwrap();
+    assert_eq!(
+        mkcp.transport(),
+        &TransportConfig::Kcp {
+            mtu: None,
+            tti: None,
+            uplink_capacity: None,
+            downlink_capacity: None,
+            congestion: false,
+            header_type: None,
+            seed: None,
+        }
+    );
+}
+
+#[test]
+fn rejects_an_invalid_kcp_header_type() {
+    let error = VlessParser
+        .parse(&format!(
+            "vless://{USER_ID}@edge.example.com:443?type=kcp&headerType=bogus"
+        ))
+        .unwrap_err();
+    assert_eq!(
+        error,
+        VlessParseError::UnsupportedKcpHeaderType {
+            value: "bogus".to_owned()
+        }
+    );
+}
+
+#[test]
+fn rejects_a_non_numeric_kcp_mtu() {
+    let error = VlessParser
+        .parse(&format!(
+            "vless://{USER_ID}@edge.example.com:443?type=kcp&mtu=not-a-number"
+        ))
+        .unwrap_err();
+    assert_eq!(
+        error,
+        VlessParseError::InvalidKcpParameter {
+            name: "mtu",
+            value: "not-a-number".to_owned()
+        }
+    );
+}
+
+#[test]
 fn parses_tls_certificate_pin_from_either_spelling() {
     use magies_domain::CertificatePin;
 
@@ -317,9 +389,9 @@ fn rejects_duplicate_unsupported_and_unmappable_parameters() {
             },
         ),
         (
-            format!("vless://{USER_ID}@example.com:443?type=kcp"),
+            format!("vless://{USER_ID}@example.com:443?type=quic"),
             VlessParseError::UnsupportedTransport {
-                value: "kcp".to_owned(),
+                value: "quic".to_owned(),
             },
         ),
         (
