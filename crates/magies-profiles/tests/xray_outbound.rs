@@ -169,6 +169,42 @@ fn a_websocket_transport_becomes_ws_settings() {
 }
 
 #[test]
+fn an_httpupgrade_transport_becomes_httpupgrade_settings() {
+    let (mut node, credential) = build_node(vless(), None);
+    node.transport = Some(TransportConfig::HttpUpgrade {
+        path: "/upgrade".to_owned(),
+        host: Some("cdn.example.com".to_owned()),
+    });
+
+    let outbound = generate(&node, &credential);
+
+    let stream = &outbound["streamSettings"];
+    assert_eq!(stream["network"], "httpupgrade");
+    assert_eq!(stream["httpupgradeSettings"]["path"], "/upgrade");
+    assert_eq!(stream["httpupgradeSettings"]["host"], "cdn.example.com");
+}
+
+#[test]
+fn an_xhttp_transport_becomes_xhttp_settings() {
+    use magies_domain::XhttpMode;
+
+    let (mut node, credential) = build_node(vless(), None);
+    node.transport = Some(TransportConfig::XHttp {
+        path: "/xh".to_owned(),
+        host: Some("cdn.example.com".to_owned()),
+        mode: XhttpMode::StreamUp,
+    });
+
+    let outbound = generate(&node, &credential);
+
+    let stream = &outbound["streamSettings"];
+    assert_eq!(stream["network"], "xhttp");
+    assert_eq!(stream["xhttpSettings"]["path"], "/xh");
+    assert_eq!(stream["xhttpSettings"]["host"], "cdn.example.com");
+    assert_eq!(stream["xhttpSettings"]["mode"], "stream-up");
+}
+
+#[test]
 fn a_websocket_without_a_host_omits_the_header() {
     let (mut node, credential) = build_node(vless(), None);
     node.transport = Some(TransportConfig::WebSocket {

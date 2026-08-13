@@ -6,6 +6,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 
 import {
   connectSession,
+  createNode,
   dismissSystemProxyRecovery,
   disconnectSession,
   editNode,
@@ -15,12 +16,15 @@ import {
   deleteNode,
   loadTraffic,
   loadNodes,
+  loadNodeDraft,
   loadNodeGroups,
   loadSessionStatus,
   loadSystemProxyStartupStatus,
   moveNode,
+  reorderNodes,
   recoverSystemProxy,
   selectNode,
+  setNodeEnabled,
   setNodeGroup,
   setDnsSettings,
   setRouteSettings,
@@ -28,6 +32,7 @@ import {
   testAllNodes,
   testNode,
   testUrl,
+  updateNode,
   type NodeTestResult,
   type SessionStatus,
 } from "./session";
@@ -53,11 +58,31 @@ const IDLE: SessionStatus = {
   },
   node: null,
   socksPort: 10808,
+  clashApiPort: 9090,
   systemProxy: true,
   systemProxyMode: "managed" as const,
 };
 
 describe("session commands", () => {
+  it("creates a node from a manual draft", async () => {
+    await createNode({
+      credential: {
+        method: "aes-256-gcm",
+        password: "secret",
+        protocol: "shadowsocks",
+      },
+      name: "Tokyo",
+      port: 8388,
+      server: "edge.example.com",
+      tls: null,
+      transport: { type: "tcp" },
+      udpEnabled: true,
+    });
+    expect(invokeMock).toHaveBeenCalledWith("session_create_node", {
+      draft: expect.objectContaining({ name: "Tokyo" }),
+    });
+  });
+
   beforeEach(() => {
     invokeMock.mockReset();
     invokeMock.mockResolvedValue(IDLE);
@@ -76,16 +101,35 @@ describe("session commands", () => {
     });
   });
 
-  it("lists, selects, edits, and deletes persisted nodes", async () => {
+  it("lists, selects, edits, updates, and deletes persisted nodes", async () => {
     await loadNodes();
     await loadNodeGroups();
     await selectNode("00000000-0000-0000-0000-000000000001");
+    await setNodeEnabled("00000000-0000-0000-0000-000000000001", false);
     await editNode("00000000-0000-0000-0000-000000000001", {
       name: "Tokyo 2",
       port: 443,
       server: "new.example.com",
     });
+    await loadNodeDraft("00000000-0000-0000-0000-000000000001");
+    await updateNode("00000000-0000-0000-0000-000000000001", {
+      credential: {
+        method: "aes-256-gcm",
+        password: "secret",
+        protocol: "shadowsocks",
+      },
+      name: "Tokyo 3",
+      port: 8443,
+      server: "edge.example.com",
+      tls: null,
+      transport: { type: "tcp" },
+      udpEnabled: true,
+    });
     await moveNode("00000000-0000-0000-0000-000000000001", "down");
+    await reorderNodes([
+      "00000000-0000-0000-0000-000000000002",
+      "00000000-0000-0000-0000-000000000001",
+    ]);
     await setNodeGroup(
       "00000000-0000-0000-0000-000000000001",
       " Work ",
@@ -97,21 +141,38 @@ describe("session commands", () => {
     expect(invokeMock).toHaveBeenNthCalledWith(3, "session_select_node", {
       id: "00000000-0000-0000-0000-000000000001",
     });
-    expect(invokeMock).toHaveBeenNthCalledWith(4, "session_edit_node", {
+    expect(invokeMock).toHaveBeenNthCalledWith(4, "session_set_node_enabled", {
+      enabled: false,
+      id: "00000000-0000-0000-0000-000000000001",
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(5, "session_edit_node", {
       id: "00000000-0000-0000-0000-000000000001",
       name: "Tokyo 2",
       port: 443,
       server: "new.example.com",
     });
-    expect(invokeMock).toHaveBeenNthCalledWith(5, "session_move_node", {
+    expect(invokeMock).toHaveBeenNthCalledWith(6, "session_node_draft", {
+      id: "00000000-0000-0000-0000-000000000001",
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(7, "session_update_node", {
+      id: "00000000-0000-0000-0000-000000000001",
+      draft: expect.objectContaining({ name: "Tokyo 3" }),
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(8, "session_move_node", {
       direction: "down",
       id: "00000000-0000-0000-0000-000000000001",
     });
-    expect(invokeMock).toHaveBeenNthCalledWith(6, "session_set_node_group", {
+    expect(invokeMock).toHaveBeenNthCalledWith(9, "session_reorder_nodes", {
+      ids: [
+        "00000000-0000-0000-0000-000000000002",
+        "00000000-0000-0000-0000-000000000001",
+      ],
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(10, "session_set_node_group", {
       groupName: " Work ",
       id: "00000000-0000-0000-0000-000000000001",
     });
-    expect(invokeMock).toHaveBeenNthCalledWith(7, "session_delete_node", {
+    expect(invokeMock).toHaveBeenNthCalledWith(11, "session_delete_node", {
       id: "00000000-0000-0000-0000-000000000002",
     });
   });

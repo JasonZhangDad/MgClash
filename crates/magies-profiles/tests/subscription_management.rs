@@ -15,7 +15,7 @@ fn creates_and_lists_a_subscription_without_persisting_its_url_in_sqlite() {
     let secrets = MemorySecretStore::default();
 
     let created = SubscriptionManagementService::new(&mut store, &secrets)
-        .create(" Primary ", OLD_URL, 60, true)
+        .create(" Primary ", OLD_URL, 60, true, None, "", "")
         .unwrap();
 
     assert_eq!(created.name.as_str(), "Primary");
@@ -44,10 +44,10 @@ fn rejects_invalid_urls_before_changing_storage() {
     let mut service = SubscriptionManagementService::new(&mut store, &secrets);
 
     let invalid = service
-        .create("Invalid", "not a URL", 60, false)
+        .create("Invalid", "not a URL", 60, false, None, "", "")
         .unwrap_err();
     let unsupported = service
-        .create("File", "file:///tmp/subscription", 60, false)
+        .create("File", "file:///tmp/subscription", 60, false, None, "", "")
         .unwrap_err();
 
     assert!(matches!(
@@ -66,7 +66,7 @@ fn edits_settings_and_url_without_losing_fetch_state() {
     let mut store = SqliteSubscriptionStore::open_in_memory().unwrap();
     let secrets = MemorySecretStore::default();
     let created = SubscriptionManagementService::new(&mut store, &secrets)
-        .create("Primary", OLD_URL, 60, true)
+        .create("Primary", OLD_URL, 60, true, None, "", "")
         .unwrap();
     store
         .touch_subscription(
@@ -77,7 +77,7 @@ fn edits_settings_and_url_without_losing_fetch_state() {
         .unwrap();
 
     let edited = SubscriptionManagementService::new(&mut store, &secrets)
-        .update(created.id, "Edited", 120, false, false, Some(NEW_URL))
+        .update(created.id, "Edited", 120, false, false, Some(NEW_URL), None, "", "")
         .unwrap();
 
     assert_eq!(edited.name, SubscriptionName::new("Edited").unwrap());
@@ -101,7 +101,7 @@ fn deletes_subscription_metadata_nodes_and_every_owned_secret() {
     let mut store = SqliteSubscriptionStore::open_in_memory().unwrap();
     let secrets = MemorySecretStore::default();
     let created = SubscriptionManagementService::new(&mut store, &secrets)
-        .create("Primary", OLD_URL, 60, false)
+        .create("Primary", OLD_URL, 60, false, None, "", "")
         .unwrap();
     let node_ref = credential_ref("subscription/primary/node/one");
     let parsed = ShareLinkParser
@@ -151,7 +151,7 @@ fn failed_url_write_keeps_the_subscription_database_empty() {
     let secrets = RejectingSecretStore;
 
     let error = SubscriptionManagementService::new(&mut store, &secrets)
-        .create("Primary", OLD_URL, 60, false)
+        .create("Primary", OLD_URL, 60, false, None, "", "")
         .unwrap_err();
 
     assert!(matches!(
@@ -179,7 +179,7 @@ fn settings_only_update_does_not_require_the_url_secret() {
     store.insert_subscription(&subscription).unwrap();
 
     let edited = SubscriptionManagementService::new(&mut store, &secrets)
-        .update(subscription.id, "Renamed", 30, true, false, None)
+        .update(subscription.id, "Renamed", 30, true, false, None, None, "", "")
         .unwrap();
 
     assert_eq!(edited.name.as_str(), "Renamed");
@@ -195,7 +195,7 @@ fn update_reports_missing_subscription_and_missing_previous_url_secret() {
     let missing_id = uuid("018f78b5-2cd0-7000-a9a6-3bccf60951e8");
 
     let missing = SubscriptionManagementService::new(&mut store, &secrets)
-        .update(missing_id, "Missing", 60, false, true, None)
+        .update(missing_id, "Missing", 60, false, true, None, None, "", "")
         .unwrap_err();
     assert!(matches!(
         missing,
@@ -213,7 +213,7 @@ fn update_reports_missing_subscription_and_missing_previous_url_secret() {
     .unwrap();
     store.insert_subscription(&subscription).unwrap();
     let missing_secret = SubscriptionManagementService::new(&mut store, &secrets)
-        .update(subscription.id, "Primary", 60, false, true, Some(NEW_URL))
+        .update(subscription.id, "Primary", 60, false, true, Some(NEW_URL), None, "", "")
         .unwrap_err();
     assert!(matches!(
         missing_secret,

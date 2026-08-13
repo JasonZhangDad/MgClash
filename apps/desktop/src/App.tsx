@@ -1,14 +1,17 @@
-import { DEFAULT_LOCALE, LOCALES, translate, type Locale } from "./i18n";
+import { DEFAULT_LOCALE, translate, type Locale } from "./i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   buildManualNodeDraft,
+  blankManualNodeForm,
   emptyManualNodeForm,
+  formFromManualNodeDraft,
   SHADOWSOCKS_METHODS,
   usesStreamTransport,
   type GrpcMode,
   type ManualNodeForm,
   type TransportKind,
+  type XhttpMode,
 } from "./manualNode";
 import { loadPlatformSummary, type PlatformSummary } from "./platform";
 import {
@@ -23,14 +26,16 @@ import {
   removeDuplicateNodes,
   dismissSystemProxyRecovery,
   disconnectSession,
-  editNode,
   exportDiagnostics,
+  exportPreferences,
+  importPreferences,
   clearLogs,
+  clearTraffic,
   importNode,
   importNodes,
-  isCommandError,
   loadAppSettings,
   loadLogs,
+  loadNodeDraft,
   saveAppSettings,
   loadNodeGroups,
   loadNodes,
@@ -39,15 +44,20 @@ import {
   loadNodeTraffic,
   loadTraffic,
   moveNode,
+  reorderNodes,
   recoverSystemProxy,
   selectNode,
+  switchNode,
   setDnsSettings,
+  setNodeEnabled,
   setNodeGroup,
   setRouteSettings,
   setRoutingMode,
   testAllNodes,
+  testDownloadSpeed,
   testNode,
   testUrl,
+  updateNode,
   type AppSettings,
   type BulkImportReport,
   type CorePreference,
@@ -59,6 +69,7 @@ import {
   type NodeTestResult,
   type ObfuscationMethod,
   type ProxyProtocol,
+  type SpeedTestResult,
   type VmessSecurity,
   type DnsMode,
   type DnsSettings,
@@ -67,11 +78,9 @@ import {
   type RouteRuleKind,
   type RouteSettings,
   type SessionStatus,
-  type RoutingMode,
   type SystemProxyStartupStatus,
   type NodeTraffic,
   type UpdateCheck,
-  type SystemProxyMode,
   type TrafficSnapshot,
 } from "./session";
 import {
@@ -83,13 +92,43 @@ import {
   updateSubscription,
   type SubscriptionSummary,
 } from "./subscriptions";
+import {
+  describeFailure,
+  DEFAULT_SPEED_TEST_URL,
+  DEFAULT_URL_TEST_ADDRESS,
+  formatBytes,
+  formatClock,
+  formatRate,
+  isGeoRule,
+  LAYOUT_KEY,
+  latencyQuality,
+  noticeWasDismissed,
+  regionFlag,
+  ROUTE_KIND_LABEL,
+  runtimeOrderedRoute,
+  savedLayout,
+  savedTheme,
+  savedUrlTestAddress,
+  sortNodeIdsByLatency,
+  lowestLatencyNodeId,
+  matchesHotkey,
+  THEME_KEY,
+  TRAFFIC_REFRESH_INTERVAL_MS,
+  TUN_NOTICE,
+  REFRESH_INTERVAL_MS,
+  TUN_LABEL,
+  UNSIGNED_NOTICE_KEY,
+  URL_TEST_ADDRESS_KEY,
+  type DialogId,
+  type MainLayout,
+  type NodeMenuPosition,
+  type ThemeMode,
+} from "./appHelpers";
+import { MenuBar } from "./components/MenuBar";
+import { StatusBar } from "./components/StatusBar";
+import { MsgView } from "./components/MsgView";
+import { Dialog } from "./components/Dialog";
 
-/**
- * Automatic network recovery can reconnect the session without the user acting,
- * so the dashboard re-reads the status instead of trusting its last command.
- */
-const REFRESH_INTERVAL_MS = 3_000;
-const TRAFFIC_REFRESH_INTERVAL_MS = 1_000;
 const EMPTY_TRAFFIC: TrafficSnapshot = {
   downloadBytesPerSecond: 0,
   monthBytes: 0,
@@ -97,118 +136,6 @@ const EMPTY_TRAFFIC: TrafficSnapshot = {
   totalBytes: 0,
   uploadBytesPerSecond: 0,
 };
-
-const TUN_LABEL: Record<PlatformSummary["tunAvailability"], string> = {
-  requiresElevation: "需要管理员权限",
-  unavailableInUnsignedBuild: "未签名版本不可用",
-};
-
-/**
- * PRD V1.1 DoD 6 requires the unsigned-build risk to be visible on first
- * launch, not only on the download page.
- */
-const UNSIGNED_NOTICE_KEY = "mgclash.unsignedNoticeDismissed";
-const URL_TEST_ADDRESS_KEY = "mgclash.urlTestAddress";
-const DEFAULT_URL_TEST_ADDRESS = "https://www.gstatic.com/generate_204";
-
-const ROUTE_KIND_LABEL: Record<RouteRuleKind, string> = {
-  domain: "域名",
-  domainSuffix: "域名后缀",
-  domainKeyword: "域名关键字",
-  ipCidr: "IPv4 CIDR",
-  ipCidr6: "IPv6 CIDR",
-  geoIp: "GeoIP",
-  geoSite: "GeoSite",
-  port: "端口",
-  network: "网络",
-};
-
-function isGeoRule(kind: RouteRuleKind): boolean {
-  return kind === "geoIp" || kind === "geoSite";
-}
-
-function runtimeOrderedRoute(settings: RouteSettings): RouteSettings {
-  return {
-    ...settings,
-    rules: [
-      ...settings.rules.filter((rule) => !isGeoRule(rule.kind)),
-      ...settings.rules.filter((rule) => isGeoRule(rule.kind)),
-    ],
-  };
-}
-
-const TUN_NOTICE: Record<PlatformSummary["tunAvailability"], string> = {
-  requiresElevation: "TUN 需要管理员权限才能启用。",
-  unavailableInUnsignedBuild:
-    "TUN 在未签名版本中不可用：它需要 Apple 签发的 Network Extension entitlement。本机可用的是本地 HTTP/SOCKS 代理与系统代理。",
-};
-
-function noticeWasDismissed(): boolean {
-  try {
-    return localStorage.getItem(UNSIGNED_NOTICE_KEY) === "1";
-  } catch {
-    // A webview with storage disabled should still start; showing the notice
-    // again is the safe direction to fail.
-    return false;
-  }
-}
-
-function savedUrlTestAddress(): string {
-  try {
-    return localStorage.getItem(URL_TEST_ADDRESS_KEY)?.trim() || DEFAULT_URL_TEST_ADDRESS;
-  } catch {
-    return DEFAULT_URL_TEST_ADDRESS;
-  }
-}
-
-type PanelId =
-  | "connection"
-  | "nodes"
-  | "subscriptions"
-  | "routing"
-  | "settings"
-  | "logs";
-
-/// The node table is the main view; everything else opens over it, which is how
-/// v2rayN keeps the list in front while you configure.
-const TABS: { id: PanelId; label: string }[] = [
-  { id: "connection", label: "概览" },
-  { id: "nodes", label: "添加节点" },
-  { id: "subscriptions", label: "订阅分组" },
-  { id: "routing", label: "路由设置" },
-  { id: "settings", label: "参数设置" },
-  { id: "logs", label: "诊断" },
-];
-
-/** Where the node menu opened, so it can be drawn at the pointer. */
-interface NodeMenuPosition {
-  nodeId: string;
-  x: number;
-  y: number;
-}
-
-function formatRate(bytesPerSecond: number): string {
-  const units = ["B/s", "KB/s", "MB/s", "GB/s"];
-  let value = bytesPerSecond;
-  let unit = 0;
-  while (value >= 1_024 && unit < units.length - 1) {
-    value /= 1_024;
-    unit += 1;
-  }
-  return unit === 0 ? `${value} ${units[unit]}` : `${value.toFixed(1)} ${units[unit]}`;
-}
-
-function formatBytes(bytes: number): string {
-  return formatRate(bytes).replace("/s", "");
-}
-
-/** Command rejections are typed values from Rust, not `Error` instances. */
-function describeFailure(error: unknown): string {
-  if (isCommandError(error)) {
-    return error.message;
-  }
-  return error instanceof Error ? error.message : String(error);
-}
 
 export default function App() {
   const [locale, setLocale] = useState<Locale>(DEFAULT_LOCALE);
@@ -256,14 +183,17 @@ export default function App() {
   };
   const [nodeGroupName, setNodeGroupName] = useState("");
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
-  const [nodeName, setNodeName] = useState("");
-  const [nodeServer, setNodeServer] = useState("");
-  const [nodePort, setNodePort] = useState("");
   const [subscriptions, setSubscriptions] = useState<SubscriptionSummary[]>([]);
   const [uri, setUri] = useState("");
   const [createForm, setCreateForm] =
     useState<ManualNodeForm>(emptyManualNodeForm);
-  const [panel, setPanel] = useState<PanelId | null>(null);
+  const [dialog, setDialog] = useState<DialogId>(null);
+  const [theme, setTheme] = useState<ThemeMode>(() => savedTheme());
+  const [layout, setLayout] = useState<MainLayout>(() => savedLayout());
+  const [msgVisible, setMsgVisible] = useState(true);
+  const [mainTab, setMainTab] = useState<"profiles" | "msg">("profiles");
+  const [nodeQuery, setNodeQuery] = useState("");
+  const [inspectedId, setInspectedId] = useState<string | null>(null);
   const [bulkText, setBulkText] = useState("");
   const [bulkReport, setBulkReport] = useState<BulkImportReport | null>(null);
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -275,6 +205,9 @@ export default function App() {
   const [subscriptionInterval, setSubscriptionInterval] = useState("60");
   const [subscriptionAutoUpdate, setSubscriptionAutoUpdate] = useState(true);
   const [subscriptionEnabled, setSubscriptionEnabled] = useState(true);
+  const [subscriptionUserAgent, setSubscriptionUserAgent] = useState("");
+  const [subscriptionInclude, setSubscriptionInclude] = useState("");
+  const [subscriptionExclude, setSubscriptionExclude] = useState("");
   const [editingSubscriptionId, setEditingSubscriptionId] = useState<
     string | null
   >(null);
@@ -289,13 +222,34 @@ export default function App() {
   const [nodeTests, setNodeTests] = useState<
     Record<string, NodeTestResult | { status: "testing" }>
   >({});
+  const [nodeSpeeds, setNodeSpeeds] = useState<
+    Record<string, SpeedTestResult | { status: "testing" }>
+  >({});
   const [testingAllNodes, setTestingAllNodes] = useState(false);
+  const [testingSpeed, setTestingSpeed] = useState(false);
   const cancelNodeTests = useRef(false);
   const [noticeDismissed, setNoticeDismissed] = useState(noticeWasDismissed);
 
-  const nodeTestInProgress = Object.values(nodeTests).some(
-    (result) => result.status === "testing",
-  );
+  const nodeTestInProgress =
+    testingSpeed ||
+    Object.values(nodeTests).some((result) => result.status === "testing");
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem(THEME_KEY, theme);
+    } catch {
+      // The theme still applies to this launch even if it cannot be stored.
+    }
+  }, [theme]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LAYOUT_KEY, layout);
+    } catch {
+      // The layout still applies to this launch even if it cannot be stored.
+    }
+  }, [layout]);
 
   useEffect(() => {
     if (nodeMenu === null) {
@@ -602,9 +556,27 @@ export default function App() {
   useEffect(() => {
     loadAppSettings().then(
       (loaded) => {
-        setSettings(loaded);
-        setLogLevel(loaded.logLevel);
-        setLocale(loaded.locale);
+        const legacy = savedUrlTestAddress();
+        const migrated =
+          loaded.urlTestAddress === DEFAULT_URL_TEST_ADDRESS &&
+          legacy !== DEFAULT_URL_TEST_ADDRESS
+            ? { ...loaded, urlTestAddress: legacy }
+            : loaded;
+        setSettings(migrated);
+        setLogLevel(migrated.logLevel);
+        setLocale(migrated.locale);
+        setUrlTestAddress(migrated.urlTestAddress);
+        if (migrated !== loaded) {
+          void saveAppSettings(migrated).then(
+            (saved) => setSettings(saved),
+            (failure: unknown) => setError(describeFailure(failure)),
+          );
+        }
+        try {
+          localStorage.removeItem(URL_TEST_ADDRESS_KEY);
+        } catch {
+          // Ignoring storage failures keeps settings usable.
+        }
       },
       (failure: unknown) => setError(describeFailure(failure)),
     );
@@ -624,6 +596,9 @@ export default function App() {
         }
         if (changes.locale !== undefined) {
           setLocale(changes.locale);
+        }
+        if (changes.urlTestAddress !== undefined) {
+          setUrlTestAddress(changes.urlTestAddress);
         }
       } catch (failure: unknown) {
         // Put the stored values back so the switches never claim a state the
@@ -738,15 +713,26 @@ export default function App() {
     setError(null);
     setExportedTo(null);
     try {
-      setStatus(await createNode(result.draft));
+      if (editingNodeId === null) {
+        setStatus(await createNode(result.draft));
+      } else {
+        setStatus(await updateNode(editingNodeId, result.draft));
+      }
       setNodes(await loadNodes());
-      setCreateForm(emptyManualNodeForm);
+      setCreateForm(
+        blankManualNodeForm({
+          allowInsecure: settings?.defAllowInsecure,
+          fingerprint: settings?.defFingerprint,
+        }),
+      );
+      setEditingNodeId(null);
+      setDialog(null);
     } catch (failure: unknown) {
       setError(describeFailure(failure));
     } finally {
       setBusy(false);
     }
-  }, [createForm]);
+  }, [createForm, editingNodeId]);
 
   const onDeleteNode = useCallback(async (id: string) => {
     setBusy(true);
@@ -894,46 +880,57 @@ export default function App() {
 
   const resetNodeForm = useCallback(() => {
     setEditingNodeId(null);
-    setNodeName("");
-    setNodeServer("");
-    setNodePort("");
-  }, []);
+    setCreateForm(
+      blankManualNodeForm({
+        allowInsecure: settings?.defAllowInsecure,
+        fingerprint: settings?.defFingerprint,
+      }),
+    );
+  }, [settings?.defAllowInsecure, settings?.defFingerprint]);
 
-  const onEditNode = useCallback((candidate: NodeSummary) => {
-    setEditingNodeId(candidate.id);
-    setNodeName(candidate.name);
-    setNodeServer(candidate.server);
-    setNodePort(String(candidate.port));
-  }, []);
+  const openCreateForm = useCallback(
+    (protocol?: ProxyProtocol) => {
+      setEditingNodeId(null);
+      setCreateForm({
+        ...blankManualNodeForm({
+          allowInsecure: settings?.defAllowInsecure,
+          fingerprint: settings?.defFingerprint,
+        }),
+        ...(protocol === undefined ? {} : { protocol }),
+      });
+      setDialog("create");
+    },
+    [settings?.defAllowInsecure, settings?.defFingerprint],
+  );
 
-  const onSaveNode = useCallback(async () => {
-    if (editingNodeId === null) {
-      return;
-    }
-    const name = nodeName.trim();
-    const server = nodeServer.trim();
-    const port = Number(nodePort);
-    if (name === "" || server === "") {
-      setError("请填写节点名称和服务器");
-      return;
-    }
-    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-      setError("节点端口必须是 1 到 65535 的整数");
-      return;
-    }
-
+  const onClearTraffic = useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
-      setStatus(await editNode(editingNodeId, { name, port, server }));
-      setNodes(await loadNodes());
-      resetNodeForm();
+      setTraffic(await clearTraffic());
+      setNodeTraffic({});
+      setExportedTo("流量统计已清除");
     } catch (failure: unknown) {
       setError(describeFailure(failure));
     } finally {
       setBusy(false);
     }
-  }, [editingNodeId, nodeName, nodePort, nodeServer, resetNodeForm]);
+  }, []);
+
+  const onEditNode = useCallback(async (candidate: NodeSummary) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const draft = await loadNodeDraft(candidate.id);
+      setCreateForm(formFromManualNodeDraft(draft));
+      setEditingNodeId(candidate.id);
+      setDialog("create");
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
 
   const onMoveNode = useCallback(async (id: string, direction: "down" | "up") => {
     setBusy(true);
@@ -946,6 +943,21 @@ export default function App() {
       setBusy(false);
     }
   }, []);
+
+  const onSortNodesByLatency = useCallback(async () => {
+    if (nodes.length < 2) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      setNodes(await reorderNodes(sortNodeIdsByLatency(nodes)));
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, [nodes]);
 
   const resetNodeGroupForm = useCallback(() => {
     setGroupingNodeId(null);
@@ -997,17 +1009,82 @@ export default function App() {
   }, []);
 
   const onTestAllNodes = useCallback(async () => {
+    const enabledIds = nodes
+      .filter((candidate) => candidate.enabled)
+      .map((candidate) => candidate.id);
+    if (enabledIds.length === 0) {
+      setError("没有可测速的启用节点");
+      return;
+    }
     cancelNodeTests.current = false;
     setError(null);
     setTestingAllNodes(true);
     setNodeTests(
-      Object.fromEntries(
-        nodes.map((candidate) => [candidate.id, { status: "testing" }]),
-      ),
+      Object.fromEntries(enabledIds.map((id) => [id, { status: "testing" }])),
+    );
+    const results: {
+      id: string;
+      latencyMs?: number;
+      status: string;
+    }[] = [];
+    try {
+      await testAllNodes(
+        enabledIds,
+        (result) => {
+          results.push(result);
+          setNodeTests((current) => ({ ...current, [result.id]: result }));
+        },
+        () => cancelNodeTests.current,
+      );
+      if (settings?.autoSelectLowestLatency) {
+        const measured = results
+          .filter(
+            (result) =>
+              result.status === "success" && typeof result.latencyMs === "number",
+          )
+          .map((result) => ({
+            enabled: true,
+            id: result.id,
+            latencyMs: result.latencyMs ?? null,
+          }));
+        const bestId = lowestLatencyNodeId(measured);
+        if (bestId !== null && bestId !== status?.node?.id) {
+          setStatus(await switchNode(bestId));
+          setNodes(await loadNodes());
+        }
+      }
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setNodeTests((current) =>
+        Object.fromEntries(
+          Object.entries(current).filter(
+            ([, result]) => result.status !== "testing",
+          ),
+        ),
+      );
+      setTestingAllNodes(false);
+    }
+  }, [nodes, status?.node?.id, settings?.autoSelectLowestLatency]);
+
+  /// Latency-tests a subset, reusing the cancellable batch the toolbar drives.
+  const onTestNodes = useCallback(async (ids: string[]) => {
+    const enabledIds = ids.filter((id) =>
+      nodes.some((candidate) => candidate.id === id && candidate.enabled),
+    );
+    if (enabledIds.length === 0) {
+      setError("没有可测速的启用节点");
+      return;
+    }
+    cancelNodeTests.current = false;
+    setError(null);
+    setTestingAllNodes(true);
+    setNodeTests(
+      Object.fromEntries(enabledIds.map((id) => [id, { status: "testing" }])),
     );
     try {
       await testAllNodes(
-        nodes.map((candidate) => candidate.id),
+        enabledIds,
         (result) =>
           setNodeTests((current) => ({ ...current, [result.id]: result })),
         () => cancelNodeTests.current,
@@ -1026,32 +1103,110 @@ export default function App() {
     }
   }, [nodes]);
 
-  /// Latency-tests a subset, reusing the cancellable batch the toolbar drives.
-  const onTestNodes = useCallback(async (ids: string[]) => {
-    cancelNodeTests.current = false;
+  const onSelectLowestLatency = useCallback(async () => {
+    const bestId = lowestLatencyNodeId(nodes);
+    if (bestId === null) {
+      setError("没有可用的延迟结果");
+      return;
+    }
+    if (bestId === status?.node?.id) {
+      return;
+    }
+    setBusy(true);
     setError(null);
-    setTestingAllNodes(true);
-    setNodeTests(Object.fromEntries(ids.map((id) => [id, { status: "testing" }])));
     try {
-      await testAllNodes(
-        ids,
-        (result) =>
-          setNodeTests((current) => ({ ...current, [result.id]: result })),
-        () => cancelNodeTests.current,
-      );
+      setStatus(await switchNode(bestId));
+      setNodes(await loadNodes());
     } catch (failure: unknown) {
       setError(describeFailure(failure));
     } finally {
-      setNodeTests((current) =>
-        Object.fromEntries(
-          Object.entries(current).filter(
-            ([, result]) => result.status !== "testing",
-          ),
-        ),
-      );
-      setTestingAllNodes(false);
+      setBusy(false);
+    }
+  }, [nodes, status?.node?.id]);
+
+  const onStepNode = useCallback(
+    async (direction: -1 | 1) => {
+      const enabled = nodes.filter((candidate) => candidate.enabled);
+      if (enabled.length < 2) {
+        return;
+      }
+      const currentId = status?.node?.id;
+      const currentIndex = enabled.findIndex((candidate) => candidate.id === currentId);
+      const nextIndex =
+        currentIndex < 0
+          ? direction > 0
+            ? 0
+            : enabled.length - 1
+          : (currentIndex + direction + enabled.length) % enabled.length;
+      const next = enabled[nextIndex];
+      if (next === undefined || next.id === currentId) {
+        return;
+      }
+      setBusy(true);
+      setError(null);
+      try {
+        setStatus(await switchNode(next.id));
+        setNodes(await loadNodes());
+      } catch (failure: unknown) {
+        setError(describeFailure(failure));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [nodes, status?.node?.id],
+  );
+
+  const onExportPreferences = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    setExportedTo(null);
+    try {
+      setExportedTo(await exportPreferences());
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
     }
   }, []);
+
+  const onImportPreferences = useCallback(async () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/json,.json";
+    const selected = await new Promise<File | null>((resolve) => {
+      input.addEventListener("change", () => {
+        resolve(input.files?.[0] ?? null);
+      });
+      input.addEventListener("cancel", () => resolve(null));
+      input.click();
+    });
+    if (selected === null) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setExportedTo(null);
+    try {
+      // The Tauri command reads a filesystem path; the webview File object
+      // exposes one in the desktop shell.
+      const path = (selected as File & { path?: string }).path;
+      if (path === undefined || path === "") {
+        setError(t("无法读取所选文件路径"));
+        return;
+      }
+      const next = await importPreferences(path);
+      setSettings(next);
+      setLocale(next.locale);
+      setLogLevel(next.logLevel);
+      setUrlTestAddress(next.urlTestAddress);
+      setStatus(await loadSessionStatus());
+      setExportedTo(t("设置已从文件恢复"));
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, [t]);
 
   const onCancelNodeTests = useCallback(() => {
     cancelNodeTests.current = true;
@@ -1077,10 +1232,8 @@ export default function App() {
     }));
     try {
       const result = await testUrl(address);
-      try {
-        localStorage.setItem(URL_TEST_ADDRESS_KEY, address);
-      } catch {
-        // The test can still run when webview storage is unavailable.
+      if (settings !== null && address !== settings.urlTestAddress) {
+        await onChangeSettings({ urlTestAddress: address });
       }
       setNodeTests((current) => ({ ...current, [result.id]: result }));
     } catch (failure: unknown) {
@@ -1091,7 +1244,46 @@ export default function App() {
       });
       setError(describeFailure(failure));
     }
-  }, [status, urlTestAddress]);
+  }, [status, urlTestAddress, settings, onChangeSettings]);
+
+  const onSpeedTest = useCallback(async () => {
+    const address =
+      (settings?.speedTestUrl ?? DEFAULT_SPEED_TEST_URL).trim() ||
+      DEFAULT_SPEED_TEST_URL;
+    const selectedNode = status?.node;
+    if (!status?.connected || selectedNode === null || selectedNode === undefined) {
+      setError("请先连接节点");
+      return;
+    }
+    setError(null);
+    setTestingSpeed(true);
+    setNodeSpeeds((current) => ({
+      ...current,
+      [selectedNode.id]: { status: "testing" },
+    }));
+    try {
+      const result = await testDownloadSpeed(address);
+      setNodeSpeeds((current) => ({ ...current, [result.id]: result }));
+      if (result.status === "success" && result.bytesPerSecond !== null) {
+        setExportedTo(
+          `下载测速 ${formatRate(result.bytesPerSecond)}（${formatBytes(result.bytesRead ?? 0)}）`,
+        );
+      } else if (result.status === "timeout") {
+        setError("下载测速超时");
+      } else {
+        setError("下载测速失败");
+      }
+    } catch (failure: unknown) {
+      setNodeSpeeds((current) => {
+        const next = { ...current };
+        delete next[selectedNode.id];
+        return next;
+      });
+      setError(describeFailure(failure));
+    } finally {
+      setTestingSpeed(false);
+    }
+  }, [settings?.speedTestUrl, status]);
 
   const resetSubscriptionForm = useCallback(() => {
     setEditingSubscriptionId(null);
@@ -1100,6 +1292,9 @@ export default function App() {
     setSubscriptionInterval("60");
     setSubscriptionAutoUpdate(true);
     setSubscriptionEnabled(true);
+    setSubscriptionUserAgent("");
+    setSubscriptionInclude("");
+    setSubscriptionExclude("");
   }, []);
 
   const syncNodes = useCallback(async () => {
@@ -1131,17 +1326,29 @@ export default function App() {
         editingSubscriptionId === null
           ? await createSubscription({
               autoUpdate: subscriptionAutoUpdate,
+              excludeKeywords: subscriptionExclude,
+              includeKeywords: subscriptionInclude,
               name,
               updateIntervalMinutes,
               url,
+              userAgent:
+                subscriptionUserAgent.trim() === ""
+                  ? null
+                  : subscriptionUserAgent.trim(),
             })
           : await updateSubscription({
               autoUpdate: subscriptionAutoUpdate,
               enabled: subscriptionEnabled,
+              excludeKeywords: subscriptionExclude,
               id: editingSubscriptionId,
+              includeKeywords: subscriptionInclude,
               name,
               updateIntervalMinutes,
               url: url === "" ? null : url,
+              userAgent:
+                subscriptionUserAgent.trim() === ""
+                  ? null
+                  : subscriptionUserAgent.trim(),
             });
       setSubscriptions((current) => {
         const existing = current.findIndex((item) => item.id === saved.id);
@@ -1162,9 +1369,12 @@ export default function App() {
     resetSubscriptionForm,
     subscriptionAutoUpdate,
     subscriptionEnabled,
+    subscriptionExclude,
+    subscriptionInclude,
     subscriptionInterval,
     subscriptionName,
     subscriptionUrl,
+    subscriptionUserAgent,
     syncNodes,
   ]);
 
@@ -1175,6 +1385,9 @@ export default function App() {
     setSubscriptionInterval(String(item.updateIntervalMinutes));
     setSubscriptionAutoUpdate(item.autoUpdate);
     setSubscriptionEnabled(item.enabled);
+    setSubscriptionUserAgent(item.userAgent ?? "");
+    setSubscriptionInclude(item.includeKeywords);
+    setSubscriptionExclude(item.excludeKeywords);
   }, []);
 
   const onRefreshSubscription = useCallback(async (id: string) => {
@@ -1206,6 +1419,27 @@ export default function App() {
     }
   }, [syncNodes]);
 
+  /// v2rayN's "重新加载" menu item: re-reads nodes, subscriptions, and the
+  /// session status without touching the running Core.
+  const onReload = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const [nextNodes, nextSubscriptions, nextStatus] = await Promise.all([
+        loadNodes(),
+        loadSubscriptions(),
+        loadSessionStatus(),
+      ]);
+      setNodes(nextNodes);
+      setSubscriptions(nextSubscriptions);
+      setStatus(nextStatus);
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
   const onDeleteSubscription = useCallback(
     async (id: string) => {
       setBusy(true);
@@ -1230,54 +1464,126 @@ export default function App() {
 
   const connected = status?.connected ?? false;
   const node = status?.node ?? null;
+
+  useEffect(() => {
+    if (settings === null) {
+      return undefined;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (busy) {
+        return;
+      }
+      if (matchesHotkey(event, settings.hotkeyConnect)) {
+        event.preventDefault();
+        if (connected) {
+          void run(disconnectSession);
+        } else if (node !== null && systemProxyStartup === "clean") {
+          void run(connectSession);
+        }
+        return;
+      }
+      if (matchesHotkey(event, settings.hotkeyPrevious)) {
+        event.preventDefault();
+        void onStepNode(-1);
+        return;
+      }
+      if (matchesHotkey(event, settings.hotkeyNext)) {
+        event.preventDefault();
+        void onStepNode(1);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [
+    settings,
+    busy,
+    connected,
+    node,
+    systemProxyStartup,
+    onStepNode,
+    run,
+  ]);
+
   const nodeGroupNames = new Map(
     nodeGroups.map((group) => [group.id, group.name]),
   );
   const visibleNodes = nodes.filter((candidate) => {
-    if (nodeGroupFilter === "all") {
+    if (nodeGroupFilter === "ungrouped" && candidate.groupId !== null) {
+      return false;
+    }
+    if (
+      nodeGroupFilter !== "all" &&
+      nodeGroupFilter !== "ungrouped" &&
+      candidate.groupId !== nodeGroupFilter
+    ) {
+      return false;
+    }
+    const query = nodeQuery.trim().toLowerCase();
+    if (query === "") {
       return true;
     }
-    if (nodeGroupFilter === "ungrouped") {
-      return candidate.groupId === null;
-    }
-    return candidate.groupId === nodeGroupFilter;
+    const groupName =
+      candidate.groupId === null
+        ? ""
+        : (nodeGroupNames.get(candidate.groupId) ?? "");
+    return `${candidate.name} ${candidate.server} ${candidate.protocol} ${groupName}`
+      .toLowerCase()
+      .includes(query);
   });
+  const inspected =
+    nodes.find((candidate) => candidate.id === inspectedId) ??
+    node ??
+    visibleNodes[0] ??
+    null;
 
   return (
-    <main className="app-shell">
-      <header className="menubar">
-        <span className="brand">MgClash</span>
-        <nav aria-label={t("配置入口")}>
-          {TABS.map((entry) => (
-            <button
-              key={entry.id}
-              type="button"
-              className="menu-item"
-              onClick={() => setPanel(entry.id)}
-            >
-              {entry.label}
-            </button>
-          ))}
-          <button
-            type="button"
-            className="menu-item"
-            disabled={busy}
-            onClick={() => void onCheckUpdate()}
-          >
-            {t("检查更新")}
-          </button>
-        </nav>
-        <button
-          type="button"
-          className={connected ? "primary danger" : "primary"}
-          disabled={busy || node === null || systemProxyStartup !== "clean"}
-          onClick={() => void run(connected ? disconnectSession : connectSession)}
-        >
-          {connected ? "断开" : "连接"}
-        </button>
-      </header>
+    <main className="app-shell" data-layout={layout}>
+      <MenuBar
+        busy={busy}
+        connected={connected}
+        t={t}
+        onAddServer={(protocol) => openCreateForm(protocol)}
+        onOpenImport={() => setDialog("import")}
+        onOpenCreate={() => openCreateForm()}
+        onOpenSubscriptions={() => setDialog("subscriptions")}
+        onRefreshSubscriptions={() => void onRefreshAllSubscriptions()}
+        onOpenSettings={() => setDialog("settings")}
+        onOpenRouting={() => setDialog("routing")}
+        onOpenDns={() => setDialog("dns")}
+        onCheckUpdate={() => void onCheckUpdate()}
+        onOpenAbout={() => setDialog("about")}
+        onReload={() => void onReload()}
+        onClearTraffic={() => void onClearTraffic()}
+        onExportAllLinks={() =>
+          void onExportNodeLinks(nodes.map((candidate) => candidate.id))
+        }
+        onExportPreferences={() => void onExportPreferences()}
+        onImportPreferences={() => void onImportPreferences()}
+        onPreviousNode={() => void onStepNode(-1)}
+        onNextNode={() => void onStepNode(1)}
+        onConnect={() => void run(connectSession)}
+        onDisconnect={() => void run(disconnectSession)}
+        canConnect={node !== null && systemProxyStartup === "clean"}
+        canStepNode={nodes.filter((candidate) => candidate.enabled).length >= 2}
+        layout={layout}
+        onLayout={setLayout}
+        theme={theme}
+        onTheme={setTheme}
+        msgVisible={msgVisible}
+        onToggleMsg={() => setMsgVisible((current) => !current)}
+      />
 
-      <section className="content">
+      <div className="workspace">
         {systemProxyStartup === "restoreRequired" && (
           <section className="notice" aria-label={t("系统代理恢复")}>
             <p>
@@ -1306,6 +1612,17 @@ export default function App() {
           </section>
         )}
 
+        {exportedTo !== null && (
+          <p className="success" role="status">
+            已导出到 {exportedTo}
+          </p>
+        )}
+        {error !== null && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+
         {!noticeDismissed && (
           <div className="notice" role="note">
             <p>
@@ -1321,480 +1638,690 @@ export default function App() {
           </div>
         )}
 
-        <div className="node-panel">
-        <h2>{t("节点")}</h2>
+        <div className={`main-split layout-${layout}`}>
+          {(layout !== "tab" || mainTab === "profiles") && (
+            <section className="profiles-pane">
+              <div className="profiles-toolbar">
+                <div className="group-chips" aria-label={t("节点分组筛选")}>
+                  <button
+                    type="button"
+                    className={nodeGroupFilter === "all" ? "active" : undefined}
+                    onClick={() => setNodeGroupFilter("all")}
+                  >
+                    {t("全部")}
+                  </button>
+                  <button
+                    type="button"
+                    className={
+                      nodeGroupFilter === "ungrouped" ? "active" : undefined
+                    }
+                    onClick={() => setNodeGroupFilter("ungrouped")}
+                  >
+                    {t("未分组")}
+                  </button>
+                  {nodeGroups.map((group) => (
+                    <button
+                      key={group.id}
+                      type="button"
+                      className={
+                        nodeGroupFilter === group.id ? "active" : undefined
+                      }
+                      onClick={() => setNodeGroupFilter(group.id)}
+                    >
+                      {group.name}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  className="toolbar-search"
+                  aria-label={t("搜索节点名称 / 服务器 / 协议")}
+                  placeholder={t("搜索节点名称 / 服务器 / 协议")}
+                  value={nodeQuery}
+                  onChange={(event) => setNodeQuery(event.target.value)}
+                />
+                <div className="url-test">
+                  <label>
+                    {t("URL 测试地址")}
+                    <input
+                      aria-label={t("URL 测试地址")}
+                      value={urlTestAddress}
+                      disabled={busy || nodeTestInProgress}
+                      onChange={(event) => setUrlTestAddress(event.target.value)}
+                      onBlur={() => {
+                        const address =
+                          urlTestAddress.trim() || DEFAULT_URL_TEST_ADDRESS;
+                        setUrlTestAddress(address);
+                        if (
+                          settings !== null &&
+                          address !== settings.urlTestAddress
+                        ) {
+                          void onChangeSettings({ urlTestAddress: address });
+                        }
+                      }}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    disabled={
+                      busy || nodeTestInProgress || !connected || node === null
+                    }
+                    onClick={() => void onTestUrl()}
+                  >
+                    {t("URL 测试")}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={
+                      busy || nodeTestInProgress || !connected || node === null
+                    }
+                    onClick={() => void onSpeedTest()}
+                  >
+                    {t("下载测速")}
+                  </button>
+                </div>
+                {testingAllNodes ? (
+                  <button type="button" onClick={onCancelNodeTests}>
+                    {t("取消测速")}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={
+                      busy ||
+                      nodeTestInProgress ||
+                      !nodes.some((candidate) => candidate.enabled)
+                    }
+                    onClick={() => void onTestAllNodes()}
+                  >
+                    {t("全部测速")}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={busy || nodes.length < 2}
+                  onClick={() => void onSortNodesByLatency()}
+                >
+                  {t("按延迟排序")}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || lowestLatencyNodeId(nodes) === null}
+                  onClick={() => void onSelectLowestLatency()}
+                >
+                  {t("选择最低延迟")}
+                </button>
+              </div>
 
-        <div className="url-test">
-          <label>
-            {t("URL 测试地址")}
-            <input
-              aria-label={t("URL 测试地址")}
-              value={urlTestAddress}
-              disabled={busy || nodeTestInProgress}
-              onChange={(event) => setUrlTestAddress(event.target.value)}
+              <div className="node-workspace">
+                <div className="node-panel">
+
+                {nodes.length === 0 ? (
+                  <p className="hint">{t("尚未导入节点")}</p>
+                ) : visibleNodes.length === 0 ? (
+                  <p className="hint">{t("当前分组没有节点")}</p>
+                ) : (
+                  <table className="node-list" aria-label={t("节点列表")}>
+                    <thead>
+                      <tr>
+                        <th className="node-check">
+                          <input
+                            type="checkbox"
+                            aria-label={t("全选节点")}
+                            checked={
+                              visibleNodes.length > 0 &&
+                              visibleNodes.every((item) => checkedNodes.has(item.id))
+                            }
+                            onChange={(event) =>
+                              setCheckedNodes(
+                                event.target.checked
+                                  ? new Set(visibleNodes.map((item) => item.id))
+                                  : new Set(),
+                              )
+                            }
+                          />
+                        </th>
+                        <th>{t("名称")}</th>
+                        <th>{t("协议")}</th>
+                        <th>{t("传输")}</th>
+                        <th>TLS</th>
+                        <th>{t("分组")}</th>
+                        <th>{t("服务器")}</th>
+                        <th>{t("延迟")}</th>
+                        <th>{t("速度")}</th>
+                        <th>{t("今日上传")}</th>
+                        <th>{t("今日下载")}</th>
+                        <th>{t("总上传")}</th>
+                        <th>{t("总下载")}</th>
+                        <th>{t("操作")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleNodes.map((candidate) => {
+                        const index = nodes.findIndex((node) => node.id === candidate.id);
+                        const selected = candidate.id === node?.id;
+                        const testResult = nodeTests[candidate.id];
+                        let latency =
+                          candidate.latencyMs === null
+                            ? candidate.lastTestedAt === null
+                              ? "—"
+                              : "失败"
+                            : `${candidate.latencyMs} ms`;
+                        if (testResult?.status === "testing") {
+                          latency = "测试中";
+                        } else if (testResult?.status === "success") {
+                          latency = `${testResult.latencyMs} ms`;
+                        } else if (testResult?.status === "timeout") {
+                          latency = "超时";
+                        } else if (testResult?.status === "failed") {
+                          latency = "失败";
+                        }
+                        const liveMs =
+                          testResult?.status === "success"
+                            ? testResult.latencyMs
+                            : candidate.latencyMs;
+                        const quality =
+                          testResult?.status === "timeout" ||
+                          testResult?.status === "failed" ||
+                          (testResult === undefined &&
+                            candidate.latencyMs === null &&
+                            candidate.lastTestedAt !== null)
+                            ? "fail"
+                            : liveMs === null
+                              ? null
+                              : latencyQuality(liveMs);
+                        const inspectedRow = inspected?.id === candidate.id;
+                        return (
+                          <tr
+                            key={candidate.id}
+                            className={[
+                              selected ? "active-node" : "",
+                              inspectedRow ? "inspected-node" : "",
+                              candidate.enabled ? "" : "disabled-node",
+                            ]
+                              .filter(Boolean)
+                              .join(" ") || undefined}
+                            onClick={() => setInspectedId(candidate.id)}
+                            onContextMenu={(event) => openNodeMenu(event, candidate.id)}
+                            onDoubleClick={() => {
+                              if (
+                                !busy &&
+                                !connected &&
+                                !selected &&
+                                !nodeTestInProgress &&
+                                candidate.enabled
+                              ) {
+                                void run(() => switchNode(candidate.id));
+                              }
+                            }}
+                          >
+                            <td className="node-check">
+                              <input
+                                type="checkbox"
+                                aria-label={`选择 ${candidate.name}`}
+                                checked={checkedNodes.has(candidate.id)}
+                                onChange={() => toggleCheckedNode(candidate.id)}
+                              />
+                            </td>
+                            <td>
+                              <span
+                                className={
+                                  candidate.enabled
+                                    ? "node-name"
+                                    : "node-name node-disabled"
+                                }
+                              >
+                                <span className="flag">{regionFlag(candidate.name)}</span>
+                                {candidate.name}
+                                {selected ? (
+                                  <em className="pill active">{t("当前")}</em>
+                                ) : null}
+                                {!candidate.enabled ? (
+                                  <em className="pill">{t("已禁用")}</em>
+                                ) : null}
+                              </span>
+                            </td>
+                            <td>{candidate.protocol}</td>
+                            <td>{candidate.transport}</td>
+                            <td>{candidate.tls ?? "—"}</td>
+                            <td>{
+                              candidate.groupId === null
+                                ? "未分组"
+                                : (nodeGroupNames.get(candidate.groupId) ?? "未知分组")
+                            }</td>
+                            <td>{`${candidate.server}:${candidate.port}`}</td>
+                            <td>
+                              <span className="latency">
+                                {latency}
+                                {quality === "good" ? (
+                                  <em className="pill good">{t("优秀")}</em>
+                                ) : null}
+                                {quality === "ok" ? (
+                                  <em className="pill ok">{t("一般")}</em>
+                                ) : null}
+                                {quality === "bad" ? (
+                                  <em className="pill bad">{t("较差")}</em>
+                                ) : null}
+                                {quality === "fail" && latency !== "失败" ? (
+                                  <em className="pill fail">{t("失败")}</em>
+                                ) : null}
+                              </span>
+                            </td>
+                            <td>
+                              {(() => {
+                                const speed = nodeSpeeds[candidate.id];
+                                if (speed?.status === "testing") {
+                                  return t("测试中");
+                                }
+                                if (
+                                  speed?.status === "success" &&
+                                  speed.bytesPerSecond !== null &&
+                                  speed.bytesPerSecond !== undefined
+                                ) {
+                                  return formatRate(speed.bytesPerSecond);
+                                }
+                                if (speed?.status === "timeout") {
+                                  return t("超时");
+                                }
+                                if (speed?.status === "failed") {
+                                  return t("失败");
+                                }
+                                return connected && selected
+                                  ? formatRate(traffic.downloadBytesPerSecond)
+                                  : "—";
+                              })()}
+                            </td>
+                            <td>{formatBytes(nodeTraffic[candidate.id]?.todayUploadBytes ?? 0)}</td>
+                            <td>{formatBytes(nodeTraffic[candidate.id]?.todayDownloadBytes ?? 0)}</td>
+                            <td>{formatBytes(nodeTraffic[candidate.id]?.totalUploadBytes ?? 0)}</td>
+                            <td>{formatBytes(nodeTraffic[candidate.id]?.totalDownloadBytes ?? 0)}</td>
+                            <td className="node-actions">
+                              <button
+                                type="button"
+                                aria-label={`操作 ${candidate.name}`}
+                                aria-haspopup="menu"
+                                disabled={busy || nodeTestInProgress}
+                                onClick={(event) => openNodeMenu(event, candidate.id)}
+                              >
+                                ⋯
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+
+                {nodeMenu !== null &&
+                  (() => {
+                    const target = nodes.find((item) => item.id === nodeMenu.nodeId);
+                    if (target === undefined) {
+                      return null;
+                    }
+                    const index = nodes.findIndex((item) => item.id === target.id);
+                    const selected = target.id === node?.id;
+                    // Reordering acts on the whole list, so it cannot follow a filtered view.
+                    const reorderable = nodeGroupFilter === "all";
+                    const act = (run_: () => void) => () => {
+                      setNodeMenu(null);
+                      run_();
+                    };
+                    // Right-clicking inside the selection acts on all of it;
+                    // right-clicking outside is a fresh act, not an extension of it.
+                    // The selection is intersected with what the filter shows, so a
+                    // batch never touches a row the user cannot see.
+                    const visible = new Set(visibleNodes.map((item) => item.id));
+                    const batch = checkedNodes.has(target.id)
+                      ? [...checkedNodes].filter((id) => visible.has(id))
+                      : [target.id];
+                    const suffix = batch.length > 1 ? ` (${batch.length})` : "";
+                    return (
+                      <ul
+                        className="context-menu"
+                        role="menu"
+                        aria-label={`节点操作 ${target.name}`}
+                        style={{ left: nodeMenu.x, top: nodeMenu.y }}
+                      >
+                        <li>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={
+                              busy || connected || selected || !target.enabled
+                            }
+                            onClick={act(() => void run(() => switchNode(target.id)))}
+                          >
+                            {t("设为活动")}
+                          </button>
+                        </li>
+                        <li>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={busy || connected}
+                            onClick={act(() =>
+                              void run(async () => {
+                                setNodes(
+                                  await setNodeEnabled(target.id, !target.enabled),
+                                );
+                                setStatus(await loadSessionStatus());
+                              }),
+                            )}
+                          >
+                            {target.enabled ? t("禁用节点") : t("启用节点")}
+                          </button>
+                        </li>
+                        <li>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={
+                              busy ||
+                              (batch.length === 1
+                                ? !target.enabled
+                                : !batch.some((id) =>
+                                    nodes.some(
+                                      (candidate) =>
+                                        candidate.id === id && candidate.enabled,
+                                    ),
+                                  ))
+                            }
+                            onClick={act(() =>
+                              batch.length > 1
+                                ? void onTestNodes(batch)
+                                : void onTestNode(target.id),
+                            )}
+                          >
+                            {`测试延迟${suffix}`}
+                          </button>
+                        </li>
+                        <li>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={busy || connected || !target.deletable}
+                            onClick={act(() => void onCloneNode(target.id))}
+                          >
+                            {t("克隆所选")}
+                          </button>
+                        </li>
+                        <li>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={busy}
+                            onClick={act(() =>
+                              batch.length > 1
+                                ? void onExportNodeLinks(batch)
+                                : void onExportNodeLink(target.id),
+                            )}
+                          >
+                            {`导出分享链接${suffix}`}
+                          </button>
+                        </li>
+                        <li>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={busy}
+                            onClick={act(() => void onShowNodeQrCode(target))}
+                          >
+                            {t("显示二维码")}
+                          </button>
+                        </li>
+                        <li>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={busy}
+                            onClick={act(() => onGroupNode(target))}
+                          >
+                            {t("设置分组")}
+                          </button>
+                        </li>
+                        <li>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={busy || !reorderable || index === 0}
+                            onClick={act(() => void onMoveNode(target.id, "up"))}
+                          >
+                            {t("上移")}
+                          </button>
+                        </li>
+                        <li>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={busy || !reorderable || index === nodes.length - 1}
+                            onClick={act(() => void onMoveNode(target.id, "down"))}
+                          >
+                            {t("下移")}
+                          </button>
+                        </li>
+                        <li>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={busy || !reorderable || nodes.length < 2}
+                            onClick={act(() => void onSortNodesByLatency())}
+                          >
+                            {t("按延迟排序")}
+                          </button>
+                        </li>
+                        {target.deletable && (
+                          <li>
+                            <button
+                              type="button"
+                              role="menuitem"
+                              disabled={busy || connected}
+                              onClick={act(() => void onEditNode(target))}
+                            >
+                              {t("编辑")}
+                            </button>
+                          </li>
+                        )}
+                        <li>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="danger"
+                            disabled={busy || connected || !target.deletable}
+                            onClick={act(() =>
+                              batch.length > 1
+                                ? void onDeleteNodes(batch)
+                                : void onDeleteNode(target.id),
+                            )}
+                          >
+                            {target.deletable ? `移除所选${suffix}` : "订阅节点不可移除"}
+                          </button>
+                        </li>
+                        <li>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="danger"
+                            disabled={busy || connected}
+                            onClick={act(() => void onRemoveDuplicateNodes())}
+                          >
+                            {t("移除重复")}
+                          </button>
+                        </li>
+                      </ul>
+                    );
+                  })()}
+
+                {groupingNodeId !== null && (
+                  <div className="settings-form" aria-label={t("设置节点分组")}>
+                    <label>
+                      {t("分组名称")}
+                      <input
+                        aria-label={t("节点分组")}
+                        disabled={busy}
+                        list="node-group-options"
+                        value={nodeGroupName}
+                        onChange={(event) => setNodeGroupName(event.target.value)}
+                      />
+                      <datalist id="node-group-options">
+                        {nodeGroups.map((group) => (
+                          <option key={group.id} value={group.name} />
+                        ))}
+                      </datalist>
+                    </label>
+                    <div className="actions">
+                      <button type="button" disabled={busy} onClick={() => void onSaveNodeGroup()}>
+                        {t("保存分组")}
+                      </button>
+                      <button type="button" disabled={busy} onClick={resetNodeGroupForm}>
+                        {t("取消")}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                </div>
+                <aside className="detail-panel" aria-label={t("节点详情")}>
+                  <header>
+                    <h2>{t("节点详情")}</h2>
+                  </header>
+                  {inspected === null ? (
+                    <p className="hint">{t("尚未导入节点")}</p>
+                  ) : (
+                    <>
+                      <div className="detail-title">
+                        <span className="flag">{regionFlag(inspected.name)}</span>
+                        <strong>{inspected.name}</strong>
+                        {inspected.id === node?.id ? (
+                          <em className="pill active">{t("当前使用")}</em>
+                        ) : null}
+                      </div>
+                      <dl className="detail-list">
+                        <div>
+                          <dt>{t("协议")}</dt>
+                          <dd>{inspected.protocol}</dd>
+                        </div>
+                        <div>
+                          <dt>{t("服务器")}</dt>
+                          <dd>{inspected.server}</dd>
+                        </div>
+                        <div>
+                          <dt>{t("端口")}</dt>
+                          <dd>{inspected.port}</dd>
+                        </div>
+                        <div>
+                          <dt>{t("传输")}</dt>
+                          <dd>{inspected.transport}</dd>
+                        </div>
+                        <div>
+                          <dt>TLS</dt>
+                          <dd>{inspected.tls ?? "—"}</dd>
+                        </div>
+                        <div>
+                          <dt>{t("分组")}</dt>
+                          <dd>
+                            {inspected.groupId === null
+                              ? t("未分组")
+                              : (nodeGroupNames.get(inspected.groupId) ?? t("未知分组"))}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>{t("延迟")}</dt>
+                          <dd>
+                            {inspected.latencyMs === null
+                              ? inspected.lastTestedAt === null
+                                ? "—"
+                                : t("失败")
+                              : `${inspected.latencyMs} ms`}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>{t("最后测试")}</dt>
+                          <dd>
+                            {inspected.lastTestedAt === null
+                              ? t("尚未测试")
+                              : formatClock(inspected.lastTestedAt)}
+                          </dd>
+                        </div>
+                      </dl>
+                      <div className="detail-actions">
+                        <button
+                          type="button"
+                          className="primary"
+                          disabled={
+                            busy ||
+                            connected ||
+                            inspected.id === node?.id ||
+                            nodeTestInProgress ||
+                            !inspected.enabled
+                          }
+                          onClick={() => void run(() => switchNode(inspected.id))}
+                        >
+                          {t("设为当前节点")}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy || nodeTestInProgress}
+                          onClick={() => void onTestNode(inspected.id)}
+                        >
+                          {t("测试延迟")}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </aside>
+              </div>
+            </section>
+          )}
+          {msgVisible && (layout !== "tab" || mainTab === "msg") && (
+            <MsgView
+              busy={busy}
+              logs={logs}
+              logLevel={logLevel}
+              logSource={logSource}
+              t={t}
+              onLogLevel={setLogLevel}
+              onLogSource={setLogSource}
+              onRefresh={() => void refreshLogs()}
+              onClear={() => void onClearLogs()}
+              onExport={() => void onExport()}
             />
-          </label>
-          <button
-            type="button"
-            disabled={busy || nodeTestInProgress || !connected || node === null}
-            onClick={() => void onTestUrl()}
-          >
-            {t("URL 测试")}
-          </button>
-        </div>
-        <div className="log-pane">
-        <h2>{t("日志")}</h2>
-
-        <p className="hint">
-          {t("Core 输出在写入前已脱敏，凭据字段一律替换为 [REDACTED]。最多保留最近 2000 条。")}
-        </p>
-
-        <div className="log-controls">
-          <label>
-            {t("级别")}
-            <select
-              aria-label={t("日志级别")}
-              value={logLevel}
-              onChange={(event) => setLogLevel(event.target.value as LogLevel)}
-            >
-              <option value="error">error</option>
-              <option value="warn">warn</option>
-              <option value="info">info</option>
-              <option value="debug">debug</option>
-              <option value="trace">trace</option>
-            </select>
-          </label>
-          <label>
-            {t("来源")}
-            <select
-              aria-label={t("日志来源")}
-              value={logSource}
-              onChange={(event) =>
-                setLogSource(event.target.value as LogSource | "all")
-              }
-            >
-              <option value="all">{t("全部")}</option>
-              <option value="app">{t("应用")}</option>
-              <option value="core">Core</option>
-            </select>
-          </label>
-          <button type="button" onClick={() => void refreshLogs()}>
-            {t("刷新日志")}
-          </button>
-          <button type="button" onClick={() => void onClearLogs()}>
-            {t("清空日志")}
-          </button>
-        </div>
-
-        {logs.length === 0 ? (
-          <p className="hint">{t("暂无日志")}</p>
-        ) : (
-          <ul className="log-list" aria-label={t("日志列表")}>
-            {logs.map((entry, index) => (
-              <li
-                key={`${entry.timestampMs}-${index}`}
-                className={`log-entry log-${entry.level}`}
-              >
-                <span className="log-time">
-                  {new Date(entry.timestampMs).toLocaleTimeString()}
-                </span>
-                <span className="log-source">
-                  {entry.source === "core" ? "Core" : "应用"}
-                </span>
-                <span className="log-level">{entry.level}</span>
-                <span className="log-message">{entry.message}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        </div>
-
-        <div className="actions">
-          {testingAllNodes ? (
-            <button type="button" onClick={onCancelNodeTests}>
-              {t("取消测速")}
-            </button>
-          ) : (
-            <button
-              type="button"
-              disabled={busy || nodeTestInProgress || nodes.length === 0}
-              onClick={() => void onTestAllNodes()}
-            >
-              {t("全部测速")}
-            </button>
           )}
         </div>
-
-        <div className="node-group-filter">
-          <label>
-            {t("分组")}
-            <select
-              aria-label={t("节点分组筛选")}
-              value={nodeGroupFilter}
-              onChange={(event) => setNodeGroupFilter(event.target.value)}
+        {layout === "tab" && (
+          <div className="main-tabs">
+            <button
+              type="button"
+              className={mainTab === "profiles" ? "active" : undefined}
+              onClick={() => setMainTab("profiles")}
             >
-              <option value="all">{t("全部")}</option>
-              <option value="ungrouped">{t("未分组")}</option>
-              {nodeGroups.map((group) => (
-                <option key={group.id} value={group.id}>
-                  {group.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-
-        {nodes.length === 0 ? (
-          <p className="hint">{t("尚未导入节点")}</p>
-        ) : visibleNodes.length === 0 ? (
-          <p className="hint">{t("当前分组没有节点")}</p>
-        ) : (
-          <table className="node-list" aria-label={t("节点列表")}>
-            <thead>
-              <tr>
-                <th className="node-check">
-                  <input
-                    type="checkbox"
-                    aria-label={t("全选节点")}
-                    checked={
-                      visibleNodes.length > 0 &&
-                      visibleNodes.every((item) => checkedNodes.has(item.id))
-                    }
-                    onChange={(event) =>
-                      setCheckedNodes(
-                        event.target.checked
-                          ? new Set(visibleNodes.map((item) => item.id))
-                          : new Set(),
-                      )
-                    }
-                  />
-                </th>
-                <th>{t("名称")}</th>
-                <th>{t("协议")}</th>
-                <th>{t("传输")}</th>
-                <th>TLS</th>
-                <th>{t("分组")}</th>
-                <th>{t("服务器")}</th>
-                <th>{t("延迟")}</th>
-                <th>{t("速度")}</th>
-                <th>{t("今日上传")}</th>
-                <th>{t("今日下载")}</th>
-                <th>{t("总上传")}</th>
-                <th>{t("总下载")}</th>
-                <th>{t("操作")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleNodes.map((candidate) => {
-                const index = nodes.findIndex((node) => node.id === candidate.id);
-                const selected = candidate.id === node?.id;
-                const testResult = nodeTests[candidate.id];
-                let latency =
-                  candidate.latencyMs === null
-                    ? candidate.lastTestedAt === null
-                      ? "—"
-                      : "失败"
-                    : `${candidate.latencyMs} ms`;
-                if (testResult?.status === "testing") {
-                  latency = "测试中";
-                } else if (testResult?.status === "success") {
-                  latency = `${testResult.latencyMs} ms`;
-                } else if (testResult?.status === "timeout") {
-                  latency = "超时";
-                } else if (testResult?.status === "failed") {
-                  latency = "失败";
-                }
-                return (
-                  <tr
-                    key={candidate.id}
-                    className={selected ? "active-node" : undefined}
-                    onContextMenu={(event) => openNodeMenu(event, candidate.id)}
-                    onDoubleClick={() => {
-                      if (!busy && !connected && !selected && !nodeTestInProgress) {
-                        void run(() => selectNode(candidate.id));
-                      }
-                    }}
-                  >
-                    <td className="node-check">
-                      <input
-                        type="checkbox"
-                        aria-label={`选择 ${candidate.name}`}
-                        checked={checkedNodes.has(candidate.id)}
-                        onChange={() => toggleCheckedNode(candidate.id)}
-                      />
-                    </td>
-                    <td>{candidate.name}</td>
-                    <td>{candidate.protocol}</td>
-                    <td>{candidate.transport}</td>
-                    <td>{candidate.tls ?? "—"}</td>
-                    <td>{
-                      candidate.groupId === null
-                        ? "未分组"
-                        : (nodeGroupNames.get(candidate.groupId) ?? "未知分组")
-                    }</td>
-                    <td>{`${candidate.server}:${candidate.port}`}</td>
-                    <td>{latency}</td>
-                    <td>
-                      {connected && selected
-                        ? `${formatRate(traffic.downloadBytesPerSecond)}`
-                        : "—"}
-                    </td>
-                    <td>{formatBytes(nodeTraffic[candidate.id]?.todayUploadBytes ?? 0)}</td>
-                    <td>{formatBytes(nodeTraffic[candidate.id]?.todayDownloadBytes ?? 0)}</td>
-                    <td>{formatBytes(nodeTraffic[candidate.id]?.totalUploadBytes ?? 0)}</td>
-                    <td>{formatBytes(nodeTraffic[candidate.id]?.totalDownloadBytes ?? 0)}</td>
-                    <td className="node-actions">
-                      <button
-                        type="button"
-                        aria-label={`操作 ${candidate.name}`}
-                        aria-haspopup="menu"
-                        disabled={busy || nodeTestInProgress}
-                        onClick={(event) => openNodeMenu(event, candidate.id)}
-                      >
-                        ⋯
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-
-        {nodeMenu !== null &&
-          (() => {
-            const target = nodes.find((item) => item.id === nodeMenu.nodeId);
-            if (target === undefined) {
-              return null;
-            }
-            const index = nodes.findIndex((item) => item.id === target.id);
-            const selected = target.id === node?.id;
-            // Reordering acts on the whole list, so it cannot follow a filtered view.
-            const reorderable = nodeGroupFilter === "all";
-            const act = (run_: () => void) => () => {
-              setNodeMenu(null);
-              run_();
-            };
-            // Right-clicking inside the selection acts on all of it;
-            // right-clicking outside is a fresh act, not an extension of it.
-            // The selection is intersected with what the filter shows, so a
-            // batch never touches a row the user cannot see.
-            const visible = new Set(visibleNodes.map((item) => item.id));
-            const batch = checkedNodes.has(target.id)
-              ? [...checkedNodes].filter((id) => visible.has(id))
-              : [target.id];
-            const suffix = batch.length > 1 ? ` (${batch.length})` : "";
-            return (
-              <ul
-                className="context-menu"
-                role="menu"
-                aria-label={`节点操作 ${target.name}`}
-                style={{ left: nodeMenu.x, top: nodeMenu.y }}
-              >
-                <li>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled={busy || connected || selected}
-                    onClick={act(() => void run(() => selectNode(target.id)))}
-                  >
-                    {t("设为活动")}
-                  </button>
-                </li>
-                <li>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled={busy}
-                    onClick={act(() =>
-                      batch.length > 1
-                        ? void onTestNodes(batch)
-                        : void onTestNode(target.id),
-                    )}
-                  >
-                    {`测试延迟${suffix}`}
-                  </button>
-                </li>
-                <li>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled={busy || connected || !target.deletable}
-                    onClick={act(() => void onCloneNode(target.id))}
-                  >
-                    {t("克隆所选")}
-                  </button>
-                </li>
-                <li>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled={busy}
-                    onClick={act(() =>
-                      batch.length > 1
-                        ? void onExportNodeLinks(batch)
-                        : void onExportNodeLink(target.id),
-                    )}
-                  >
-                    {`导出分享链接${suffix}`}
-                  </button>
-                </li>
-                <li>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled={busy}
-                    onClick={act(() => void onShowNodeQrCode(target))}
-                  >
-                    {t("显示二维码")}
-                  </button>
-                </li>
-                <li>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled={busy}
-                    onClick={act(() => onGroupNode(target))}
-                  >
-                    {t("设置分组")}
-                  </button>
-                </li>
-                <li>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled={busy || !reorderable || index === 0}
-                    onClick={act(() => void onMoveNode(target.id, "up"))}
-                  >
-                    {t("上移")}
-                  </button>
-                </li>
-                <li>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled={busy || !reorderable || index === nodes.length - 1}
-                    onClick={act(() => void onMoveNode(target.id, "down"))}
-                  >
-                    {t("下移")}
-                  </button>
-                </li>
-                {target.deletable && (
-                  <li>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      disabled={busy || connected}
-                      onClick={act(() => onEditNode(target))}
-                    >
-                      {t("编辑")}
-                    </button>
-                  </li>
-                )}
-                <li>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="danger"
-                    disabled={busy || connected || !target.deletable}
-                    onClick={act(() =>
-                      batch.length > 1
-                        ? void onDeleteNodes(batch)
-                        : void onDeleteNode(target.id),
-                    )}
-                  >
-                    {target.deletable ? `移除所选${suffix}` : "订阅节点不可移除"}
-                  </button>
-                </li>
-                <li>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="danger"
-                    disabled={busy || connected}
-                    onClick={act(() => void onRemoveDuplicateNodes())}
-                  >
-                    {t("移除重复")}
-                  </button>
-                </li>
-              </ul>
-            );
-          })()}
-
-        {groupingNodeId !== null && (
-          <div className="settings-form" aria-label={t("设置节点分组")}>
-            <label>
-              {t("分组名称")}
-              <input
-                aria-label={t("节点分组")}
-                disabled={busy}
-                list="node-group-options"
-                value={nodeGroupName}
-                onChange={(event) => setNodeGroupName(event.target.value)}
-              />
-              <datalist id="node-group-options">
-                {nodeGroups.map((group) => (
-                  <option key={group.id} value={group.name} />
-                ))}
-              </datalist>
-            </label>
-            <div className="actions">
-              <button type="button" disabled={busy} onClick={() => void onSaveNodeGroup()}>
-                {t("保存分组")}
-              </button>
-              <button type="button" disabled={busy} onClick={resetNodeGroupForm}>
-                {t("取消")}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {editingNodeId !== null && (
-          <div className="settings-form" aria-label={t("编辑节点")}>
-            <label>
-              {t("名称")}
-              <input
-                aria-label={t("节点名称")}
-                disabled={busy || connected}
-                value={nodeName}
-                onChange={(event) => setNodeName(event.target.value)}
-              />
-            </label>
-            <label>
               {t("服务器")}
-              <input
-                aria-label={t("节点服务器")}
-                disabled={busy || connected}
-                value={nodeServer}
-                onChange={(event) => setNodeServer(event.target.value)}
-              />
-            </label>
-            <label>
-              {t("端口")}
-              <input
-                aria-label={t("节点端口")}
-                disabled={busy || connected}
-                min="1"
-                max="65535"
-                type="number"
-                value={nodePort}
-                onChange={(event) => setNodePort(event.target.value)}
-              />
-            </label>
-            <div className="actions">
-              <button type="button" disabled={busy || connected} onClick={() => void onSaveNode()}>
-                {t("保存节点")}
-              </button>
-              <button type="button" disabled={busy} onClick={resetNodeForm}>
-                {t("取消")}
-              </button>
-            </div>
+            </button>
+            <button
+              type="button"
+              className={mainTab === "msg" ? "active" : undefined}
+              onClick={() => setMainTab("msg")}
+            >
+              {t("消息")}
+            </button>
           </div>
         )}
+      </div>
 
-        </div>
-        {update !== null && (
+      <StatusBar
+        busy={busy}
+        connected={connected}
+        locale={locale}
+        platform={platform}
+        settings={settings}
+        status={status}
+        traffic={traffic}
+        t={t}
+        onChangeSettings={onChangeSettings}
+        onRoutingMode={(mode) => void run(() => setRoutingMode(mode))}
+      />
+
+      {update !== null && (
           <div className="dialog-backdrop" onClick={() => setUpdate(null)}>
             <div
               className="dialog qr-dialog"
@@ -1845,154 +2372,13 @@ export default function App() {
             </div>
           </div>
         )}
-        <div
-          className="dialog-backdrop"
-          hidden={panel === null}
-          onClick={() => setPanel(null)}
-        >
-          <div
-            className="dialog"
-            role="dialog"
-            aria-label={t("配置")}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <header className="dialog-head">
-              <div className="tabs">
-                {TABS.map((entry) => (
-                  <button
-                    key={entry.id}
-                    type="button"
-                    className={panel === entry.id ? "tab active" : "tab"}
-                    onClick={() => setPanel(entry.id)}
-                  >
-                    {entry.label}
-                  </button>
-                ))}
-              </div>
-              <button
-                type="button"
-                className="dialog-close"
-                aria-label={t("关闭配置")}
-                onClick={() => setPanel(null)}
-              >
-                {t("关闭")}
-              </button>
-            </header>
-            <div className="dialog-body">
-              <div className="tab-panel" hidden={panel !== "connection"}>
-        <h2>{t("连接")}</h2>
-
-        <dl>
-          <div>
-            <dt>{t("状态")}</dt>
-            <dd className={connected ? "connected" : undefined}>
-              {connected ? "已连接" : "未连接"}
-            </dd>
-          </div>
-          <div>
-            <dt>{t("下载")}</dt>
-            <dd aria-label={t("下载速率")}>
-              {connected ? formatRate(traffic.downloadBytesPerSecond) : "—"}
-            </dd>
-          </div>
-          <div>
-            <dt>{t("上传")}</dt>
-            <dd aria-label={t("上传速率")}>
-              {connected ? formatRate(traffic.uploadBytesPerSecond) : "—"}
-            </dd>
-          </div>
-          <div>
-            <dt>{t("今日")}</dt>
-            <dd aria-label={t("今日流量")}>{formatBytes(traffic.todayBytes)}</dd>
-          </div>
-          <div>
-            <dt>{t("本月")}</dt>
-            <dd aria-label={t("本月流量")}>{formatBytes(traffic.monthBytes)}</dd>
-          </div>
-          <div>
-            <dt>{t("累计")}</dt>
-            <dd aria-label={t("累计流量")}>{formatBytes(traffic.totalBytes)}</dd>
-          </div>
-          <div>
-            <dt>{t("节点")}</dt>
-            <dd>{node ? node.name : "尚未导入"}</dd>
-          </div>
-          <div>
-            <dt>{t("协议")}</dt>
-            <dd>{node ? node.protocol : "—"}</dd>
-          </div>
-          <div>
-            <dt>{t("地址")}</dt>
-            <dd>{node ? `${node.server}:${node.port}` : "—"}</dd>
-          </div>
-          <div>
-            <dt>Core</dt>
-            <dd>{status ? status.core : "—"}</dd>
-          </div>
-          <div>
-            <dt>{t("模式")}</dt>
-            <dd>
-              <select
-                aria-label={t("路由模式")}
-                disabled={busy || connected || status === null}
-                value={status?.mode ?? "global"}
-                onChange={(event) =>
-                  void run(() =>
-                    setRoutingMode(event.target.value as RoutingMode),
-                  )
-                }
-              >
-                <option value="global">{t("全局")}</option>
-                <option value="rule">{t("规则")}</option>
-                <option value="direct">{t("直连")}</option>
-              </select>
-            </dd>
-          </div>
-          <div>
-            <dt>{t("本地代理")}</dt>
-            <dd>
-              {status
-                ? `SOCKS ${status.socksPort} · HTTP ${status.httpPort}`
-                : "—"}
-            </dd>
-          </div>
-          <div>
-            <dt>{t("系统代理")}</dt>
-            <dd>
-              {connected && status?.systemProxy
-                ? "已接管系统代理"
-                : "未接管系统代理"}
-            </dd>
-          </div>
-          <div>
-            <dt>TUN</dt>
-            <dd>{platform ? TUN_LABEL[platform.tunAvailability] : "—"}</dd>
-          </div>
-          <div>
-            <dt>{t("构建目标")}</dt>
-            <dd>{platform ? platform.artifactIdentifier : platformError}</dd>
-          </div>
-        </dl>
-
-        <div className="actions">
-          <button
-            type="button"
-            disabled={
-              busy ||
-              nodeTestInProgress ||
-              node === null ||
-              systemProxyStartup !== "clean"
-            }
-            onClick={() =>
-              void run(connected ? disconnectSession : connectSession)
-            }
-          >
-            {connected ? "断开" : "连接"}
-          </button>
-        </div>
-
-              </div>
-              <div className="tab-panel" hidden={panel !== "nodes"}>
+      <Dialog
+        hidden={dialog !== "import"}
+        title={t("导入节点")}
+        ariaLabel={t("导入节点")}
+        onClose={() => setDialog(null)}
+        wide
+      >
         <h2>{t("导入节点")}</h2>
 
         <textarea
@@ -2000,7 +2386,7 @@ export default function App() {
           rows={3}
           value={uri}
           disabled={busy || connected}
-          placeholder="vless:// vmess:// trojan:// ss:// hysteria2://"
+          placeholder="vless:// vmess:// trojan:// ss:// hysteria2:// tuic://"
           onChange={(event) => setUri(event.target.value)}
         />
 
@@ -2091,9 +2477,24 @@ export default function App() {
           </div>
         )}
 
-        <h2>{t("手动创建节点")}</h2>
+      </Dialog>
 
-        <div className="settings-form" aria-label={t("手动创建节点")}>
+      <Dialog
+        hidden={dialog !== "create"}
+        title={editingNodeId === null ? t("手动创建节点") : t("编辑节点")}
+        ariaLabel={editingNodeId === null ? t("手动创建节点") : t("编辑节点")}
+        onClose={() => {
+          setDialog(null);
+          resetNodeForm();
+        }}
+        wide
+      >
+        <h2>{editingNodeId === null ? t("手动创建节点") : t("编辑节点")}</h2>
+
+        <div
+          className="settings-form"
+          aria-label={editingNodeId === null ? t("手动创建节点") : t("编辑节点")}
+        >
           <label>
             {t("协议")}
             <select
@@ -2111,6 +2512,7 @@ export default function App() {
               <option value="trojan">Trojan</option>
               <option value="shadowsocks">Shadowsocks</option>
               <option value="hysteria2">Hysteria2</option>
+              <option value="tuic">TUIC</option>
             </select>
           </label>
 
@@ -2148,7 +2550,8 @@ export default function App() {
           </label>
 
           {(createForm.protocol === "vless" ||
-            createForm.protocol === "vmess") && (
+            createForm.protocol === "vmess" ||
+            createForm.protocol === "tuic") && (
             <label>
               UUID
               <input
@@ -2311,6 +2714,97 @@ export default function App() {
             </>
           )}
 
+          {createForm.protocol === "tuic" && (
+            <>
+              <label>
+                {t("TUIC 密码")}
+                <input
+                  aria-label={t("TUIC 密码")}
+                  type="password"
+                  placeholder={t("留空表示不使用")}
+                  value={createForm.password}
+                  disabled={busy || connected}
+                  onChange={(event) =>
+                    updateCreateForm({ password: event.target.value })
+                  }
+                />
+              </label>
+              <label>
+                {t("拥塞控制")}
+                <select
+                  aria-label={t("拥塞控制")}
+                  value={createForm.congestionControl}
+                  disabled={busy || connected}
+                  onChange={(event) =>
+                    updateCreateForm({
+                      congestionControl: event.target.value as
+                        | ""
+                        | "cubic"
+                        | "new_reno"
+                        | "bbr",
+                    })
+                  }
+                >
+                  <option value="">{t("默认")}</option>
+                  <option value="cubic">cubic</option>
+                  <option value="new_reno">new_reno</option>
+                  <option value="bbr">bbr</option>
+                </select>
+              </label>
+              <label>
+                {t("UDP 中继模式")}
+                <select
+                  aria-label={t("UDP 中继模式")}
+                  value={createForm.udpRelayMode}
+                  disabled={busy || connected || createForm.udpOverStream}
+                  onChange={(event) =>
+                    updateCreateForm({
+                      udpRelayMode: event.target.value as
+                        | ""
+                        | "native"
+                        | "quic",
+                    })
+                  }
+                >
+                  <option value="">{t("默认")}</option>
+                  <option value="native">native</option>
+                  <option value="quic">quic</option>
+                </select>
+              </label>
+              <label className="checkbox-label">
+                <input
+                  aria-label={t("UDP over stream")}
+                  type="checkbox"
+                  checked={createForm.udpOverStream}
+                  disabled={busy || connected}
+                  onChange={(event) =>
+                    updateCreateForm({
+                      udpOverStream: event.target.checked,
+                      udpRelayMode: event.target.checked
+                        ? ""
+                        : createForm.udpRelayMode,
+                    })
+                  }
+                />
+                UDP over stream
+              </label>
+              <label className="checkbox-label">
+                <input
+                  aria-label={t("0-RTT 握手")}
+                  type="checkbox"
+                  checked={createForm.zeroRttHandshake}
+                  disabled={busy || connected}
+                  onChange={(event) =>
+                    updateCreateForm({
+                      zeroRttHandshake: event.target.checked,
+                    })
+                  }
+                />
+                {t("0-RTT 握手")}
+              </label>
+            </>
+          )}
+
           {usesStreamTransport(createForm.protocol) && (
             <label>
               {t("传输方式")}
@@ -2328,18 +2822,28 @@ export default function App() {
               >
                 <option value="tcp">TCP</option>
                 <option value="websocket">WebSocket</option>
+                <option value="httpupgrade">HTTPUpgrade</option>
+                <option value="xhttp">XHTTP</option>
                 <option value="grpc">gRPC</option>
               </select>
             </label>
           )}
 
           {usesStreamTransport(createForm.protocol) &&
-            createForm.transport === "websocket" && (
+            (createForm.transport === "websocket" ||
+              createForm.transport === "httpupgrade" ||
+              createForm.transport === "xhttp") && (
               <>
                 <label>
                   {t("路径")}
                   <input
-                    aria-label={t("WebSocket 路径")}
+                    aria-label={
+                      createForm.transport === "httpupgrade"
+                        ? t("HTTPUpgrade 路径")
+                        : createForm.transport === "xhttp"
+                          ? t("XHTTP 路径")
+                          : t("WebSocket 路径")
+                    }
                     value={createForm.wsPath}
                     disabled={busy || connected}
                     onChange={(event) =>
@@ -2350,7 +2854,13 @@ export default function App() {
                 <label>
                   Host
                   <input
-                    aria-label="WebSocket Host"
+                    aria-label={
+                      createForm.transport === "httpupgrade"
+                        ? "HTTPUpgrade Host"
+                        : createForm.transport === "xhttp"
+                          ? "XHTTP Host"
+                          : "WebSocket Host"
+                    }
                     placeholder={t("留空表示不使用")}
                     value={createForm.wsHost}
                     disabled={busy || connected}
@@ -2360,6 +2870,28 @@ export default function App() {
                   />
                 </label>
               </>
+            )}
+
+          {usesStreamTransport(createForm.protocol) &&
+            createForm.transport === "xhttp" && (
+              <label>
+                {t("模式")}
+                <select
+                  aria-label={t("XHTTP 模式")}
+                  value={createForm.xhttpMode}
+                  disabled={busy || connected}
+                  onChange={(event) =>
+                    updateCreateForm({
+                      xhttpMode: event.target.value as XhttpMode,
+                    })
+                  }
+                >
+                  <option value="auto">auto</option>
+                  <option value="packet-up">packet-up</option>
+                  <option value="stream-up">stream-up</option>
+                  <option value="stream-one">stream-one</option>
+                </select>
+              </label>
             )}
 
           {usesStreamTransport(createForm.protocol) &&
@@ -2410,21 +2942,46 @@ export default function App() {
 
           {usesStreamTransport(createForm.protocol) &&
             createForm.protocol !== "shadowsocks" && (
-              <label>
-                <input
-                  aria-label={t("启用 TLS")}
-                  type="checkbox"
-                  checked={createForm.tlsEnabled}
-                  disabled={busy || connected}
-                  onChange={(event) =>
-                    updateCreateForm({ tlsEnabled: event.target.checked })
-                  }
-                />
-                {t("启用 TLS")}
-              </label>
+              <>
+                <label>
+                  <input
+                    aria-label={t("启用 TLS")}
+                    type="checkbox"
+                    checked={createForm.tlsEnabled || createForm.realityEnabled}
+                    disabled={busy || connected}
+                    onChange={(event) =>
+                      updateCreateForm({
+                        tlsEnabled: event.target.checked,
+                        realityEnabled: event.target.checked
+                          ? createForm.realityEnabled
+                          : false,
+                      })
+                    }
+                  />
+                  {t("启用 TLS")}
+                </label>
+                <label>
+                  <input
+                    aria-label={t("启用 Reality")}
+                    type="checkbox"
+                    checked={createForm.realityEnabled}
+                    disabled={busy || connected}
+                    onChange={(event) =>
+                      updateCreateForm({
+                        realityEnabled: event.target.checked,
+                        tlsEnabled: event.target.checked || createForm.tlsEnabled,
+                      })
+                    }
+                  />
+                  {t("启用 Reality")}
+                </label>
+              </>
             )}
 
-          {(createForm.tlsEnabled || createForm.protocol === "hysteria2") &&
+          {(createForm.tlsEnabled ||
+            createForm.realityEnabled ||
+            createForm.protocol === "hysteria2" ||
+            createForm.protocol === "tuic") &&
             createForm.protocol !== "shadowsocks" && (
               <>
                 <label>
@@ -2463,18 +3020,72 @@ export default function App() {
                     }
                   />
                 </label>
-                <label>
-                  <input
-                    aria-label={t("允许不安全证书")}
-                    type="checkbox"
-                    checked={createForm.allowInsecure}
-                    disabled={busy || connected}
-                    onChange={(event) =>
-                      updateCreateForm({ allowInsecure: event.target.checked })
-                    }
-                  />
-                  {t("允许不安全证书")}
-                </label>
+                {!createForm.realityEnabled && (
+                  <label>
+                    pinSHA256
+                    <input
+                      aria-label={t("证书固定 pinSHA256")}
+                      placeholder={t("留空表示不使用")}
+                      value={createForm.pinnedSha256}
+                      disabled={busy || connected}
+                      onChange={(event) =>
+                        updateCreateForm({ pinnedSha256: event.target.value })
+                      }
+                    />
+                  </label>
+                )}
+                {createForm.realityEnabled ? (
+                  <>
+                    <label>
+                      publicKey
+                      <input
+                        aria-label={t("Reality publicKey")}
+                        value={createForm.publicKey}
+                        disabled={busy || connected}
+                        onChange={(event) =>
+                          updateCreateForm({ publicKey: event.target.value })
+                        }
+                      />
+                    </label>
+                    <label>
+                      shortId
+                      <input
+                        aria-label={t("Reality shortId")}
+                        placeholder={t("留空表示不使用")}
+                        value={createForm.shortId}
+                        disabled={busy || connected}
+                        onChange={(event) =>
+                          updateCreateForm({ shortId: event.target.value })
+                        }
+                      />
+                    </label>
+                    <label>
+                      spiderX
+                      <input
+                        aria-label={t("Reality spiderX")}
+                        placeholder={t("留空表示不使用")}
+                        value={createForm.spiderX}
+                        disabled={busy || connected}
+                        onChange={(event) =>
+                          updateCreateForm({ spiderX: event.target.value })
+                        }
+                      />
+                    </label>
+                  </>
+                ) : (
+                  <label>
+                    <input
+                      aria-label={t("允许不安全证书")}
+                      type="checkbox"
+                      checked={createForm.allowInsecure}
+                      disabled={busy || connected}
+                      onChange={(event) =>
+                        updateCreateForm({ allowInsecure: event.target.checked })
+                      }
+                    />
+                    {t("允许不安全证书")}
+                  </label>
+                )}
               </>
             )}
 
@@ -2497,20 +3108,34 @@ export default function App() {
               disabled={busy || connected}
               onClick={() => void onCreateNode()}
             >
-              {t("创建节点")}
+              {editingNodeId === null ? t("创建节点") : t("保存节点")}
             </button>
             <button
               type="button"
               disabled={busy || connected}
-              onClick={() => setCreateForm(emptyManualNodeForm)}
+              onClick={() =>
+                setCreateForm(
+                  blankManualNodeForm({
+                    allowInsecure: settings?.defAllowInsecure,
+                    fingerprint: settings?.defFingerprint,
+                  }),
+                )
+              }
             >
               {t("重置")}
             </button>
           </div>
         </div>
 
-              </div>
-              <div className="tab-panel" hidden={panel !== "subscriptions"}>
+      </Dialog>
+
+      <Dialog
+        hidden={dialog !== "subscriptions"}
+        title={t("订阅")}
+        ariaLabel={t("订阅")}
+        onClose={() => setDialog(null)}
+        wide
+      >
         <h2>{t("订阅")}</h2>
 
         <div className="actions">
@@ -2617,6 +3242,36 @@ export default function App() {
               onChange={(event) => setSubscriptionInterval(event.target.value)}
             />
           </label>
+          <label>
+            User-Agent
+            <input
+              aria-label={t("订阅 User-Agent")}
+              placeholder={t("留空使用默认")}
+              value={subscriptionUserAgent}
+              disabled={busy}
+              onChange={(event) => setSubscriptionUserAgent(event.target.value)}
+            />
+          </label>
+          <label>
+            {t("包含关键词")}
+            <input
+              aria-label={t("包含关键词")}
+              placeholder={t("用 | 分隔，留空表示全部")}
+              value={subscriptionInclude}
+              disabled={busy}
+              onChange={(event) => setSubscriptionInclude(event.target.value)}
+            />
+          </label>
+          <label>
+            {t("排除关键词")}
+            <input
+              aria-label={t("排除关键词")}
+              placeholder={t("用 | 分隔")}
+              value={subscriptionExclude}
+              disabled={busy}
+              onChange={(event) => setSubscriptionExclude(event.target.value)}
+            />
+          </label>
           <label className="checkbox-label">
             <input
               type="checkbox"
@@ -2660,8 +3315,15 @@ export default function App() {
           )}
         </div>
 
-              </div>
-              <div className="tab-panel" hidden={panel !== "routing"}>
+      </Dialog>
+
+      <Dialog
+        hidden={dialog !== "routing"}
+        title={t("路由规则")}
+        ariaLabel={t("路由规则")}
+        onClose={() => setDialog(null)}
+        wide
+      >
         <h2>{t("路由规则")}</h2>
 
         <p className="hint">
@@ -2844,6 +3506,15 @@ export default function App() {
           </button>
         </div>
 
+      </Dialog>
+
+      <Dialog
+        hidden={dialog !== "dns"}
+        title="DNS"
+        ariaLabel="DNS"
+        onClose={() => setDialog(null)}
+        wide
+      >
         <h2>DNS</h2>
 
         {dnsDraft === null ? (
@@ -3003,8 +3674,15 @@ export default function App() {
           </button>
         </div>
 
-              </div>
-              <div className="tab-panel" hidden={panel !== "settings"}>
+      </Dialog>
+
+      <Dialog
+        hidden={dialog !== "settings"}
+        title={t("设置")}
+        ariaLabel={t("设置")}
+        onClose={() => setDialog(null)}
+        wide
+      >
         <h2>{t("设置")}</h2>
 
         {settings === null ? (
@@ -3027,6 +3705,9 @@ export default function App() {
               />
               {t("使用 TUN 接管全局流量")}
             </label>
+            <p className="hint">
+              TUN：{platform ? TUN_LABEL[platform.tunAvailability] : "—"}
+            </p>
             <p className="hint">
               {platform ? TUN_NOTICE[platform.tunAvailability] : ""}
               TUN 与系统代理互斥，启用后本次会话不会修改系统代理。
@@ -3087,7 +3768,7 @@ export default function App() {
               </select>
             </label>
             <p className="hint">
-              {t("自动模式按节点协议和能力矩阵决定。Xray 不支持 Hysteria2，选中后遇到该协议的节点会提示原因。")}
+              {t("自动模式按节点协议和能力矩阵决定。Xray 不支持 Hysteria2 / TUIC，选中后遇到该协议的节点会提示原因。")}
             </p>
             <label>
               {t("默认日志级别")}
@@ -3108,120 +3789,279 @@ export default function App() {
                 <option value="trace">trace</option>
               </select>
             </label>
+            <label className="checkbox-label">
+              <input
+                aria-label={t("允许来自局域网的连接")}
+                type="checkbox"
+                checked={settings.allowLan}
+                disabled={busy || connected}
+                onChange={(event) =>
+                  void onChangeSettings({ allowLan: event.target.checked })
+                }
+              />
+              {t("允许来自局域网的连接")}
+            </label>
+            <p className="hint">
+              {t("开启后本地 SOCKS/HTTP 监听 0.0.0.0，局域网设备可使用本机代理；Clash API 仍仅本机可访问。下次连接生效。")}
+            </p>
+            <label className="checkbox-label">
+              <input
+                aria-label={t("启用入站 UDP")}
+                type="checkbox"
+                checked={settings.inboundUdpEnabled}
+                disabled={busy || connected}
+                onChange={(event) =>
+                  void onChangeSettings({
+                    inboundUdpEnabled: event.target.checked,
+                  })
+                }
+              />
+              {t("启用 SOCKS 入站 UDP（Xray，下次连接生效）")}
+            </label>
+            <label className="checkbox-label">
+              <input
+                aria-label={t("启用 Mux")}
+                type="checkbox"
+                checked={settings.muxEnabled}
+                disabled={busy || connected}
+                onChange={(event) =>
+                  void onChangeSettings({ muxEnabled: event.target.checked })
+                }
+              />
+              {t("启用 Mux 多路复用（下次连接生效）")}
+            </label>
+            <p className="hint">
+              {t("sing-box 使用 h2mux；Xray 使用 mux。含 Vision flow 的 VLESS 与 Hysteria2 / TUIC 会自动跳过。")}
+            </p>
+            <label className="checkbox-label">
+              <input
+                aria-label={t("测速后自动选择最低延迟")}
+                type="checkbox"
+                checked={settings.autoSelectLowestLatency}
+                disabled={busy}
+                onChange={(event) =>
+                  void onChangeSettings({
+                    autoSelectLowestLatency: event.target.checked,
+                  })
+                }
+              />
+              {t("全部测速后自动选择延迟最低的节点")}
+            </label>
+            <label>
+              {t("URL 测试地址")}
+              <input
+                aria-label={t("设置中的 URL 测试地址")}
+                value={settings.urlTestAddress}
+                disabled={busy}
+                onChange={(event) => {
+                  const urlTestAddress = event.target.value;
+                  setUrlTestAddress(urlTestAddress);
+                  setSettings({ ...settings, urlTestAddress });
+                }}
+                onBlur={() => {
+                  void onChangeSettings({
+                    urlTestAddress:
+                      settings.urlTestAddress.trim() || DEFAULT_URL_TEST_ADDRESS,
+                  });
+                }}
+              />
+            </label>
+            <label>
+              {t("下载测速地址")}
+              <input
+                aria-label={t("下载测速地址")}
+                value={settings.speedTestUrl}
+                disabled={busy}
+                onChange={(event) =>
+                  setSettings({ ...settings, speedTestUrl: event.target.value })
+                }
+                onBlur={() => {
+                  void onChangeSettings({
+                    speedTestUrl:
+                      settings.speedTestUrl.trim() || DEFAULT_SPEED_TEST_URL,
+                  });
+                }}
+              />
+            </label>
+            <label className="checkbox-label">
+              <input
+                aria-label={t("默认允许不安全证书")}
+                type="checkbox"
+                checked={settings.defAllowInsecure}
+                disabled={busy}
+                onChange={(event) =>
+                  void onChangeSettings({
+                    defAllowInsecure: event.target.checked,
+                  })
+                }
+              />
+              {t("新建节点默认允许不安全证书")}
+            </label>
+            <label>
+              {t("默认 TLS 指纹")}
+              <input
+                aria-label={t("默认 TLS 指纹")}
+                value={settings.defFingerprint}
+                disabled={busy}
+                placeholder="chrome"
+                onChange={(event) =>
+                  setSettings({
+                    ...settings,
+                    defFingerprint: event.target.value,
+                  })
+                }
+                onBlur={() => {
+                  void onChangeSettings({
+                    defFingerprint: settings.defFingerprint.trim(),
+                  });
+                }}
+              />
+            </label>
+            <p className="hint">
+              {t("用于手动创建节点时的 TLS 默认值，不影响已有节点。")}
+            </p>
+            <label>
+              {t("热键：连接/断开")}
+              <input
+                aria-label={t("热键：连接/断开")}
+                value={settings.hotkeyConnect}
+                disabled={busy}
+                placeholder="Ctrl+Enter"
+                onChange={(event) =>
+                  setSettings({
+                    ...settings,
+                    hotkeyConnect: event.target.value,
+                  })
+                }
+                onBlur={() => {
+                  void onChangeSettings({
+                    hotkeyConnect: settings.hotkeyConnect.trim(),
+                  });
+                }}
+              />
+            </label>
+            <label>
+              {t("热键：上一节点")}
+              <input
+                aria-label={t("热键：上一节点")}
+                value={settings.hotkeyPrevious}
+                disabled={busy}
+                placeholder="Ctrl+["
+                onChange={(event) =>
+                  setSettings({
+                    ...settings,
+                    hotkeyPrevious: event.target.value,
+                  })
+                }
+                onBlur={() => {
+                  void onChangeSettings({
+                    hotkeyPrevious: settings.hotkeyPrevious.trim(),
+                  });
+                }}
+              />
+            </label>
+            <label>
+              {t("热键：下一节点")}
+              <input
+                aria-label={t("热键：下一节点")}
+                value={settings.hotkeyNext}
+                disabled={busy}
+                placeholder="Ctrl+]"
+                onChange={(event) =>
+                  setSettings({
+                    ...settings,
+                    hotkeyNext: event.target.value,
+                  })
+                }
+                onBlur={() => {
+                  void onChangeSettings({
+                    hotkeyNext: settings.hotkeyNext.trim(),
+                  });
+                }}
+              />
+            </label>
+            <p className="hint">
+              {t("窗口内生效；留空表示禁用。输入框获得焦点时不触发。")}
+            </p>
+            <label>
+              {t("SOCKS 端口")}
+              <input
+                aria-label={t("SOCKS 端口")}
+                type="number"
+                min="1"
+                max="65535"
+                disabled={busy || connected}
+                value={settings.socksPort}
+                onChange={(event) =>
+                  void onChangeSettings({
+                    socksPort: Number(event.target.value),
+                  })
+                }
+              />
+            </label>
+            <label>
+              {t("HTTP 端口")}
+              <input
+                aria-label={t("HTTP 端口")}
+                type="number"
+                min="1"
+                max="65535"
+                disabled={busy || connected}
+                value={settings.httpPort}
+                onChange={(event) =>
+                  void onChangeSettings({
+                    httpPort: Number(event.target.value),
+                  })
+                }
+              />
+            </label>
+            <label>
+              {t("Clash API 端口")}
+              <input
+                aria-label={t("Clash API 端口")}
+                type="number"
+                min="1"
+                max="65535"
+                disabled={busy || connected}
+                value={settings.clashApiPort}
+                onChange={(event) =>
+                  void onChangeSettings({
+                    clashApiPort: Number(event.target.value),
+                  })
+                }
+              />
+            </label>
+            <p className="hint" aria-label={t("本地代理端口")}>
+              {t("本地代理端口在下次连接时生效；SOCKS、HTTP 与 Clash API 不能相同。")}
+            </p>
+            <p className="hint">
+              {t("PAC 模式会启动本地 PAC 服务并写入系统代理（全局脚本，不等价于规则模式）。")}
+            </p>
+            <p className="hint">
+              {t("构建目标")}：{platform ? platform.artifactIdentifier : platformError}
+            </p>
           </div>
         )}
 
-              </div>
-              <div className="tab-panel" hidden={panel !== "logs"}>
-        <h2>{t("诊断")}</h2>
+      </Dialog>
 
-        <p className="hint">
-          {t("导出的诊断包已按 PRD 25.3 脱敏：凭据字段一律替换为 [REDACTED]。")}
+      <Dialog
+        hidden={dialog !== "about"}
+        title={t("关于")}
+        ariaLabel={t("关于")}
+        onClose={() => setDialog(null)}
+      >
+        <p>MgClash</p>
+        <p>{platform?.artifactIdentifier}</p>
+        <p>{t("界面以 v2rayN Avalonia 为模板重新实现，未使用其 GPL 源码。")}</p>
+        <p>
+          {t("关闭窗口时最小化到托盘")}: {settings?.closeToTray ? t("已启用") : t("未启用")}
         </p>
+        <p className="hint">
+          {t("托盘菜单支持打开窗口、连接/断开、切换路由模式与选择节点。")}
+        </p>
+      </Dialog>
 
-        <div className="actions">
-          <button type="button" disabled={busy} onClick={() => void onExport()}>
-            {t("导出诊断")}
-          </button>
-        </div>
-
-        {exportedTo !== null && (
-          <p className="success" role="status">
-            已导出到 {exportedTo}
-          </p>
-        )}
-
-        {error !== null && (
-          <p className="error" role="alert">
-            {error}
-          </p>
-        )}
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <footer className="statusbar">
-        <span>
-          本地 SOCKS {status?.socksPort ?? "—"} · HTTP {status?.httpPort ?? "—"}
-        </span>
-        <span>Core {status?.core ?? "—"}</span>
-        <label className="status-control">
-          {t("路由")}
-          <select
-            aria-label={t("状态栏路由模式")}
-            disabled={busy || connected || status === null}
-            value={status?.mode ?? "global"}
-            onChange={(event) =>
-              void run(() => setRoutingMode(event.target.value as RoutingMode))
-            }
-          >
-            <option value="global">{t("全局")}</option>
-            <option value="rule">{t("规则")}</option>
-            <option value="direct">{t("直连")}</option>
-          </select>
-        </label>
-        <label className="status-control">
-          <input
-            aria-label={t("状态栏 TUN")}
-            type="checkbox"
-            checked={settings?.tunEnabled ?? false}
-            disabled={
-              busy ||
-              connected ||
-              settings === null ||
-              platform?.tunAvailability === "unavailableInUnsignedBuild"
-            }
-            onChange={(event) =>
-              void onChangeSettings({ tunEnabled: event.target.checked })
-            }
-          />
-          TUN
-        </label>
-        <label className="status-control">
-          {t("语言")}
-          <select
-            aria-label={t("界面语言")}
-            disabled={busy || settings === null}
-            value={locale}
-            onChange={(event) =>
-              void onChangeSettings({ locale: event.target.value as Locale })
-            }
-          >
-            {LOCALES.map((entry) => (
-              <option key={entry.id} value={entry.id}>
-                {entry.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="status-control">
-          {t("系统代理")}
-          <select
-            aria-label={t("状态栏系统代理")}
-            disabled={busy || connected || settings === null}
-            value={settings?.systemProxyMode ?? "managed"}
-            onChange={(event) =>
-              void onChangeSettings({
-                systemProxyMode: event.target.value as SystemProxyMode,
-              })
-            }
-          >
-            <option value="managed">{t("自动配置")}</option>
-            <option value="pac">PAC</option>
-            <option value="cleared">{t("清除")}</option>
-            <option value="unchanged">{t("不改变")}</option>
-          </select>
-        </label>
-        <span className="statusbar-rates">
-          ↓ {formatRate(traffic.downloadBytesPerSecond)} ↑{" "}
-          {formatRate(traffic.uploadBytesPerSecond)}
-        </span>
-        <span className={connected ? "badge on" : "badge off"}>
-          {connected ? "已连接" : "未连接"}
-        </span>
-      </footer>
     </main>
   );
 }

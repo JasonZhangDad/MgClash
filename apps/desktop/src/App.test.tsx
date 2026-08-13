@@ -23,13 +23,19 @@ const loadLogsMock = vi.hoisted(() => vi.fn());
 const loadAppSettingsMock = vi.hoisted(() => vi.fn());
 const saveAppSettingsMock = vi.hoisted(() => vi.fn());
 const clearLogsMock = vi.hoisted(() => vi.fn());
+const clearTrafficMock = vi.hoisted(() => vi.fn());
 const selectNodeMock = vi.hoisted(() => vi.fn());
+const switchNodeMock = vi.hoisted(() => vi.fn());
 const deleteNodeMock = vi.hoisted(() => vi.fn());
 const editNodeMock = vi.hoisted(() => vi.fn());
+const loadNodeDraftMock = vi.hoisted(() => vi.fn());
+const updateNodeMock = vi.hoisted(() => vi.fn());
 const moveNodeMock = vi.hoisted(() => vi.fn());
+const reorderNodesMock = vi.hoisted(() => vi.fn());
 const setNodeGroupMock = vi.hoisted(() => vi.fn());
 const testNodeMock = vi.hoisted(() => vi.fn());
 const testAllNodesMock = vi.hoisted(() => vi.fn());
+const testDownloadSpeedMock = vi.hoisted(() => vi.fn());
 const testUrlMock = vi.hoisted(() => vi.fn());
 const connectSessionMock = vi.hoisted(() => vi.fn());
 const disconnectSessionMock = vi.hoisted(() => vi.fn());
@@ -37,6 +43,8 @@ const setRoutingModeMock = vi.hoisted(() => vi.fn());
 const setDnsSettingsMock = vi.hoisted(() => vi.fn());
 const setRouteSettingsMock = vi.hoisted(() => vi.fn());
 const exportDiagnosticsMock = vi.hoisted(() => vi.fn());
+const exportPreferencesMock = vi.hoisted(() => vi.fn());
+const importPreferencesMock = vi.hoisted(() => vi.fn());
 const loadSystemProxyStartupStatusMock = vi.hoisted(() => vi.fn());
 const recoverSystemProxyMock = vi.hoisted(() => vi.fn());
 const dismissSystemProxyRecoveryMock = vi.hoisted(() => vi.fn());
@@ -45,6 +53,7 @@ const createSubscriptionMock = vi.hoisted(() => vi.fn());
 const updateSubscriptionMock = vi.hoisted(() => vi.fn());
 const refreshSubscriptionMock = vi.hoisted(() => vi.fn());
 const refreshAllSubscriptionsMock = vi.hoisted(() => vi.fn());
+const setNodeEnabledMock = vi.hoisted(() => vi.fn());
 const deleteSubscriptionMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./platform", () => ({
@@ -55,6 +64,7 @@ vi.mock("./session", async () => {
   const actual = await vi.importActual<typeof import("./session")>("./session");
   return {
     clearLogs: clearLogsMock,
+    clearTraffic: clearTrafficMock,
     connectSession: connectSessionMock,
     createNode: createNodeMock,
     loadAppSettings: loadAppSettingsMock,
@@ -63,7 +73,11 @@ vi.mock("./session", async () => {
     disconnectSession: disconnectSessionMock,
     dismissSystemProxyRecovery: dismissSystemProxyRecoveryMock,
     exportDiagnostics: exportDiagnosticsMock,
+    exportPreferences: exportPreferencesMock,
+    importPreferences: importPreferencesMock,
     editNode: editNodeMock,
+    loadNodeDraft: loadNodeDraftMock,
+    updateNode: updateNodeMock,
     importNode: importNodeMock,
     importNodes: importNodesMock,
     isCommandError: actual.isCommandError,
@@ -80,14 +94,18 @@ vi.mock("./session", async () => {
     loadTraffic: loadTrafficMock,
   loadNodeTraffic: loadNodeTrafficMock,
     moveNode: moveNodeMock,
+    reorderNodes: reorderNodesMock,
     loadSystemProxyStartupStatus: loadSystemProxyStartupStatusMock,
     recoverSystemProxy: recoverSystemProxyMock,
     selectNode: selectNodeMock,
+    switchNode: switchNodeMock,
+    setNodeEnabled: setNodeEnabledMock,
     setRoutingMode: setRoutingModeMock,
     setNodeGroup: setNodeGroupMock,
     setDnsSettings: setDnsSettingsMock,
     setRouteSettings: setRouteSettingsMock,
     testAllNodes: testAllNodesMock,
+    testDownloadSpeed: testDownloadSpeedMock,
     testNode: testNodeMock,
     testUrl: testUrlMock,
   };
@@ -129,6 +147,7 @@ const IDLE: SessionStatus = {
   },
   node: null,
   socksPort: 10808,
+  clashApiPort: 9090,
   systemProxy: true,
   systemProxyMode: "managed" as const,
 };
@@ -137,6 +156,7 @@ const SELECTED: SessionStatus = {
   ...IDLE,
   node: {
     deletable: true,
+    enabled: true,
     groupId: null,
     id: "00000000-0000-0000-0000-000000000001",
     lastTestedAt: null,
@@ -161,17 +181,34 @@ const DEFAULT_SETTINGS = {
   logLevel: "info" as const,
   systemProxyMode: "managed" as const,
   locale: "zh-Hans" as const,
+  socksPort: 10808,
+  httpPort: 10809,
+  clashApiPort: 9090,
+  muxEnabled: false,
+  autoSelectLowestLatency: false,
+  urlTestAddress: "https://www.gstatic.com/generate_204",
+  allowLan: false,
+  speedTestUrl: "https://speed.cloudflare.com/__down?bytes=10000000",
+  inboundUdpEnabled: true,
+  defAllowInsecure: false,
+  defFingerprint: "",
+  hotkeyConnect: "Ctrl+Enter",
+  hotkeyPrevious: "Ctrl+[",
+  hotkeyNext: "Ctrl+]",
 };
 
 const SUBSCRIPTION = {
   autoUpdate: true,
-  enabled: true,
+      enabled: true,
+    excludeKeywords: "",
   id: "00000000-0000-0000-0000-000000000010",
+  includeKeywords: "",
   lastUpdatedAt: null,
   lastError: null,
   name: "Airport",
   nodeCount: 3,
   updateIntervalMinutes: 60,
+  userAgent: null,
 };
 
 describe("App", () => {
@@ -190,12 +227,18 @@ describe("App", () => {
     createNodeMock.mockReset();
     importNodesMock.mockReset();
     selectNodeMock.mockReset();
+    switchNodeMock.mockReset();
+    setNodeEnabledMock.mockReset();
     deleteNodeMock.mockReset();
     editNodeMock.mockReset();
+    loadNodeDraftMock.mockReset();
+    updateNodeMock.mockReset();
     moveNodeMock.mockReset();
+    reorderNodesMock.mockReset();
     setNodeGroupMock.mockReset();
     testNodeMock.mockReset();
     testAllNodesMock.mockReset();
+    testDownloadSpeedMock.mockReset();
     testUrlMock.mockReset();
     connectSessionMock.mockReset();
     disconnectSessionMock.mockReset();
@@ -203,6 +246,8 @@ describe("App", () => {
     setDnsSettingsMock.mockReset();
     setRouteSettingsMock.mockReset();
     exportDiagnosticsMock.mockReset();
+    exportPreferencesMock.mockReset();
+    importPreferencesMock.mockReset();
     loadSystemProxyStartupStatusMock.mockReset();
     recoverSystemProxyMock.mockReset();
     dismissSystemProxyRecoveryMock.mockReset();
@@ -210,6 +255,7 @@ describe("App", () => {
     loadAppSettingsMock.mockReset();
     saveAppSettingsMock.mockReset();
     clearLogsMock.mockReset();
+    clearTrafficMock.mockReset();
     loadSubscriptionsMock.mockReset();
     createSubscriptionMock.mockReset();
     updateSubscriptionMock.mockReset();
@@ -235,6 +281,13 @@ describe("App", () => {
     loadAppSettingsMock.mockResolvedValue(DEFAULT_SETTINGS);
     saveAppSettingsMock.mockImplementation((value) => Promise.resolve(value));
     clearLogsMock.mockResolvedValue(undefined);
+    clearTrafficMock.mockResolvedValue({
+      downloadBytesPerSecond: 0,
+      monthBytes: 0,
+      todayBytes: 0,
+      totalBytes: 0,
+      uploadBytesPerSecond: 0,
+    });
     loadSystemProxyStartupStatusMock.mockResolvedValue("clean");
     recoverSystemProxyMock.mockResolvedValue("clean");
     dismissSystemProxyRecoveryMock.mockResolvedValue("clean");
@@ -439,7 +492,7 @@ describe("App", () => {
     expect(loadTrafficMock).toHaveBeenCalledOnce();
   });
 
-  it("shows persisted traffic totals while disconnected", async () => {
+  it("shows zeroed traffic rates in the status bar while disconnected", async () => {
     loadTrafficMock.mockResolvedValue({
       downloadBytesPerSecond: 0,
       monthBytes: 1_048_576,
@@ -450,15 +503,12 @@ describe("App", () => {
 
     await render();
 
-    expect(container.querySelector("[aria-label='今日流量']")?.textContent).toBe(
-      "2.0 KB",
-    );
-    expect(container.querySelector("[aria-label='本月流量']")?.textContent).toBe(
-      "1.0 MB",
-    );
-    expect(container.querySelector("[aria-label='累计流量']")?.textContent).toBe(
-      "1.0 GB",
-    );
+    expect(
+      container.querySelector("[aria-label='下载速率']")?.textContent,
+    ).toBe("↓ 0 B/s");
+    expect(
+      container.querySelector("[aria-label='上传速率']")?.textContent,
+    ).toBe("↑ 0 B/s");
   });
 
   it("shows live upload and download rates while connected", async () => {
@@ -477,10 +527,10 @@ describe("App", () => {
     expect(loadTrafficMock).toHaveBeenCalledOnce();
     expect(
       container.querySelector("[aria-label='下载速率']")?.textContent,
-    ).toBe("2.0 KB/s");
+    ).toBe("↓ 2.0 KB/s");
     expect(
       container.querySelector("[aria-label='上传速率']")?.textContent,
-    ).toBe("1.0 MB/s");
+    ).toBe("↑ 1.0 MB/s");
   });
 
   it("keeps background traffic failures out of the user alert", async () => {
@@ -949,6 +999,54 @@ describe("App", () => {
     expect(container.textContent).toContain("暂无日志");
   });
 
+  it("clears traffic statistics from the settings menu", async () => {
+    loadTrafficMock.mockResolvedValue({
+      downloadBytesPerSecond: 2_048,
+      monthBytes: 1_048_576,
+      todayBytes: 2_048,
+      totalBytes: 1_073_741_824,
+      uploadBytesPerSecond: 1_024,
+    });
+    clearTrafficMock.mockResolvedValue({
+      downloadBytesPerSecond: 0,
+      monthBytes: 0,
+      todayBytes: 0,
+      totalBytes: 0,
+      uploadBytesPerSecond: 0,
+    });
+    await render();
+    expect(
+      container.querySelector("[aria-label='下载速率']")?.textContent,
+    ).toBe("↓ 2.0 KB/s");
+
+    await act(async () => button("清除流量统计").click());
+
+    expect(clearTrafficMock).toHaveBeenCalledOnce();
+    expect(
+      container.querySelector("[aria-label='下载速率']")?.textContent,
+    ).toBe("↓ 0 B/s");
+    expect(
+      container.querySelector("[aria-label='上传速率']")?.textContent,
+    ).toBe("↑ 0 B/s");
+  });
+
+  it("persists inbound UDP and TLS create defaults", async () => {
+    await render();
+
+    await act(async () => createField("启用入站 UDP").click());
+    expect(saveAppSettingsMock).toHaveBeenCalledWith({
+      ...DEFAULT_SETTINGS,
+      inboundUdpEnabled: false,
+    });
+
+    await act(async () => createField("默认允许不安全证书").click());
+    expect(saveAppSettingsMock).toHaveBeenCalledWith({
+      ...DEFAULT_SETTINGS,
+      inboundUdpEnabled: false,
+      defAllowInsecure: true,
+    });
+  });
+
   it("creates a node from the manual form", async () => {
     createNodeMock.mockResolvedValue(SELECTED);
     loadNodesMock
@@ -1013,6 +1111,74 @@ describe("App", () => {
     );
   });
 
+  it("hides the transport picker for TUIC and always sends TLS", async () => {
+    createNodeMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([]);
+    await render();
+
+    await act(async () => {
+      selectValue("tuic", createSelect("节点协议"));
+    });
+
+    expect(
+      container.querySelector("select[aria-label='传输方式']"),
+    ).toBeNull();
+
+    await act(async () => {
+      typeInput("Frankfurt", createField("新建节点名称"));
+      typeInput("edge.example.com", createField("新建节点服务器"));
+      typeInput("8443", createField("新建节点端口"));
+      typeInput(
+        "b0dd64e4-0fbd-4038-9139-d1f32a68a0dc",
+        createField("节点 UUID"),
+      );
+      typeInput("secret", createField("TUIC 密码"));
+    });
+    await act(async () => {
+      selectValue("bbr", createSelect("拥塞控制"));
+    });
+    await act(async () => {
+      selectValue("native", createSelect("UDP 中继模式"));
+    });
+    await act(async () => createField("0-RTT 握手").click());
+    await act(async () => button("创建节点").click());
+
+    expect(createNodeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credential: {
+          congestionControl: "bbr",
+          password: "secret",
+          protocol: "tuic",
+          udpOverStream: false,
+          udpRelayMode: "native",
+          uuid: "b0dd64e4-0fbd-4038-9139-d1f32a68a0dc",
+          zeroRttHandshake: true,
+        },
+        transport: null,
+        tls: expect.objectContaining({ type: "tls" }),
+      }),
+    );
+  });
+
+  it("disables the TUIC UDP relay mode picker once UDP over stream is checked", async () => {
+    createNodeMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([]);
+    await render();
+
+    await act(async () => {
+      selectValue("tuic", createSelect("节点协议"));
+    });
+    await act(async () => createField("UDP over stream").click());
+
+    expect(
+      (
+        container.querySelector(
+          "select[aria-label='UDP 中继模式']",
+        ) as HTMLSelectElement
+      ).disabled,
+    ).toBe(true);
+  });
+
   it("sends every VLESS field over a WebSocket transport with TLS", async () => {
     createNodeMock.mockResolvedValue(SELECTED);
     loadNodesMock.mockResolvedValue([]);
@@ -1055,6 +1221,7 @@ describe("App", () => {
         allowInsecure: true,
         alpn: ["h2", "http/1.1"],
         fingerprint: "chrome",
+        pinnedSha256: null,
         serverName: "sni.example.com",
         type: "tls",
       },
@@ -1220,7 +1387,8 @@ describe("App", () => {
     const osaka = {
       id: "00000000-0000-0000-0000-000000000002",
       deletable: true,
-      lastTestedAt: null,
+      enabled: true,
+    lastTestedAt: null,
       latencyMs: null,
       name: "Osaka",
       port: 9000,
@@ -1232,15 +1400,16 @@ describe("App", () => {
     loadSessionStatusMock.mockResolvedValue(SELECTED);
     loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
     selectNodeMock.mockResolvedValue({ ...SELECTED, node: osaka });
+    switchNodeMock.mockResolvedValue({ ...SELECTED, node: osaka });
     await render();
 
     await nodeMenuAction("Osaka", "设为活动");
 
-    expect(selectNodeMock).toHaveBeenCalledWith(osaka.id);
+    expect(switchNodeMock).toHaveBeenCalledWith(osaka.id);
     expect(container.textContent).toContain("osaka.example.com:9000");
   });
 
-  it("edits a manual node with a compact inline form", async () => {
+  it("edits a manual node through the full form dialog", async () => {
     const editedNode = {
       ...SELECTED.node!,
       name: "Tokyo 2",
@@ -1251,19 +1420,32 @@ describe("App", () => {
     loadNodesMock
       .mockResolvedValueOnce([SELECTED.node])
       .mockResolvedValueOnce([editedNode]);
-    editNodeMock.mockResolvedValue({ ...SELECTED, node: editedNode });
+    loadNodeDraftMock.mockResolvedValue({
+      credential: {
+        method: "aes-256-gcm",
+        password: "secret",
+        protocol: "shadowsocks",
+      },
+      name: "Tokyo Edge",
+      port: 8388,
+      server: "edge.example.com",
+      tls: null,
+      transport: { type: "tcp" },
+      udpEnabled: true,
+    });
+    updateNodeMock.mockResolvedValue({ ...SELECTED, node: editedNode });
     await render();
 
     await nodeMenuAction("Tokyo Edge", "编辑");
 
     const name = container.querySelector<HTMLInputElement>(
-      "[aria-label='节点名称']",
+      "[aria-label='新建节点名称']",
     );
     const server = container.querySelector<HTMLInputElement>(
-      "[aria-label='节点服务器']",
+      "[aria-label='新建节点服务器']",
     );
     const port = container.querySelector<HTMLInputElement>(
-      "[aria-label='节点端口']",
+      "[aria-label='新建节点端口']",
     );
     if (!name || !server || !port) {
       throw new Error("node edit fields are missing");
@@ -1275,11 +1457,15 @@ describe("App", () => {
     });
     await act(async () => button("保存节点").click());
 
-    expect(editNodeMock).toHaveBeenCalledWith(SELECTED.node?.id, {
-      name: "Tokyo 2",
-      port: 443,
-      server: "new.example.com",
-    });
+    expect(loadNodeDraftMock).toHaveBeenCalledWith(SELECTED.node?.id);
+    expect(updateNodeMock).toHaveBeenCalledWith(
+      SELECTED.node?.id,
+      expect.objectContaining({
+        name: "Tokyo 2",
+        port: 443,
+        server: "new.example.com",
+      }),
+    );
     expect(
       container.querySelector("[aria-label='节点列表']")?.textContent,
     ).toContain("Tokyo 2");
@@ -1328,20 +1514,18 @@ describe("App", () => {
     setNodeGroupMock.mockResolvedValue([groupedTokyo, osaka]);
     await render();
 
-    const filter = container.querySelector<HTMLSelectElement>(
-      "[aria-label='节点分组筛选']",
-    );
+    const filter = container.querySelector("[aria-label='节点分组筛选']");
     if (!filter) {
       throw new Error("node group filter is missing");
     }
-    await act(async () => selectValue(work.id, filter));
+    await act(async () => button(work.name).click());
     expect(
       [...container.querySelectorAll("[aria-label='节点列表'] tbody tr")].map(
         (row) => row.textContent,
       ),
     ).toEqual([expect.stringContaining("Osaka")]);
 
-    await act(async () => selectValue("all", filter));
+    await act(async () => button("全部").click());
     await nodeMenuAction("Tokyo Edge", "设置分组");
     const groupName = container.querySelector<HTMLInputElement>(
       "[aria-label='节点分组']",
@@ -1425,6 +1609,58 @@ describe("App", () => {
     expect(button("全部测速").disabled).toBe(false);
   });
 
+  it("skips disabled nodes when testing all", async () => {
+    const disabled = {
+      ...SELECTED.node!,
+      enabled: false,
+      id: "00000000-0000-0000-0000-000000000099",
+      name: "Disabled Edge",
+    };
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([SELECTED.node, disabled]);
+    testAllNodesMock.mockResolvedValue(undefined);
+    await render();
+
+    await act(async () => button("全部测速").click());
+    expect(testAllNodesMock).toHaveBeenCalledWith(
+      [SELECTED.node?.id],
+      expect.any(Function),
+      expect.any(Function),
+    );
+  });
+
+  it("sorts the node list by latency", async () => {
+    const slow = {
+      ...SELECTED.node!,
+      id: "00000000-0000-0000-0000-000000000002",
+      latencyMs: 200,
+      name: "Slow Edge",
+    };
+    const fast = {
+      ...SELECTED.node!,
+      id: "00000000-0000-0000-0000-000000000003",
+      latencyMs: 40,
+      name: "Fast Edge",
+    };
+    const untested = {
+      ...SELECTED.node!,
+      id: "00000000-0000-0000-0000-000000000004",
+      latencyMs: null,
+      name: "Untested Edge",
+    };
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([slow, fast, untested]);
+    reorderNodesMock.mockResolvedValue([fast, slow, untested]);
+    await render();
+
+    await act(async () => button("按延迟排序").click());
+    expect(reorderNodesMock).toHaveBeenCalledWith([
+      fast.id,
+      slow.id,
+      untested.id,
+    ]);
+  });
+
   it("tests a configurable URL through the connected node and remembers it", async () => {
     loadSessionStatusMock.mockResolvedValue(CONNECTED);
     loadNodesMock.mockResolvedValue([SELECTED.node]);
@@ -1446,8 +1682,10 @@ describe("App", () => {
     await act(async () => button("URL 测试").click());
 
     expect(testUrlMock).toHaveBeenCalledWith("https://probe.example/204");
-    expect(localStorage.getItem("mgclash.urlTestAddress")).toBe(
-      "https://probe.example/204",
+    expect(saveAppSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        urlTestAddress: "https://probe.example/204",
+      }),
     );
     expect(
       container.querySelector("[aria-label='节点列表']")?.textContent,
@@ -1457,6 +1695,10 @@ describe("App", () => {
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
+    loadAppSettingsMock.mockResolvedValue({
+      ...DEFAULT_SETTINGS,
+      urlTestAddress: "https://probe.example/204",
+    });
     await render();
     expect(
       container.querySelector<HTMLInputElement>(
@@ -1483,7 +1725,9 @@ describe("App", () => {
     await act(async () => typeInput("file:///tmp/probe", field));
     await act(async () => button("URL 测试").click());
 
-    expect(localStorage.getItem("mgclash.urlTestAddress")).toBeNull();
+    expect(saveAppSettingsMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ urlTestAddress: "file:///tmp/probe" }),
+    );
     expect(container.querySelector("[role='alert']")?.textContent).toContain(
       "URL 测试地址无效",
     );
@@ -1493,6 +1737,35 @@ describe("App", () => {
     await render();
 
     expect(button("URL 测试").disabled).toBe(true);
+  });
+
+  it("runs a download speed test through the connected node", async () => {
+    loadSessionStatusMock.mockResolvedValue(CONNECTED);
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    testDownloadSpeedMock.mockResolvedValue({
+      id: SELECTED.node?.id,
+      bytesPerSecond: 2_500_000,
+      bytesRead: 10_000_000,
+      elapsedMs: 4000,
+      status: "success",
+    });
+    await render();
+
+    await act(async () => button("下载测速").click());
+    expect(testDownloadSpeedMock).toHaveBeenCalledWith(
+      "https://speed.cloudflare.com/__down?bytes=10000000",
+    );
+    expect(
+      container.querySelector("[aria-label='节点列表']")?.textContent,
+    ).toContain("2.4 MB/s");
+  });
+
+  it("persists Allow LAN from settings", async () => {
+    await render();
+    await act(async () => createField("允许来自局域网的连接").click());
+    expect(saveAppSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ allowLan: true }),
+    );
   });
 
   it("deletes a persisted node", async () => {
@@ -1545,6 +1818,7 @@ describe("App", () => {
     loadSessionStatusMock.mockResolvedValue(SELECTED);
     loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
     selectNodeMock.mockResolvedValue({ ...SELECTED, node: osaka });
+    switchNodeMock.mockResolvedValue({ ...SELECTED, node: osaka });
     await render();
     const rows = container.querySelectorAll("[aria-label='节点列表'] tbody tr");
 
@@ -1552,7 +1826,7 @@ describe("App", () => {
       rows[1].dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     });
 
-    expect(selectNodeMock).toHaveBeenCalledWith(osaka.id);
+    expect(switchNodeMock).toHaveBeenCalledWith(osaka.id);
   });
 
   it("copies an exported share link without rendering it", async () => {
@@ -1858,14 +2132,12 @@ describe("App", () => {
     await render();
     checkNode("Tokyo Edge");
     checkNode("Osaka");
-    const filter = container.querySelector<HTMLSelectElement>(
-      "[aria-label='节点分组筛选']",
-    );
+    const filter = container.querySelector("[aria-label='节点分组筛选']");
     if (!filter) {
       throw new Error("no group filter");
     }
 
-    await act(async () => selectValue(group.id, filter));
+    await act(async () => button(group.name).click());
     await nodeMenuAction("Osaka", "移除所选");
 
     // Tokyo Edge is checked but filtered out of view; acting on it would remove
@@ -2069,7 +2341,8 @@ describe("App", () => {
     const managed = {
       ...SELECTED.node,
       deletable: false,
-      name: "Managed Tokyo",
+      enabled: true,
+    name: "Managed Tokyo",
     };
     loadNodesMock.mockResolvedValue([managed]);
     await render();
@@ -2114,9 +2387,12 @@ describe("App", () => {
 
     expect(createSubscriptionMock).toHaveBeenCalledWith({
       autoUpdate: true,
+      excludeKeywords: "",
+      includeKeywords: "",
       name: "Airport",
       updateIntervalMinutes: 60,
       url: "https://example.com/secret",
+      userAgent: null,
     });
     expect(
       container.querySelector("[aria-label='订阅列表']")?.textContent,
@@ -2152,10 +2428,13 @@ describe("App", () => {
     expect(updateSubscriptionMock).toHaveBeenCalledWith({
       autoUpdate: true,
       enabled: true,
+    excludeKeywords: "",
       id: SUBSCRIPTION.id,
+      includeKeywords: "",
       name: "Airport 2",
       updateIntervalMinutes: 60,
       url: null,
+      userAgent: null,
     });
     expect(container.textContent).toContain("Airport 2");
   });
@@ -2164,7 +2443,8 @@ describe("App", () => {
     const managedNode = {
       ...SELECTED.node,
       deletable: false,
-      name: "Subscription Tokyo",
+      enabled: true,
+    name: "Subscription Tokyo",
     };
     loadSubscriptionsMock.mockResolvedValue([SUBSCRIPTION]);
     loadNodesMock.mockResolvedValueOnce([]).mockResolvedValue([managedNode]);
@@ -2245,7 +2525,6 @@ describe("App", () => {
     await act(async () => button("连接").click());
 
     expect(container.textContent).toContain("已连接");
-    expect(container.textContent).toContain("已接管系统代理");
 
     await act(async () => button("断开").click());
 
@@ -2258,7 +2537,7 @@ describe("App", () => {
     setRoutingModeMock.mockResolvedValue(ruleStatus);
     await render();
     const field = container.querySelector<HTMLSelectElement>(
-      "select[aria-label='路由模式']",
+      "select[aria-label='状态栏路由模式']",
     );
     expect(field).not.toBeNull();
 
@@ -2274,7 +2553,7 @@ describe("App", () => {
 
     expect(
       container.querySelector<HTMLSelectElement>(
-        "select[aria-label='路由模式']",
+        "select[aria-label='状态栏路由模式']",
       )?.disabled,
     ).toBe(true);
   });
@@ -2336,14 +2615,14 @@ describe("App", () => {
   it("shows runtime order and saves compact route settings", async () => {
     const rules = [
       {
-        enabled: true,
-        kind: "domainSuffix" as const,
+      enabled: true,
+    kind: "domainSuffix" as const,
         outbound: "direct" as const,
         value: "cn",
       },
       {
-        enabled: true,
-        kind: "geoIp" as const,
+      enabled: true,
+    kind: "geoIp" as const,
         outbound: "direct" as const,
         value: "cn",
       },
@@ -2489,6 +2768,68 @@ describe("App", () => {
     );
   });
 
+  it("exports preferences to a JSON file path", async () => {
+    exportPreferencesMock.mockResolvedValue("/data/mgclash-preferences-1.json");
+    await render();
+
+    await act(async () => button("导出设置").click());
+
+    expect(exportPreferencesMock).toHaveBeenCalledOnce();
+    expect(container.querySelector("[role='status']")?.textContent).toContain(
+      "/data/mgclash-preferences-1.json",
+    );
+  });
+
+  it("exports every node share link from the menu", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const osaka = {
+      ...SELECTED.node!,
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Osaka",
+    };
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
+    exportNodeLinkMock.mockReset();
+    exportNodeLinkMock.mockImplementation(async (id: string) => {
+      if (id === SELECTED.node!.id) {
+        return "vless://one";
+      }
+      if (id === osaka.id) {
+        return "vless://two";
+      }
+      throw new Error(`unexpected node ${id}`);
+    });
+    await render();
+    exportNodeLinkMock.mockClear();
+    writeText.mockClear();
+
+    await act(async () => button("导出全部分享链接").click());
+
+    expect(exportNodeLinkMock).toHaveBeenCalledWith(SELECTED.node!.id);
+    expect(exportNodeLinkMock).toHaveBeenCalledWith(osaka.id);
+    expect(writeText).toHaveBeenCalledWith("vless://one\nvless://two");
+  });
+
+  it("steps to the next enabled node", async () => {
+    const osaka = {
+      ...SELECTED.node!,
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Osaka",
+    };
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
+    switchNodeMock.mockResolvedValue({ ...SELECTED, node: osaka });
+    await render();
+
+    await act(async () => button("下一节点").click());
+
+    expect(switchNodeMock).toHaveBeenCalledWith(osaka.id);
+  });
+
   it("shows a failed export as an error", async () => {
     exportDiagnosticsMock.mockRejectedValue({
       code: "diagnostics_write_failed",
@@ -2536,5 +2877,246 @@ describe("App", () => {
     await render();
 
     expect(container.textContent).toContain("platform failed");
+  });
+
+  it("lays the window out with a menu bar and node workspace", async () => {
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    await render();
+
+    const nav = container.querySelector("[aria-label='主菜单']");
+    expect(nav).not.toBeNull();
+    expect(nav?.textContent).toContain("服务器");
+    expect(nav?.textContent).toContain("订阅");
+    expect(nav?.textContent).toContain("设置");
+    expect(nav?.textContent).toContain("帮助");
+    expect(container.querySelector(".menubar-brand")?.textContent).toContain(
+      "MgClash",
+    );
+    expect(container.querySelector("[aria-label='节点列表']")).not.toBeNull();
+    expect(container.querySelector("[aria-label='节点详情']")).not.toBeNull();
+  });
+
+  it("filters the node table by name, server, or protocol", async () => {
+    loadNodesMock.mockResolvedValue([
+      SELECTED.node,
+      {
+        ...SELECTED.node!,
+        id: "00000000-0000-0000-0000-000000000002",
+        name: "Osaka",
+        protocol: "trojan",
+        server: "osaka.example.com",
+      },
+    ]);
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    await render();
+
+    const search = container.querySelector<HTMLInputElement>(
+      "[aria-label='搜索节点名称 / 服务器 / 协议']",
+    );
+    if (!search) {
+      throw new Error("node search field is missing");
+    }
+    await act(async () => typeInput("trojan", search));
+
+    const rows = [...container.querySelectorAll("[aria-label='节点列表'] tbody tr")];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.textContent).toContain("Osaka");
+    expect(rows[0]?.textContent).not.toContain("Tokyo Edge");
+  });
+
+  it("marks latency quality on a tested node", async () => {
+    loadNodesMock.mockResolvedValue([
+      { ...SELECTED.node!, latencyMs: 42, lastTestedAt: 1 },
+    ]);
+    loadSessionStatusMock.mockResolvedValue({
+      ...SELECTED,
+      node: { ...SELECTED.node!, latencyMs: 42, lastTestedAt: 1 },
+    });
+    await render();
+
+    const row = container.querySelector("[aria-label='节点列表'] tbody tr");
+    expect(row?.textContent).toContain("42 ms");
+    expect(row?.textContent).toContain("优秀");
+  });
+
+  it("opens dialogs from the menu bar without losing hidden forms", async () => {
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    await render();
+
+    // The status bar and node table are part of the workspace, always present.
+    expect(container.querySelector("[aria-label='下载速率']")).not.toBeNull();
+    expect(container.querySelector("[aria-label='节点列表']")).not.toBeNull();
+
+    await act(async () => button("订阅设置").click());
+    expect(container.querySelector("[aria-label='订阅名称']")).not.toBeNull();
+
+    expect(container.querySelector("[aria-label='分享链接']")).not.toBeNull();
+    expect(container.querySelector("[aria-label='节点列表']")).not.toBeNull();
+  });
+
+  it("opens the settings, routing, and DNS dialogs from the menu", async () => {
+    await render();
+
+    for (const [label, dialogLabel] of [
+      ["参数设置", "设置"],
+      ["路由设置", "路由规则"],
+    ] as const) {
+      const dialog = container.querySelector(`[aria-label='${dialogLabel}']`);
+      expect(dialog?.hasAttribute("hidden")).toBe(true);
+      await act(async () => button(label).click());
+      expect(dialog?.hasAttribute("hidden")).toBe(false);
+    }
+
+    const dns = container.querySelector("[aria-label='DNS']");
+    expect(dns?.hasAttribute("hidden")).toBe(true);
+    await act(async () => button("DNS").click());
+    expect(dns?.hasAttribute("hidden")).toBe(false);
+  });
+
+  it("presets the protocol when adding a server from the menu", async () => {
+    await render();
+
+    await act(async () => button("添加 Trojan 服务器").click());
+
+    const dialog = container.querySelector("[aria-label='手动创建节点']");
+    expect(dialog?.hasAttribute("hidden")).toBe(false);
+    expect(
+      container.querySelector<HTMLSelectElement>("[aria-label='节点协议']")
+        ?.value,
+    ).toBe("trojan");
+  });
+
+  it("reloads nodes, subscriptions, and status from the menu", async () => {
+    await render();
+
+    expect(loadNodesMock).toHaveBeenCalledTimes(1);
+    expect(loadSubscriptionsMock).toHaveBeenCalledTimes(1);
+    expect(loadSessionStatusMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => button("重新加载").click());
+
+    expect(loadNodesMock).toHaveBeenCalledTimes(2);
+    expect(loadSubscriptionsMock).toHaveBeenCalledTimes(2);
+    expect(loadSessionStatusMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows the about dialog with the close-to-tray state", async () => {
+    await render();
+
+    await act(async () => button("关于").click());
+
+    const dialog = container.querySelector("[aria-label='关于']");
+    expect(dialog?.hasAttribute("hidden")).toBe(false);
+    expect(dialog?.textContent).toContain("MgClash");
+    expect(dialog?.textContent).toContain("已启用");
+  });
+
+  it("switches between light and dark theme from the menu", async () => {
+    await render();
+
+    expect(document.documentElement.dataset.theme).toBe("light");
+
+    await act(async () => button("深色主题").click());
+
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(localStorage.getItem("mgclash.theme")).toBe("dark");
+
+    await act(async () => button("浅色主题").click());
+
+    expect(document.documentElement.dataset.theme).toBe("light");
+  });
+
+  it("changes the main window layout from the menu", async () => {
+    await render();
+
+    expect(container.querySelector(".app-shell")?.getAttribute("data-layout")).toBe(
+      "horizontal",
+    );
+
+    await act(async () => button("标签页").click());
+
+    expect(container.querySelector(".app-shell")?.getAttribute("data-layout")).toBe(
+      "tab",
+    );
+    expect(localStorage.getItem("mgclash.mainLayout")).toBe("tab");
+    expect(button("消息")).not.toBeNull();
+
+    await act(async () => button("左右分栏").click());
+
+    expect(container.querySelector(".app-shell")?.getAttribute("data-layout")).toBe(
+      "horizontal",
+    );
+  });
+
+  it("hides and shows the message window from the menu", async () => {
+    await render();
+
+    expect(container.querySelector("[aria-label='消息窗口']")).not.toBeNull();
+
+    await act(async () => button("隐藏消息窗口").click());
+
+    expect(container.querySelector("[aria-label='消息窗口']")).toBeNull();
+
+    await act(async () => button("显示消息窗口").click());
+
+    expect(container.querySelector("[aria-label='消息窗口']")).not.toBeNull();
+  });
+
+  it("opens create forms for each protocol and the vertical layout", async () => {
+    await render();
+
+    for (const label of [
+      "添加 VLESS 服务器",
+      "添加 VMess 服务器",
+      "添加 Shadowsocks 服务器",
+      "添加 Hysteria2 服务器",
+      "添加 TUIC 服务器",
+      "手动创建",
+    ]) {
+      await act(async () => button(label).click());
+      expect(
+        container.querySelector("[aria-label='手动创建节点']")?.hasAttribute("hidden"),
+      ).toBe(false);
+      await act(async () => {
+        container
+          .querySelector<HTMLButtonElement>("[aria-label='手动创建节点'] .dialog-head button")
+          ?.click();
+      });
+    }
+
+    await act(async () => button("上下分栏").click());
+    expect(container.querySelector(".app-shell")?.getAttribute("data-layout")).toBe(
+      "vertical",
+    );
+  });
+
+  it("saves editable SOCKS, HTTP, and Clash API ports from settings", async () => {
+    saveAppSettingsMock.mockImplementation(async (next: unknown) => next);
+    await render();
+
+    await act(async () => button("参数设置").click());
+    const socks = container.querySelector<HTMLInputElement>("[aria-label='SOCKS 端口']");
+    const http = container.querySelector<HTMLInputElement>("[aria-label='HTTP 端口']");
+    const clash = container.querySelector<HTMLInputElement>(
+      "[aria-label='Clash API 端口']",
+    );
+    if (!socks || !http || !clash) {
+      throw new Error("inbound port fields missing");
+    }
+    await act(async () => {
+      typeInput("20808", socks);
+      typeInput("20809", http);
+      typeInput("29090", clash);
+    });
+
+    expect(saveAppSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        socksPort: 20808,
+        httpPort: 20809,
+        clashApiPort: 29090,
+      }),
+    );
   });
 });

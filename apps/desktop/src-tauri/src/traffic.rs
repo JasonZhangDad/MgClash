@@ -202,6 +202,23 @@ impl SqliteTrafficCounter {
         self.node_totals.clone()
     }
 
+    /// Zeros aggregate and per-node counters and persists immediately.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed database error when the wipe cannot be written.
+    pub fn clear(&mut self, today: NaiveDate, now: Instant) -> Result<(), TrafficCounterError> {
+        self.totals = TrafficTotals::empty(today);
+        self.rate = TrafficRate::default();
+        self.node_totals.clear();
+        self.node_days.clear();
+        self.dirty = true;
+        self.connection.execute("DELETE FROM node_traffic", [])?;
+        self.flush()?;
+        self.last_persisted_at = now;
+        Ok(())
+    }
+
     #[must_use]
     pub const fn snapshot(&self) -> TrafficSnapshot {
         TrafficSnapshot {

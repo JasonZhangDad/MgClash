@@ -29,12 +29,19 @@ impl<'a, S: SecretStore + ?Sized> SubscriptionManagementService<'a, S> {
     ///
     /// Returns a typed validation, credential-store, or database error. A
     /// database failure rolls back the newly written URL secret.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "create mirrors the editable subscription fields one-for-one"
+    )]
     pub fn create(
         &mut self,
         name: &str,
         url: &str,
         update_interval_minutes: u32,
         auto_update: bool,
+        user_agent: Option<&str>,
+        include_keywords: &str,
+        exclude_keywords: &str,
     ) -> Result<Subscription, SubscriptionManagementError> {
         let url_secret = validated_url_secret(url)?;
         let id = Uuid::new_v4();
@@ -43,6 +50,13 @@ impl<'a, S: SecretStore + ?Sized> SubscriptionManagementService<'a, S> {
         let mut subscription =
             Subscription::new(id, name, url_secret_ref.clone(), update_interval_minutes)?;
         subscription.auto_update = auto_update;
+        subscription.user_agent = normalize_optional_text(user_agent);
+        include_keywords
+            .trim()
+            .clone_into(&mut subscription.include_keywords);
+        exclude_keywords
+            .trim()
+            .clone_into(&mut subscription.exclude_keywords);
 
         self.secret_store
             .put(&url_secret_ref, &url_secret)
@@ -77,6 +91,10 @@ impl<'a, S: SecretStore + ?Sized> SubscriptionManagementService<'a, S> {
     ///
     /// Returns a typed validation, credential-store, or database error. When a
     /// settings write fails, the previous URL secret is restored.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "update mirrors the editable subscription fields one-for-one"
+    )]
     pub fn update(
         &mut self,
         id: Uuid,
@@ -85,6 +103,9 @@ impl<'a, S: SecretStore + ?Sized> SubscriptionManagementService<'a, S> {
         auto_update: bool,
         enabled: bool,
         new_url: Option<&str>,
+        user_agent: Option<&str>,
+        include_keywords: &str,
+        exclude_keywords: &str,
     ) -> Result<Subscription, SubscriptionManagementError> {
         let existing = self
             .store
@@ -101,6 +122,13 @@ impl<'a, S: SecretStore + ?Sized> SubscriptionManagementService<'a, S> {
         edited.etag = existing.etag;
         edited.last_modified = existing.last_modified;
         edited.last_updated_at = existing.last_updated_at;
+        edited.user_agent = normalize_optional_text(user_agent);
+        include_keywords
+            .trim()
+            .clone_into(&mut edited.include_keywords);
+        exclude_keywords
+            .trim()
+            .clone_into(&mut edited.exclude_keywords);
 
         let previous_url = if let Some(new_url) = new_url {
             let new_url = validated_url_secret(new_url)?;
@@ -184,6 +212,13 @@ fn validated_url_secret(url: &str) -> Result<SecretValue, SubscriptionManagement
             source,
         }
     })
+}
+
+fn normalize_optional_text(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

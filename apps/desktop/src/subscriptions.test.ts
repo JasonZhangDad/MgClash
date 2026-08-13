@@ -20,17 +20,23 @@ describe("subscription commands", () => {
     await loadSubscriptions();
     await createSubscription({
       autoUpdate: true,
+      excludeKeywords: "",
+      includeKeywords: "",
       name: "Primary",
       updateIntervalMinutes: 60,
       url: "https://example.com/list?token=secret",
+      userAgent: null,
     });
 
     expect(invokeMock).toHaveBeenNthCalledWith(1, "subscription_list");
     expect(invokeMock).toHaveBeenNthCalledWith(2, "subscription_create", {
       autoUpdate: true,
+      excludeKeywords: "",
+      includeKeywords: "",
       name: "Primary",
       updateIntervalMinutes: 60,
       url: "https://example.com/list?token=secret",
+      userAgent: null,
     });
   });
 
@@ -39,10 +45,13 @@ describe("subscription commands", () => {
     await updateSubscription({
       autoUpdate: false,
       enabled: true,
+      excludeKeywords: "game",
       id,
+      includeKeywords: "HK|TW",
       name: "Edited",
       updateIntervalMinutes: 120,
       url: null,
+      userAgent: "MgClash-Test",
     });
     await refreshSubscription(id);
     await refreshAllSubscriptions();
@@ -51,10 +60,13 @@ describe("subscription commands", () => {
     expect(invokeMock).toHaveBeenNthCalledWith(1, "subscription_update", {
       autoUpdate: false,
       enabled: true,
+      excludeKeywords: "game",
       id,
+      includeKeywords: "HK|TW",
       name: "Edited",
       updateIntervalMinutes: 120,
       url: null,
+      userAgent: "MgClash-Test",
     });
     expect(invokeMock).toHaveBeenNthCalledWith(2, "subscription_refresh", {
       id,

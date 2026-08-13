@@ -25,6 +25,7 @@ mod subscription_management;
 mod subscription_service;
 mod subscription_transaction;
 mod trojan;
+mod tuic;
 mod tun_config;
 mod vmess;
 mod xray_dns_config;
@@ -73,6 +74,7 @@ pub use share_link_qr::{
 pub use share_link_serializer::{ShareLinkSerializer, ShareLinkSerializerError};
 pub use sing_box_outbound::{
     GeneratedSingBoxOutbound, NodeCredential, OutboundConfigError, SingBoxOutboundConfigGenerator,
+    apply_sing_box_multiplex,
 };
 pub use sing_box_runtime_config::{
     RuntimeConfigError, SingBoxRuntimeConfigGenerator, SingBoxRuntimeProfile,
@@ -97,10 +99,16 @@ pub use subscription_transaction::{
     SubscriptionTransactionError, SubscriptionUpdate,
 };
 pub use trojan::{ParsedTrojanNode, TrojanCredential, TrojanParseError, TrojanParser};
+pub use tuic::{
+    ParsedTuicNode, TuicCongestionControl, TuicCredential, TuicParseError, TuicParser,
+    TuicUdpRelayMode,
+};
 pub use tun_config::{SingBoxTunConfigGenerator, TunProfile, TunProfileError, TunRouteSettings};
 pub use vmess::{ParsedVmessNode, VmessCredential, VmessParseError, VmessParser, VmessSecurity};
 pub use xray_dns_config::{FAKE_DNS_SERVER, XrayDnsConfigGenerator};
-pub use xray_outbound::{GeneratedXrayOutbound, XrayOutboundConfigGenerator, XrayOutboundError};
+pub use xray_outbound::{
+    GeneratedXrayOutbound, XrayOutboundConfigGenerator, XrayOutboundError, apply_xray_mux,
+};
 pub use xray_runtime_config::{
     XrayRuntimeConfigError, XrayRuntimeConfigGenerator, XrayRuntimeProfile,
 };
@@ -110,8 +118,8 @@ use std::fmt::{Debug, Formatter};
 use std::num::NonZeroU16;
 
 use magies_domain::{
-    CredentialRef, GrpcMode, NodeModelError, NodeName, ProxyNode, ProxyProtocol, ServerAddress,
-    TlsConfig, TransportConfig,
+    CertificatePin, CredentialRef, GrpcMode, NodeModelError, NodeName, ProxyNode, ProxyProtocol,
+    ServerAddress, TlsConfig, TransportConfig, XhttpMode,
 };
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
@@ -334,8 +342,14 @@ pub enum VlessParseError {
     UnsupportedSecurity { value: String },
     #[error("unsupported VLESS gRPC mode: {value}")]
     UnsupportedGrpcMode { value: String },
+    #[error("unsupported VLESS XHTTP mode: {value}")]
+    UnsupportedXhttpMode { value: String },
     #[error("invalid VLESS ALPN list")]
     InvalidAlpn,
+    #[error("invalid VLESS certificate pin: {value}")]
+    InvalidCertificatePin { value: String },
+    #[error("VLESS URI carries disagreeing certificate pins")]
+    ConflictingCertificatePins,
     #[error("unsupported VLESS parameter: {name}")]
     UnsupportedParameter { name: String },
     #[error("invalid parsed VLESS node")]
@@ -420,6 +434,22 @@ fn parse_transport(parameters: &mut QueryParameters) -> Result<TransportConfig, 
                 .unwrap_or_else(|| "/".to_owned()),
             host: parameters.take("host"),
         }),
+        "httpupgrade" => Ok(TransportConfig::HttpUpgrade {
+            path: parameters
+                .take_non_empty("path")?
+                .unwrap_or_else(|| "/".to_owned()),
+            host: parameters.take("host"),
+        }),
+        // `splithttp` is Xray's earlier name for the same transport; XHTTP
+        // superseded it but share links from both eras must still parse.
+        "xhttp" | "splithttp" => Ok(TransportConfig::XHttp {
+            path: parameters
+                .take_non_empty("path")?
+                .unwrap_or_else(|| "/".to_owned()),
+            host: parameters.take("host"),
+            mode: parse_xhttp_mode(parameters.take_non_empty("mode")?.as_deref())
+                .map_err(|value| VlessParseError::UnsupportedXhttpMode { value })?,
+        }),
         "grpc" => {
             let service_name = parameters.take_required_non_empty("serviceName")?;
             let mode = match parameters
@@ -448,6 +478,32 @@ fn parse_transport(parameters: &mut QueryParameters) -> Result<TransportConfig, 
     }
 }
 
+/// Parses the XHTTP `mode` query parameter, shared by every sharing-URI
+/// parser that offers the transport.
+///
+/// Returns the raw value as the error payload so each caller can wrap it in
+/// its own typed error variant.
+pub(crate) fn parse_xhttp_mode(value: Option<&str>) -> Result<XhttpMode, String> {
+    match value.unwrap_or("auto") {
+        "auto" => Ok(XhttpMode::Auto),
+        "packet-up" => Ok(XhttpMode::PacketUp),
+        "stream-up" => Ok(XhttpMode::StreamUp),
+        "stream-one" => Ok(XhttpMode::StreamOne),
+        value => Err(value.to_owned()),
+    }
+}
+
+/// The stable spelling Xray and share links use for [`XhttpMode`].
+#[must_use]
+pub(crate) const fn xhttp_mode_name(mode: XhttpMode) -> &'static str {
+    match mode {
+        XhttpMode::Auto => "auto",
+        XhttpMode::PacketUp => "packet-up",
+        XhttpMode::StreamUp => "stream-up",
+        XhttpMode::StreamOne => "stream-one",
+    }
+}
+
 fn parse_tls(
     parameters: &mut QueryParameters,
     server: &ServerAddress,
@@ -470,7 +526,7 @@ fn parse_tls_with_default(
             allow_insecure: false,
             alpn: parse_alpn(parameters)?,
             fingerprint: parameters.take_non_empty("fp")?,
-            pinned_sha256: None,
+            pinned_sha256: parse_tls_certificate_pin(parameters)?,
         })),
         "reality" => {
             let public_key = parameters.take_required_non_empty("pbk")?;
@@ -490,6 +546,28 @@ fn parse_tls_with_default(
             value: value.to_owned(),
         }),
     }
+}
+
+/// Reads the digest from either spelling of the pin parameter.
+///
+/// `pinSHA256` is the Hysteria2/Xray spelling; `pcs` is the abbreviation v2rayN
+/// writes. A link carrying both must agree, because keeping one and discarding
+/// the other would pin against a digest the user did not choose.
+fn parse_tls_certificate_pin(
+    parameters: &mut QueryParameters,
+) -> Result<Option<CertificatePin>, VlessParseError> {
+    let mut pin = None;
+    for name in ["pinSHA256", "pcs"] {
+        let Some(value) = parameters.take(name) else {
+            continue;
+        };
+        let parsed = CertificatePin::new(&value)
+            .map_err(|_| VlessParseError::InvalidCertificatePin { value })?;
+        if pin.get_or_insert(parsed.clone()) != &parsed {
+            return Err(VlessParseError::ConflictingCertificatePins);
+        }
+    }
+    Ok(pin)
 }
 
 fn parse_alpn(parameters: &mut QueryParameters) -> Result<Vec<String>, VlessParseError> {

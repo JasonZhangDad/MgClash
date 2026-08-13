@@ -155,6 +155,28 @@ fn both_local_listeners_appear_with_sniffing() {
 }
 
 #[test]
+fn enables_outbound_mux_when_requested() {
+    let (node, credential) = node();
+    let dns = dns(false);
+    let route = global_route();
+
+    let config = generate(
+        &XrayRuntimeProfile::new(&node, credential.as_node_credential(), &dns, &route)
+            .with_mux(true),
+    );
+    let proxy = config["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert_eq!(
+        proxy["mux"],
+        serde_json::json!({ "enabled": true, "concurrency": 8 })
+    );
+}
+
+#[test]
 fn duplicate_local_ports_are_refused() {
     let dns = dns(false);
     let route = direct_route();

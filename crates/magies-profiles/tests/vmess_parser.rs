@@ -334,8 +334,8 @@ fn rejects_legacy_values_that_cannot_be_represented_losslessly() {
         VmessParseError::UnsupportedTcpHeader { value } if value == "http"
     ));
     assert!(matches!(
-        errors[3],
-        VmessParseError::UnsupportedField { name: "pcs" }
+        &errors[3],
+        VmessParseError::InvalidCertificatePin { value } if value == "sha256"
     ));
     assert!(matches!(errors[4], VmessParseError::InvalidAlpn));
 }

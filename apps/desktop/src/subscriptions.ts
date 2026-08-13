@@ -3,28 +3,37 @@ import { invoke } from "@tauri-apps/api/core";
 export interface SubscriptionSummary {
   autoUpdate: boolean;
   enabled: boolean;
+  excludeKeywords: string;
   id: string;
+  includeKeywords: string;
   lastError: string | null;
   lastUpdatedAt: number | null;
   name: string;
   nodeCount: number;
   updateIntervalMinutes: number;
+  userAgent: string | null;
 }
 
 export interface CreateSubscriptionInput {
   autoUpdate: boolean;
+  excludeKeywords: string;
+  includeKeywords: string;
   name: string;
   updateIntervalMinutes: number;
   url: string;
+  userAgent: string | null;
 }
 
 export interface UpdateSubscriptionInput {
   autoUpdate: boolean;
   enabled: boolean;
+  excludeKeywords: string;
   id: string;
+  includeKeywords: string;
   name: string;
   updateIntervalMinutes: number;
   url: string | null;
+  userAgent: string | null;
 }
 
 export function loadSubscriptions(): Promise<SubscriptionSummary[]> {

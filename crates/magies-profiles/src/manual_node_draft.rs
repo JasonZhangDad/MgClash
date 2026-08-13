@@ -14,13 +14,14 @@
 use std::fmt::{Debug, Formatter};
 
 use magies_domain::{CredentialRef, NodeModelError, ProxyNode, TlsConfig, TransportConfig};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::hysteria2::{Hysteria2Credential, Hysteria2Obfuscation, Hysteria2ObfuscationMethod};
 use crate::shadowsocks::{SUPPORTED_METHODS, ShadowsocksCredential};
 use crate::trojan::TrojanCredential;
+use crate::tuic::{TuicCongestionControl, TuicCredential, TuicUdpRelayMode};
 use crate::vmess::{VmessCredential, VmessSecurity};
 use crate::{StoredNodeCredential, VlessCredential};
 
@@ -29,7 +30,7 @@ use crate::{StoredNodeCredential, VlessCredential};
 const VLESS_ENCRYPTION: &str = "none";
 
 /// One node as entered in the manual creation form.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManualNodeDraft {
     pub name: String,
@@ -47,6 +48,23 @@ pub struct ManualNodeDraft {
 }
 
 impl ManualNodeDraft {
+    /// Rebuilds the form draft from a persisted node and its decoded secret.
+    ///
+    /// Used by the edit dialog so the user sees the same fields that were saved,
+    /// including credentials that already live in the OS store.
+    #[must_use]
+    pub fn from_stored(node: &ProxyNode, credential: &StoredNodeCredential) -> Self {
+        Self {
+            name: node.name.as_str().to_owned(),
+            server: node.server.as_str().to_owned(),
+            port: u32::from(node.port.get()),
+            udp_enabled: node.udp_enabled,
+            transport: node.transport.clone(),
+            tls: node.tls.clone(),
+            credential: ManualCredentialDraft::from_stored(credential),
+        }
+    }
+
     /// Validates the draft and splits it into a node and its credential.
     ///
     /// The protocol is taken from the credential variant rather than a separate
@@ -99,6 +117,12 @@ fn resolve_transport(
             }
             Ok(None)
         }
+        StoredNodeCredential::Tuic(_) => {
+            if transport.is_some() {
+                return Err(ManualNodeDraftError::TuicRejectsTransport);
+            }
+            Ok(None)
+        }
         StoredNodeCredential::Shadowsocks(_) => match transport {
             None | Some(TransportConfig::Tcp) => Ok(Some(TransportConfig::Tcp)),
             Some(_) => Err(ManualNodeDraftError::ShadowsocksRequiresTcpTransport),
@@ -107,22 +131,25 @@ fn resolve_transport(
     }
 }
 
-/// Hysteria2 always runs over TLS, and only standard TLS — Reality is a
+/// Hysteria2 / TUIC always run over TLS, and only standard TLS — Reality is a
 /// stream-protocol feature.
 fn resolve_tls(
     credential: &StoredNodeCredential,
     tls: Option<TlsConfig>,
 ) -> Result<Option<TlsConfig>, ManualNodeDraftError> {
-    if matches!(credential, StoredNodeCredential::Hysteria2(_))
-        && !matches!(tls, Some(TlsConfig::Tls { .. }))
-    {
-        return Err(ManualNodeDraftError::Hysteria2RequiresTls);
+    match credential {
+        StoredNodeCredential::Hysteria2(_) if !matches!(tls, Some(TlsConfig::Tls { .. })) => {
+            Err(ManualNodeDraftError::Hysteria2RequiresTls)
+        }
+        StoredNodeCredential::Tuic(_) if !matches!(tls, Some(TlsConfig::Tls { .. })) => {
+            Err(ManualNodeDraftError::TuicRequiresTls)
+        }
+        _ => Ok(tls),
     }
-    Ok(tls)
 }
 
 /// Protocol-specific secret fields entered in the manual creation form.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "protocol", rename_all = "lowercase")]
 pub enum ManualCredentialDraft {
     #[serde(rename_all = "camelCase")]
@@ -149,9 +176,59 @@ pub enum ManualCredentialDraft {
         #[serde(default)]
         obfuscation: Option<ManualObfuscationDraft>,
     },
+    #[serde(rename_all = "camelCase")]
+    Tuic {
+        uuid: Uuid,
+        #[serde(default)]
+        password: Option<String>,
+        #[serde(default)]
+        congestion_control: Option<TuicCongestionControl>,
+        #[serde(default)]
+        udp_relay_mode: Option<TuicUdpRelayMode>,
+        #[serde(default)]
+        udp_over_stream: bool,
+        #[serde(default)]
+        zero_rtt_handshake: bool,
+    },
 }
 
 impl ManualCredentialDraft {
+    fn from_stored(credential: &StoredNodeCredential) -> Self {
+        match credential {
+            StoredNodeCredential::Vless(value) => Self::Vless {
+                user_id: value.user_id(),
+                flow: value.flow().map(str::to_owned),
+            },
+            StoredNodeCredential::Vmess(value) => Self::Vmess {
+                user_id: value.user_id(),
+                security: value.security(),
+                alter_id: value.alter_id(),
+            },
+            StoredNodeCredential::Trojan(value) => Self::Trojan {
+                password: value.password().to_owned(),
+            },
+            StoredNodeCredential::Shadowsocks(value) => Self::Shadowsocks {
+                method: value.method().to_owned(),
+                password: value.password().to_owned(),
+            },
+            StoredNodeCredential::Hysteria2(value) => Self::Hysteria2 {
+                authentication: value.authentication().map(str::to_owned),
+                obfuscation: value.obfuscation().map(|obfs| ManualObfuscationDraft {
+                    method: obfs.method(),
+                    password: obfs.password().to_owned(),
+                }),
+            },
+            StoredNodeCredential::Tuic(value) => Self::Tuic {
+                uuid: value.uuid(),
+                password: value.password().map(str::to_owned),
+                congestion_control: value.congestion_control(),
+                udp_relay_mode: value.udp_relay_mode(),
+                udp_over_stream: value.udp_over_stream(),
+                zero_rtt_handshake: value.zero_rtt_handshake(),
+            },
+        }
+    }
+
     fn build(self) -> Result<StoredNodeCredential, ManualNodeDraftError> {
         match self {
             Self::Vless { user_id, flow } => Ok(StoredNodeCredential::Vless(VlessCredential {
@@ -198,6 +275,26 @@ impl ManualCredentialDraft {
                 authentication: optional(authentication),
                 obfuscation: obfuscation.map(ManualObfuscationDraft::build).transpose()?,
             })),
+            Self::Tuic {
+                uuid,
+                password,
+                congestion_control,
+                udp_relay_mode,
+                udp_over_stream,
+                zero_rtt_handshake,
+            } => {
+                if udp_relay_mode.is_some() && udp_over_stream {
+                    return Err(ManualNodeDraftError::ConflictingTuicUdpRelay);
+                }
+                Ok(StoredNodeCredential::Tuic(TuicCredential {
+                    uuid,
+                    password: optional(password),
+                    congestion_control,
+                    udp_relay_mode,
+                    udp_over_stream,
+                    zero_rtt_handshake,
+                }))
+            }
         }
     }
 }
@@ -206,7 +303,7 @@ impl ManualCredentialDraft {
 ///
 /// Packet-size shaping is deliberately absent: the outbound generator refuses
 /// it, so a form that collected it could only produce unusable nodes.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManualObfuscationDraft {
     pub method: Hysteria2ObfuscationMethod,
@@ -254,6 +351,12 @@ pub enum ManualNodeDraftError {
     Hysteria2RejectsTransport,
     #[error("Hysteria2 requires standard TLS")]
     Hysteria2RequiresTls,
+    #[error("TUIC carries its own transport and accepts no transport setting")]
+    TuicRejectsTransport,
+    #[error("TUIC requires standard TLS")]
+    TuicRequiresTls,
+    #[error("TUIC cannot set both udp_relay_mode and udp_over_stream")]
+    ConflictingTuicUdpRelay,
 }
 
 const fn enabled_by_default() -> bool {

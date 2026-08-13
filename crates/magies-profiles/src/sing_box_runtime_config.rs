@@ -8,7 +8,7 @@ use crate::{
     DnsProfile, GeneratedCoreConfig, LocalHttpConfigGenerator, LocalHttpProfile,
     LocalSocksConfigGenerator, LocalSocksProfile, NodeCredential, OutboundConfigError,
     SingBoxDnsConfigGenerator, SingBoxOutboundConfigGenerator, SingBoxTunConfigGenerator,
-    TunProfile,
+    TunProfile, apply_sing_box_multiplex,
 };
 
 pub struct SingBoxRuntimeProfile<'a> {
@@ -20,6 +20,7 @@ pub struct SingBoxRuntimeProfile<'a> {
     clash_api_port: Option<NonZeroU16>,
     tun: Option<&'a TunProfile>,
     dns_hijack: bool,
+    mux_enabled: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -45,6 +46,7 @@ impl<'a> SingBoxRuntimeProfile<'a> {
             clash_api_port: None,
             tun: None,
             dns_hijack: false,
+            mux_enabled: false,
         }
     }
 
@@ -59,6 +61,7 @@ impl<'a> SingBoxRuntimeProfile<'a> {
             clash_api_port: None,
             tun: None,
             dns_hijack: false,
+            mux_enabled: false,
         }
     }
 
@@ -107,6 +110,13 @@ impl<'a> SingBoxRuntimeProfile<'a> {
         self.dns_hijack = dns_hijack;
         self
     }
+
+    /// Turns on outbound multiplex for the next generated config.
+    #[must_use]
+    pub const fn with_mux(mut self, enabled: bool) -> Self {
+        self.mux_enabled = enabled;
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -131,11 +141,16 @@ impl SingBoxRuntimeConfigGenerator {
             let selected = profile
                 .selected
                 .ok_or(RuntimeConfigError::MissingSelectedNode)?;
-            outbounds.push(
-                SingBoxOutboundConfigGenerator::generate(selected.node, selected.credential)?
-                    .json()
-                    .clone(),
-            );
+            outbounds.push({
+                let mut outbound =
+                    SingBoxOutboundConfigGenerator::generate(selected.node, selected.credential)?
+                        .json()
+                        .clone();
+                if profile.mux_enabled {
+                    apply_sing_box_multiplex(&mut outbound, selected.node.protocol_type);
+                }
+                outbound
+            });
         }
         outbounds.push(json!({ "type": "direct", "tag": "direct" }));
 

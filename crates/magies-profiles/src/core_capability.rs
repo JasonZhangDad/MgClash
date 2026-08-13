@@ -40,10 +40,11 @@ const SING_BOX_CAPABILITIES: &[CoreCapability] = &[
     capability(ProxyProtocol::Trojan, true, false),
     capability(ProxyProtocol::Shadowsocks, true, false),
     capability(ProxyProtocol::Hysteria2, true, false),
+    capability(ProxyProtocol::Tuic, true, false),
 ];
 
-/// Xray covers the stream protocols but has no Hysteria2 outbound and no TUN
-/// inbound of its own — TUN there needs an external tun2socks.
+/// Xray covers the stream protocols but has no Hysteria2 or TUIC outbound and
+/// no TUN inbound of its own — TUN there needs an external tun2socks.
 const XRAY_CAPABILITIES: &[CoreCapability] = &[
     capability(ProxyProtocol::Vless, false, true),
     capability(ProxyProtocol::Vmess, false, true),
@@ -74,6 +75,8 @@ pub struct CoreRequirements {
     pub tun: bool,
     /// Whether the node pins its server certificate by SHA-256.
     pub certificate_pin: bool,
+    /// Whether the node uses XHTTP (Xray-only on the pinned Core versions).
+    pub xhttp: bool,
     pub architecture: CpuArchitecture,
 }
 
@@ -84,6 +87,7 @@ impl CoreRequirements {
             protocol,
             tun,
             certificate_pin: false,
+            xhttp: false,
             architecture,
         }
     }
@@ -93,6 +97,15 @@ impl CoreRequirements {
     pub const fn with_certificate_pin(self) -> Self {
         Self {
             certificate_pin: true,
+            ..self
+        }
+    }
+
+    /// The same requirements for a node that speaks XHTTP.
+    #[must_use]
+    pub const fn with_xhttp(self) -> Self {
+        Self {
+            xhttp: true,
             ..self
         }
     }
@@ -154,6 +167,11 @@ impl CoreCapabilityMatrix {
         if requirements.certificate_pin && !capability.supports_certificate_pin {
             return Some(CoreRejection::CertificatePinUnsupported { core });
         }
+        // XHTTP lives outside the per-protocol capability table: every Xray
+        // stream protocol can carry it, and the pinned sing-box build cannot.
+        if requirements.xhttp && matches!(core, CoreType::SingBox) {
+            return Some(CoreRejection::XhttpUnsupported { core });
+        }
         if !capability
             .architectures
             .contains(&requirements.architecture)
@@ -193,6 +211,7 @@ impl CoreCapabilityMatrix {
                     protocol: requirements.protocol,
                     tun: requirements.tun,
                     certificate_pin: requirements.certificate_pin,
+                    xhttp: requirements.xhttp,
                 }),
         }
     }
@@ -209,6 +228,9 @@ pub enum CoreRejection {
         core: CoreType,
     },
     CertificatePinUnsupported {
+        core: CoreType,
+    },
+    XhttpUnsupported {
         core: CoreType,
     },
     ArchitectureUnsupported {
@@ -234,6 +256,11 @@ impl Display for CoreRejection {
                 "{} cannot verify a pinned certificate digest",
                 core_name(*core)
             ),
+            Self::XhttpUnsupported { core } => write!(
+                formatter,
+                "{} does not support XHTTP transport",
+                core_name(*core)
+            ),
             Self::ArchitectureUnsupported { core, architecture } => write!(
                 formatter,
                 "{} has no build for {}",
@@ -249,15 +276,17 @@ pub enum CoreSelectionError {
     #[error("the selected Core cannot run this node: {rejection}")]
     ChosenCoreUnusable { rejection: CoreRejection },
     #[error(
-        "no available Core supports {} with TUN {}{}",
+        "no available Core supports {} with TUN {}{}{}",
         protocol_name(*protocol),
         if *tun { "on" } else { "off" },
-        if *certificate_pin { " and a pinned certificate" } else { "" }
+        if *certificate_pin { " and a pinned certificate" } else { "" },
+        if *xhttp { " and XHTTP transport" } else { "" }
     )]
     NoUsableCore {
         protocol: ProxyProtocol,
         tun: bool,
         certificate_pin: bool,
+        xhttp: bool,
     },
 }
 
@@ -288,6 +317,7 @@ pub const fn protocol_name(protocol: ProxyProtocol) -> &'static str {
         ProxyProtocol::Trojan => "Trojan",
         ProxyProtocol::Shadowsocks => "Shadowsocks",
         ProxyProtocol::Hysteria2 => "Hysteria2",
+        ProxyProtocol::Tuic => "TUIC",
     }
 }
 

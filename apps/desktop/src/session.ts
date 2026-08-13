@@ -4,11 +4,13 @@ export type ProxyProtocol =
   | "hysteria2"
   | "shadowsocks"
   | "trojan"
+  | "tuic"
   | "vless"
   | "vmess";
 
 export interface NodeSummary {
   deletable: boolean;
+  enabled: boolean;
   groupId: string | null;
   /// The stream transport; Hysteria2 reports its own QUIC transport.
   transport: string;
@@ -42,7 +44,8 @@ export type LogSource = "app" | "core";
 
 export type CorePreference = "auto" | "sing-box" | "xray";
 
-/** Three of v2rayN's four System Proxy choices; PAC has no counterpart yet. */
+/** Four System Proxy choices aligned with v2rayN, including PAC. */
+
 /** The language the window renders in. */
 export type Locale =
   | "en"
@@ -67,6 +70,20 @@ export interface AppSettings {
   logLevel: LogLevel;
   systemProxyMode: SystemProxyMode;
   locale: Locale;
+  socksPort: number;
+  httpPort: number;
+  clashApiPort: number;
+  muxEnabled: boolean;
+  autoSelectLowestLatency: boolean;
+  urlTestAddress: string;
+  allowLan: boolean;
+  speedTestUrl: string;
+  inboundUdpEnabled: boolean;
+  defAllowInsecure: boolean;
+  defFingerprint: string;
+  hotkeyConnect: string;
+  hotkeyPrevious: string;
+  hotkeyNext: string;
 }
 
 export interface LogEntry {
@@ -98,6 +115,10 @@ export type VmessSecurity =
 
 export type ObfuscationMethod = "Salamander" | "Gecko";
 
+export type TuicCongestionControl = "cubic" | "new_reno" | "bbr";
+
+export type TuicUdpRelayMode = "native" | "quic";
+
 export type ManualCredentialDraft =
   | { flow: string | null; protocol: "vless"; userId: string }
   | {
@@ -112,11 +133,27 @@ export type ManualCredentialDraft =
       authentication: string | null;
       obfuscation: { method: ObfuscationMethod; password: string } | null;
       protocol: "hysteria2";
+    }
+  | {
+      congestionControl: TuicCongestionControl | null;
+      password: string | null;
+      protocol: "tuic";
+      udpOverStream: boolean;
+      udpRelayMode: TuicUdpRelayMode | null;
+      uuid: string;
+      zeroRttHandshake: boolean;
     };
 
 export type TransportDraft =
   | { type: "tcp" }
   | { host: string | null; path: string; type: "websocket" }
+  | { host: string | null; path: string; type: "httpupgrade" }
+  | {
+      host: string | null;
+      mode: "auto" | "packet-up" | "stream-up" | "stream-one";
+      path: string;
+      type: "xhttp";
+    }
   | {
       authority: string | null;
       mode: "gun" | "multi" | "guna";
@@ -124,13 +161,24 @@ export type TransportDraft =
       type: "grpc";
     };
 
-export type TlsDraft = {
-  allowInsecure: boolean;
-  alpn: string[];
-  fingerprint: string | null;
-  serverName: string | null;
-  type: "tls";
-};
+export type TlsDraft =
+  | {
+      allowInsecure: boolean;
+      alpn: string[];
+      fingerprint: string | null;
+      pinnedSha256: string | null;
+      serverName: string | null;
+      type: "tls";
+    }
+  | {
+      alpn: string[];
+      fingerprint: string | null;
+      publicKey: string;
+      serverName: string;
+      shortId: string | null;
+      spiderX: string | null;
+      type: "reality";
+    };
 
 export interface ManualNodeDraft {
   credential: ManualCredentialDraft;
@@ -162,6 +210,7 @@ export interface SessionStatus {
   connected: boolean;
   core: string;
   dns: DnsSettings;
+  clashApiPort: number;
   httpPort: number;
   mode: RoutingMode;
   node: NodeSummary | null;
@@ -281,6 +330,17 @@ export function createNode(draft: ManualNodeDraft): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_create_node", { draft });
 }
 
+export function loadNodeDraft(id: string): Promise<ManualNodeDraft> {
+  return invoke<ManualNodeDraft>("session_node_draft", { id });
+}
+
+export function updateNode(
+  id: string,
+  draft: ManualNodeDraft,
+): Promise<SessionStatus> {
+  return invoke<SessionStatus>("session_update_node", { id, draft });
+}
+
 export function loadNodes(): Promise<NodeSummary[]> {
   return invoke<NodeSummary[]>("session_nodes");
 }
@@ -297,8 +357,24 @@ export function testUrl(url: string): Promise<NodeTestResult> {
   return invoke<NodeTestResult>("session_url_test", { url });
 }
 
+export interface SpeedTestResult {
+  bytesPerSecond: number | null;
+  bytesRead: number | null;
+  elapsedMs: number | null;
+  id: string;
+  status: "failed" | "success" | "timeout";
+}
+
+export function testDownloadSpeed(url: string): Promise<SpeedTestResult> {
+  return invoke<SpeedTestResult>("session_speed_test", { url });
+}
+
 export function loadTraffic(): Promise<TrafficSnapshot> {
   return invoke<TrafficSnapshot>("session_traffic");
+}
+
+export function clearTraffic(): Promise<TrafficSnapshot> {
+  return invoke<TrafficSnapshot>("session_clear_traffic");
 }
 
 export async function testAllNodes(
@@ -339,6 +415,18 @@ export function selectNode(id: string): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_select_node", { id });
 }
 
+/** Selects a node and reconnects when a session is already running. */
+export function switchNode(id: string): Promise<SessionStatus> {
+  return invoke<SessionStatus>("session_switch_node", { id });
+}
+
+export function setNodeEnabled(
+  id: string,
+  enabled: boolean,
+): Promise<NodeSummary[]> {
+  return invoke<NodeSummary[]>("session_set_node_enabled", { enabled, id });
+}
+
 export function editNode(id: string, edit: NodeEdit): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_edit_node", { id, ...edit });
 }
@@ -348,6 +436,10 @@ export function moveNode(
   direction: NodeMoveDirection,
 ): Promise<NodeSummary[]> {
   return invoke<NodeSummary[]>("session_move_node", { direction, id });
+}
+
+export function reorderNodes(ids: string[]): Promise<NodeSummary[]> {
+  return invoke<NodeSummary[]>("session_reorder_nodes", { ids });
 }
 
 export function setNodeGroup(
@@ -438,4 +530,12 @@ export function dismissSystemProxyRecovery(): Promise<SystemProxyStartupStatus> 
 /** Writes a redacted diagnostic bundle and resolves with its path. */
 export function exportDiagnostics(): Promise<string> {
   return invoke<string>("export_diagnostics");
+}
+
+export function exportPreferences(): Promise<string> {
+  return invoke<string>("export_preferences");
+}
+
+export function importPreferences(path: string): Promise<AppSettings> {
+  return invoke<AppSettings>("import_preferences", { path });
 }

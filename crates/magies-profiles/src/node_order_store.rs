@@ -100,4 +100,6 @@ pub enum NodeOrderStoreError {
     Database(#[from] rusqlite::Error),
     #[error("node {id} appears more than once in the saved order")]
     DuplicateNode { id: Uuid },
+    #[error("node reorder expected {expected} ids but received {actual}")]
+    IncompleteReorder { expected: usize, actual: usize },
 }

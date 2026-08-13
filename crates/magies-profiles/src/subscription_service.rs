@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::str;
 
-use magies_domain::{CredentialRef, ProxyNode, TimestampMillis};
+use magies_domain::{CredentialRef, ProxyNode, Subscription, TimestampMillis};
 use magies_storage::{SecretStore, SecretStoreError, SecretValue};
 use thiserror::Error;
 use uuid::Uuid;
@@ -79,7 +79,15 @@ impl<'a, S: SecretStore + ?Sized> SubscriptionRefreshService<'a, S> {
             subscription.last_modified.clone(),
         );
 
-        match self.fetcher.fetch(url, Some(&validators)).await? {
+        match self
+            .fetcher
+            .fetch(
+                url,
+                Some(&validators),
+                subscription.user_agent.as_deref(),
+            )
+            .await?
+        {
             SubscriptionFetchResult::NotModified { validators } => {
                 self.store
                     .touch_subscription(subscription_id, &validators, updated_at)?;
@@ -88,18 +96,28 @@ impl<'a, S: SecretStore + ?Sized> SubscriptionRefreshService<'a, S> {
             SubscriptionFetchResult::Updated {
                 content,
                 validators,
-            } => self.commit_updated(subscription_id, &content, validators, updated_at),
+            } => self.commit_updated(
+                &subscription,
+                &content,
+                validators,
+                updated_at,
+            ),
         }
     }
 
     fn commit_updated(
         &mut self,
-        subscription_id: Uuid,
+        subscription: &Subscription,
         content: &[u8],
         validators: SubscriptionValidators,
         updated_at: TimestampMillis,
     ) -> Result<SubscriptionRefreshOutcome, SubscriptionRefreshError> {
-        let parsed = SubscriptionContentParser.parse(content, subscription_id)?;
+        let subscription_id = subscription.id;
+        let parsed = SubscriptionContentParser
+            .parse(content, subscription_id)?
+            .into_iter()
+            .filter(|parsed| subscription.accepts_node_name(parsed.node().name.as_str()))
+            .collect::<Vec<_>>();
         let existing_nodes = self.store.subscription_nodes(subscription_id)?;
         let existing = self.existing_candidates(&existing_nodes)?;
         let (incoming, mut pending_credentials) = incoming_candidates(parsed)?;

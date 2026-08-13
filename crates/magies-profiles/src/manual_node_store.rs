@@ -198,6 +198,17 @@ impl SqliteManualNodeStore {
         Ok(node.clone())
     }
 
+    /// Clears the persisted manual-node selection without deleting any node.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when the selection cannot be cleared.
+    pub fn clear_selected(&self) -> Result<(), ManualNodeStoreError> {
+        self.connection
+            .execute("UPDATE manual_nodes SET selected = 0 WHERE selected = 1", [])?;
+        Ok(())
+    }
+
     /// Deletes and returns an existing node.
     ///
     /// # Errors

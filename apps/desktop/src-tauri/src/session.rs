@@ -19,7 +19,7 @@ use magies_platform::{CpuArchitecture, OperatingSystem};
 use magies_profiles::{
     BulkImportError, BulkNodeImportParser, CoreCapabilityMatrix, CorePreference, CoreRequirements,
     CoreSelectionError, CredentialCodec, CredentialCodecError, DnsConfigError, DnsProfile,
-    LocalHttpProfile, LocalSocksProfile, ManualNodeDraft, ManualNodeDraftError,
+    LocalHttpProfile, LocalSocksProfile, LocalProxyConfigError, ManualNodeDraft, ManualNodeDraftError,
     ManualNodeStoreError, NodeFingerprint, NodeGroup, NodeGroupStoreError, NodeOrderStoreError,
     ShareLinkParseError, ShareLinkParser, ShareLinkQrCode, ShareLinkQrError, ShareLinkSerializer,
     ShareLinkSerializerError, SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore,
@@ -78,6 +78,8 @@ pub struct SessionDefaults {
     pub dns: DnsProfile,
     pub route: RouteProfile,
     pub system_proxy: SystemProxyMode,
+    /// When true the next connect asks the Core for multiplex / mux.
+    pub mux_enabled: bool,
 }
 
 impl SessionDefaults {
@@ -99,6 +101,7 @@ impl SessionDefaults {
                 .expect("the default DNS settings are valid"),
             route: route_profile_for(RoutingMode::Global),
             system_proxy: SystemProxyMode::Managed,
+            mux_enabled: false,
         }
     }
 
@@ -143,6 +146,8 @@ pub struct NodeSummary {
     /// Which TLS layer the node uses, or `None` for plaintext.
     pub tls: Option<&'static str>,
     pub deletable: bool,
+    /// When false the node stays listed but cannot be selected or connected.
+    pub enabled: bool,
     pub latency_ms: Option<u32>,
     pub last_tested_at: Option<i64>,
 }
@@ -159,6 +164,7 @@ impl From<&ProxyNode> for NodeSummary {
             transport: transport_name(node.transport.as_ref()),
             tls: node.tls.as_ref().map(tls_name),
             deletable: node.subscription_id.is_none(),
+            enabled: node.enabled,
             latency_ms: node.latency_ms,
             last_tested_at: node.last_tested_at.map(TimestampMillis::get),
         }
@@ -180,7 +186,9 @@ const fn transport_name(transport: Option<&TransportConfig>) -> &'static str {
     match transport {
         Some(TransportConfig::Tcp) => "tcp",
         Some(TransportConfig::WebSocket { .. }) => "ws",
+        Some(TransportConfig::HttpUpgrade { .. }) => "httpupgrade",
         Some(TransportConfig::Grpc { .. }) => "grpc",
+        Some(TransportConfig::XHttp { .. }) => "xhttp",
         None => "quic",
     }
 }
@@ -245,6 +253,7 @@ pub struct SessionStatus {
     pub system_proxy_mode: &'static str,
     pub socks_port: u16,
     pub http_port: u16,
+    pub clash_api_port: u16,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -449,6 +458,108 @@ where
         self.store_new_node(node, &credential)
     }
 
+    /// Returns the full form draft for a manual node, including its credential.
+    ///
+    /// Subscription nodes stay read-only: their next refresh owns those fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed read-only, not-found, secret, or credential error.
+    pub fn node_draft(
+        &self,
+        id: Uuid,
+    ) -> Result<ManualNodeDraft, SessionCommandError<C::Error, P::Error>> {
+        let node = self
+            .manual_nodes
+            .nodes()
+            .map_err(SessionCommandError::NodeStore)?
+            .into_iter()
+            .find(|node| node.id == id);
+        if node.is_none()
+            && self
+                .subscription_nodes
+                .active_nodes()
+                .map_err(SessionCommandError::SubscriptionNodeStore)?
+                .iter()
+                .any(|node| node.id == id)
+        {
+            return Err(SessionCommandError::SubscriptionNodeReadOnly { id });
+        }
+        let node = node.ok_or(SessionCommandError::NodeStore(
+            ManualNodeStoreError::NodeNotFound { id },
+        ))?;
+        let secret = self
+            .session
+            .secret_store()
+            .get(&node.credential_ref)
+            .map_err(SessionCommandError::Secret)?;
+        let credential =
+            CredentialCodec::decode(&secret).map_err(SessionCommandError::Credential)?;
+        Ok(ManualNodeDraft::from_stored(&node, &credential))
+    }
+
+    /// Replaces a manual node's endpoint, transport, TLS, and credential in place.
+    ///
+    /// Preserves id, group, latency history, and enabled flag. The secret is
+    /// overwritten under the same credential reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed active-session, validation, read-only, not-found, or
+    /// persistence error.
+    pub fn update_node(
+        &mut self,
+        id: Uuid,
+        draft: ManualNodeDraft,
+    ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
+        if self.session.is_running() {
+            return Err(SessionCommandError::SessionActive);
+        }
+        let existing = self
+            .manual_nodes
+            .nodes()
+            .map_err(SessionCommandError::NodeStore)?
+            .into_iter()
+            .find(|node| node.id == id);
+        if existing.is_none()
+            && self
+                .subscription_nodes
+                .active_nodes()
+                .map_err(SessionCommandError::SubscriptionNodeStore)?
+                .iter()
+                .any(|node| node.id == id)
+        {
+            return Err(SessionCommandError::SubscriptionNodeReadOnly { id });
+        }
+        let existing = existing.ok_or(SessionCommandError::NodeStore(
+            ManualNodeStoreError::NodeNotFound { id },
+        ))?;
+        let (mut node, credential) = draft
+            .build(id, existing.credential_ref.clone())
+            .map_err(SessionCommandError::ManualNodeDraft)?;
+        node.group_id = existing.group_id;
+        node.latency_ms = existing.latency_ms;
+        node.last_tested_at = existing.last_tested_at;
+        node.enabled = existing.enabled;
+        let secret =
+            CredentialCodec::encode(&credential).map_err(SessionCommandError::Credential)?;
+        self.session
+            .secret_store()
+            .put(&node.credential_ref, &secret)
+            .map_err(SessionCommandError::Secret)?;
+        let mut node = self
+            .manual_nodes
+            .update(&node)
+            .map_err(SessionCommandError::NodeStore)?;
+        self.node_groups
+            .apply(std::slice::from_mut(&mut node))
+            .map_err(SessionCommandError::NodeGroupStore)?;
+        if self.node.as_ref().is_some_and(|selected| selected.id == id) {
+            self.node = Some(node);
+        }
+        Ok(self.status())
+    }
+
     /// Imports every sharing link in a pasted or opened body.
     ///
     /// Unlike [`Self::import_node`], a line that fails to parse or persist is
@@ -611,7 +722,7 @@ where
             .map_err(SessionCommandError::NodeStore)?;
         nodes.extend(
             self.subscription_nodes
-                .active_nodes()
+                .listed_nodes()
                 .map_err(SessionCommandError::SubscriptionNodeStore)?,
         );
         let mut nodes = self
@@ -868,6 +979,47 @@ where
         Ok(nodes)
     }
 
+    /// Replaces the unified node order with an explicit id list.
+    ///
+    /// `ids` must be a permutation of the current list: every persisted node
+    /// exactly once. Used by "sort by latency" and any future drag-reorder.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed not-found or order-store error when the list is incomplete,
+    /// contains unknowns, or cannot be persisted.
+    pub fn reorder_nodes(
+        &mut self,
+        ids: Vec<Uuid>,
+    ) -> Result<Vec<NodeSummary>, SessionCommandError<C::Error, P::Error>> {
+        let current = self.nodes()?;
+        if ids.len() != current.len() {
+            return Err(SessionCommandError::NodeOrderStore(
+                NodeOrderStoreError::IncompleteReorder {
+                    expected: current.len(),
+                    actual: ids.len(),
+                },
+            ));
+        }
+        let mut seen = HashSet::with_capacity(ids.len());
+        for id in &ids {
+            if !seen.insert(*id) {
+                return Err(SessionCommandError::NodeOrderStore(
+                    NodeOrderStoreError::DuplicateNode { id: *id },
+                ));
+            }
+            if !current.iter().any(|node| node.id == *id) {
+                return Err(SessionCommandError::NodeStore(
+                    ManualNodeStoreError::NodeNotFound { id: *id },
+                ));
+            }
+        }
+        self.node_order
+            .save(&ids)
+            .map_err(SessionCommandError::NodeOrderStore)?;
+        self.nodes()
+    }
+
     /// Returns one active persisted node without exposing its credential.
     ///
     /// # Errors
@@ -924,6 +1076,37 @@ where
         if self.session.is_running() {
             return Err(SessionCommandError::SessionActive);
         }
+        self.select_node_while_stopped(id)
+    }
+
+    /// Selects a node and, when a session was running, reconnects through it.
+    ///
+    /// Used by previous/next navigation so an active connection is not a hard
+    /// block on changing servers.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when selection fails, or when disconnect/reconnect
+    /// fails. A failed reconnect leaves the new node selected but idle.
+    pub fn switch_node(
+        &mut self,
+        id: Uuid,
+    ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
+        let was_running = self.session.is_running();
+        if was_running {
+            self.session.stop().map_err(SessionCommandError::Session)?;
+        }
+        self.select_node_while_stopped(id)?;
+        if was_running {
+            self.connect()?;
+        }
+        Ok(self.status())
+    }
+
+    fn select_node_while_stopped(
+        &mut self,
+        id: Uuid,
+    ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
         let mut node = match self.manual_nodes.select(id) {
             Ok(node) => {
                 self.subscription_nodes
@@ -937,11 +1120,65 @@ where
                 .map_err(SessionCommandError::SubscriptionNodeStore)?,
             Err(error) => return Err(SessionCommandError::NodeStore(error)),
         };
+        if !node.enabled {
+            return Err(SessionCommandError::NodeDisabled { id });
+        }
         self.node_groups
             .apply(std::slice::from_mut(&mut node))
             .map_err(SessionCommandError::NodeGroupStore)?;
         self.node = Some(node);
         Ok(self.status())
+    }
+
+    /// Enables or disables a persisted node without deleting it.
+    ///
+    /// Disabled nodes stay in the list (and keep their credentials) but cannot
+    /// be selected or connected. Disabling the current selection clears it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed active-session, not-found, or persistence error.
+    pub fn set_node_enabled(
+        &mut self,
+        id: Uuid,
+        enabled: bool,
+    ) -> Result<Vec<NodeSummary>, SessionCommandError<C::Error, P::Error>> {
+        if self.session.is_running() {
+            return Err(SessionCommandError::SessionActive);
+        }
+
+        let manual = self
+            .manual_nodes
+            .nodes()
+            .map_err(SessionCommandError::NodeStore)?
+            .into_iter()
+            .find(|node| node.id == id);
+        if let Some(mut node) = manual {
+            node.enabled = enabled;
+            self.manual_nodes
+                .update(&node)
+                .map_err(SessionCommandError::NodeStore)?;
+        } else {
+            self.subscription_nodes
+                .set_node_enabled(id, enabled)
+                .map_err(SessionCommandError::SubscriptionNodeStore)?;
+        }
+
+        if !enabled && self.node.as_ref().is_some_and(|node| node.id == id) {
+            self.node = None;
+            self.manual_nodes
+                .clear_selected()
+                .map_err(SessionCommandError::NodeStore)?;
+            self.subscription_nodes
+                .clear_selected_node()
+                .map_err(SessionCommandError::SubscriptionNodeStore)?;
+        } else if let Some(selected) = self.node.as_mut()
+            && selected.id == id
+        {
+            selected.enabled = enabled;
+        }
+
+        self.nodes()
     }
 
     /// Changes the editable endpoint fields of a persisted manual node.
@@ -1150,9 +1387,10 @@ where
         // Checked before anything is generated or spawned: another proxy client
         // holding a loopback port makes the Core exit on its own, and its exit
         // code names nothing the user can act on.
-        LocalProxyPortChecker::check(
+        LocalProxyPortChecker::check_with_allow_lan(
             self.defaults.socks.port().get(),
             self.defaults.http.port().get(),
+            self.defaults.socks.allow_lan(),
         )
         .map_err(SessionCommandError::LocalProxyPort)?;
         let node = self
@@ -1171,7 +1409,8 @@ where
         )
         .with_core(core)
         .with_local_proxies(self.defaults.socks, self.defaults.http)
-        .with_clash_api_port(self.defaults.clash_api_port);
+        .with_clash_api_port(self.defaults.clash_api_port)
+        .with_mux(self.defaults.mux_enabled);
         // The two are mutually exclusive in DesktopSession, so TUN replaces
         // System Proxy rather than being layered on top of it.
         let profile = match self.tun_profile()? {
@@ -1238,6 +1477,11 @@ where
         } else {
             requirements
         };
+        let requirements = if matches!(node.transport, Some(TransportConfig::XHttp { .. })) {
+            requirements.with_xhttp()
+        } else {
+            requirements
+        };
         CoreCapabilityMatrix::select(self.core_preference, requirements)
     }
 
@@ -1249,6 +1493,64 @@ where
     /// Replaces what the next session does to the host's System Proxy.
     pub fn set_system_proxy_mode(&mut self, mode: SystemProxyMode) {
         self.defaults.system_proxy = mode;
+    }
+
+    /// Updates the local SOCKS/HTTP inbound ports and Clash API port.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed active-session or invalid-port error. All three ports
+    /// must differ so the Core can bind each one.
+    pub fn set_local_proxies(
+        &mut self,
+        socks_port: u16,
+        http_port: u16,
+        clash_api_port: u16,
+    ) -> Result<(), SessionCommandError<C::Error, P::Error>> {
+        if self.session.is_running() {
+            return Err(SessionCommandError::SessionActive);
+        }
+        if socks_port == http_port
+            || socks_port == clash_api_port
+            || http_port == clash_api_port
+        {
+            return Err(SessionCommandError::DuplicateLocalProxyPort {
+                port: if socks_port == http_port || socks_port == clash_api_port {
+                    socks_port
+                } else {
+                    http_port
+                },
+            });
+        }
+        self.defaults.socks = LocalSocksProfile::new(u32::from(socks_port))
+            .map_err(SessionCommandError::LocalProxyConfig)?
+            .with_allow_lan(self.defaults.socks.allow_lan())
+            .with_udp_enabled(self.defaults.socks.udp_enabled());
+        self.defaults.http = LocalHttpProfile::new(u32::from(http_port))
+            .map_err(SessionCommandError::LocalProxyConfig)?
+            .with_allow_lan(self.defaults.http.allow_lan());
+        // Reuse the SOCKS constructor so a zero Clash API port fails the same
+        // way as a zero inbound port, instead of inventing a third error path.
+        self.defaults.clash_api_port = LocalSocksProfile::new(u32::from(clash_api_port))
+            .map_err(SessionCommandError::LocalProxyConfig)?
+            .port();
+        Ok(())
+    }
+
+    /// Lets LAN peers reach the local SOCKS/HTTP inbounds on the next connect.
+    pub fn set_allow_lan(&mut self, enabled: bool) {
+        self.defaults.socks = self.defaults.socks.with_allow_lan(enabled);
+        self.defaults.http = self.defaults.http.with_allow_lan(enabled);
+    }
+
+    /// Enables SOCKS UDP associate for the next Xray session.
+    pub fn set_inbound_udp_enabled(&mut self, enabled: bool) {
+        self.defaults.socks = self.defaults.socks.with_udp_enabled(enabled);
+    }
+
+    /// Turns Core multiplex / mux on or off for the next session.
+    pub fn set_mux_enabled(&mut self, enabled: bool) {
+        self.defaults.mux_enabled = enabled;
     }
 
     /// Turns TUN routing on or off for the next session.
@@ -1293,6 +1595,7 @@ where
             system_proxy_mode: system_proxy_mode_name(&self.defaults.system_proxy),
             socks_port: self.defaults.socks.port().get(),
             http_port: self.defaults.http.port().get(),
+            clash_api_port: self.defaults.clash_api_port.get(),
         }
     }
 
@@ -1378,6 +1681,10 @@ where
     CoreSelection(#[source] CoreSelectionError),
     #[error("a local proxy port is unavailable")]
     LocalProxyPort(#[source] LocalProxyPortError),
+    #[error("invalid local proxy port")]
+    LocalProxyConfig(#[source] LocalProxyConfigError),
+    #[error("local proxy ports cannot share port {port}")]
+    DuplicateLocalProxyPort { port: u16 },
     #[error("this node has no sharing link")]
     ShareLinkExport(#[source] ShareLinkSerializerError),
     #[error("the sharing link could not be drawn as a QR code")]
@@ -1410,6 +1717,8 @@ where
     DnsSettingsStore(#[source] DnsSettingsStoreError),
     #[error("subscription node {id} is managed by its subscription")]
     SubscriptionNodeReadOnly { id: Uuid },
+    #[error("node {id} is disabled")]
+    NodeDisabled { id: Uuid },
     #[error("failed to save the node and roll back its credential")]
     NodeStoreAndSecretRollback {
         store: ManualNodeStoreError,
@@ -1441,6 +1750,9 @@ where
             Self::ManualNodeDraft(_) => "invalid_manual_node",
             Self::CoreSelection(_) => "core_unavailable",
             Self::LocalProxyPort(_) => "local_proxy_port_unavailable",
+            Self::LocalProxyConfig(_) | Self::DuplicateLocalProxyPort { .. } => {
+                "invalid_local_proxy_port"
+            }
             Self::ShareLinkExport(_) => "share_link_unavailable",
             Self::ShareLinkQr(_) => "qr_code_unavailable",
             Self::TunUnavailable | Self::TunProfile(_) => "tun_unavailable",
@@ -1458,6 +1770,7 @@ where
             Self::NodeGroupStore(NodeGroupStoreError::EmptyName) => "invalid_node_group",
             Self::NodeGroupStore(_) => "node_group_store_failed",
             Self::SubscriptionNodeReadOnly { .. } => "subscription_node_read_only",
+            Self::NodeDisabled { .. } => "node_disabled",
             Self::RoutingModeStore(_) => "routing_mode_store_failed",
             Self::InvalidRouteSettings(_) => "invalid_route_settings",
             Self::RouteSettingsStore(_) => "route_settings_store_failed",

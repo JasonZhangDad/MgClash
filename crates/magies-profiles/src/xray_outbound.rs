@@ -10,7 +10,7 @@ use magies_domain::{GrpcMode, ProxyNode, ProxyProtocol, TlsConfig, TransportConf
 use serde_json::{Value, json};
 
 use crate::sing_box_outbound::NodeCredential;
-use crate::{VlessCredential, VmessCredential, VmessSecurity};
+use crate::{VlessCredential, VmessCredential, VmessSecurity, xhttp_mode_name};
 
 /// The tag every generator gives the proxy outbound, matching the route rules.
 const PROXY_TAG: &str = "proxy";
@@ -85,11 +85,38 @@ impl XrayOutboundConfigGenerator {
                     protocol: ProxyProtocol::Hysteria2,
                 });
             }
+            NodeCredential::Tuic(_) => {
+                // Unreachable through the matrix, but the generator is public.
+                return Err(XrayOutboundError::ProtocolUnsupported {
+                    protocol: ProxyProtocol::Tuic,
+                });
+            }
         };
         outbound["streamSettings"] = stream_settings(node)?;
 
         Ok(GeneratedXrayOutbound { json: outbound })
     }
+}
+
+/// Enables Xray mux on a generated outbound when the user asked for it.
+///
+/// VLESS with a flow (e.g. `xtls-rprx-vision`) cannot share a mux connection.
+pub fn apply_xray_mux(outbound: &mut Value, credential: NodeCredential<'_>) {
+    if let NodeCredential::Vless(credential) = credential
+        && credential.flow().is_some()
+    {
+        return;
+    }
+    if matches!(
+        credential.protocol(),
+        ProxyProtocol::Hysteria2 | ProxyProtocol::Tuic
+    ) {
+        return;
+    }
+    outbound["mux"] = json!({
+        "enabled": true,
+        "concurrency": 8,
+    });
 }
 
 fn vless_settings(node: &ProxyNode, credential: &VlessCredential) -> Value {
@@ -142,6 +169,13 @@ fn stream_settings(node: &ProxyNode) -> Result<Value, XrayOutboundError> {
             }
             stream["wsSettings"] = settings;
         }
+        TransportConfig::HttpUpgrade { path, host } => {
+            let mut settings = json!({ "path": path });
+            if let Some(host) = host {
+                settings["host"] = Value::String(host.clone());
+            }
+            stream["httpupgradeSettings"] = settings;
+        }
         TransportConfig::Grpc {
             service_name,
             mode,
@@ -155,6 +189,14 @@ fn stream_settings(node: &ProxyNode) -> Result<Value, XrayOutboundError> {
                 settings["authority"] = Value::String(authority.clone());
             }
             stream["grpcSettings"] = settings;
+        }
+        TransportConfig::XHttp { path, host, mode } => {
+            let mut settings = json!({ "path": path });
+            if let Some(host) = host {
+                settings["host"] = Value::String(host.clone());
+            }
+            settings["mode"] = Value::String(xhttp_mode_name(*mode).to_owned());
+            stream["xhttpSettings"] = settings;
         }
     }
 
@@ -236,7 +278,9 @@ fn protocol_name(protocol: ProxyProtocol) -> Result<&'static str, XrayOutboundEr
         ProxyProtocol::Vmess => Ok("vmess"),
         ProxyProtocol::Trojan => Ok("trojan"),
         ProxyProtocol::Shadowsocks => Ok("shadowsocks"),
-        ProxyProtocol::Hysteria2 => Err(XrayOutboundError::ProtocolUnsupported { protocol }),
+        ProxyProtocol::Hysteria2 | ProxyProtocol::Tuic => {
+            Err(XrayOutboundError::ProtocolUnsupported { protocol })
+        }
     }
 }
 
@@ -244,7 +288,9 @@ const fn network_name(transport: &TransportConfig) -> &'static str {
     match transport {
         TransportConfig::Tcp => "tcp",
         TransportConfig::WebSocket { .. } => "ws",
+        TransportConfig::HttpUpgrade { .. } => "httpupgrade",
         TransportConfig::Grpc { .. } => "grpc",
+        TransportConfig::XHttp { .. } => "xhttp",
     }
 }
 

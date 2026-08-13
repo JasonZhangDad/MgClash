@@ -8,9 +8,16 @@ import type {
   VmessSecurity,
 } from "./session";
 
-export type TransportKind = "tcp" | "websocket" | "grpc";
+export type TransportKind =
+  | "tcp"
+  | "websocket"
+  | "httpupgrade"
+  | "xhttp"
+  | "grpc";
 
 export type GrpcMode = "gun" | "multi" | "guna";
+
+export type XhttpMode = "auto" | "packet-up" | "stream-up" | "stream-one";
 
 /** Every field the manual creation form can collect, as raw strings. */
 export interface ManualNodeForm {
@@ -18,6 +25,7 @@ export interface ManualNodeForm {
   allowInsecure: boolean;
   alpn: string;
   authentication: string;
+  congestionControl: "" | "cubic" | "new_reno" | "bbr";
   fingerprint: string;
   flow: string;
   grpcAuthority: string;
@@ -29,17 +37,26 @@ export interface ManualNodeForm {
   obfsMethod: ObfuscationMethod;
   obfsPassword: string;
   password: string;
+  pinnedSha256: string;
   port: string;
   protocol: ProxyProtocol;
+  publicKey: string;
+  realityEnabled: boolean;
   security: VmessSecurity;
   server: string;
   serverName: string;
+  shortId: string;
+  spiderX: string;
   tlsEnabled: boolean;
   transport: TransportKind;
   udpEnabled: boolean;
+  udpOverStream: boolean;
+  udpRelayMode: "" | "native" | "quic";
   userId: string;
   wsHost: string;
   wsPath: string;
+  xhttpMode: XhttpMode;
+  zeroRttHandshake: boolean;
 }
 
 export const emptyManualNodeForm: ManualNodeForm = {
@@ -47,6 +64,7 @@ export const emptyManualNodeForm: ManualNodeForm = {
   allowInsecure: false,
   alpn: "",
   authentication: "",
+  congestionControl: "",
   fingerprint: "",
   flow: "",
   grpcAuthority: "",
@@ -58,18 +76,39 @@ export const emptyManualNodeForm: ManualNodeForm = {
   obfsMethod: "Salamander",
   obfsPassword: "",
   password: "",
+  pinnedSha256: "",
   port: "",
   protocol: "vless",
+  publicKey: "",
+  realityEnabled: false,
   security: "Auto",
   server: "",
   serverName: "",
+  shortId: "",
+  spiderX: "",
   tlsEnabled: false,
   transport: "tcp",
   udpEnabled: true,
+  udpOverStream: false,
+  udpRelayMode: "",
   userId: "",
   wsHost: "",
   wsPath: "",
+  xhttpMode: "auto",
+  zeroRttHandshake: false,
 };
+
+/** Seeds a blank form, optionally applying saved create-node TLS defaults. */
+export function blankManualNodeForm(defaults?: {
+  allowInsecure?: boolean;
+  fingerprint?: string;
+}): ManualNodeForm {
+  return {
+    ...emptyManualNodeForm,
+    allowInsecure: defaults?.allowInsecure ?? false,
+    fingerprint: defaults?.fingerprint ?? "",
+  };
+}
 
 export type ManualNodeDraftResult =
   | { draft: ManualNodeDraft }
@@ -103,9 +142,9 @@ export const SHADOWSOCKS_METHODS = [
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
-/** Hysteria2 carries its own QUIC transport and always runs over TLS. */
+/** Hysteria2 / TUIC carry their own QUIC transport and always run over TLS. */
 export function usesStreamTransport(protocol: ProxyProtocol): boolean {
-  return protocol !== "hysteria2";
+  return protocol !== "hysteria2" && protocol !== "tuic";
 }
 
 function optional(value: string): string | null {
@@ -176,6 +215,24 @@ function buildCredential(
         protocol: "hysteria2",
       };
     }
+    case "tuic": {
+      if (!UUID_PATTERN.test(form.userId.trim())) {
+        return { error: "请填写合法的 UUID" };
+      }
+      if (form.udpRelayMode !== "" && form.udpOverStream) {
+        return { error: "不能同时设置 udp_relay_mode 与 udp_over_stream" };
+      }
+      return {
+        congestionControl:
+          form.congestionControl === "" ? null : form.congestionControl,
+        password: optional(form.password),
+        protocol: "tuic",
+        udpOverStream: form.udpOverStream,
+        udpRelayMode: form.udpRelayMode === "" ? null : form.udpRelayMode,
+        uuid: form.userId.trim(),
+        zeroRttHandshake: form.zeroRttHandshake,
+      };
+    }
   }
 }
 
@@ -203,6 +260,27 @@ function buildTransport(
         type: "websocket",
       };
     }
+    case "httpupgrade": {
+      if (form.wsPath.trim() === "") {
+        return { error: "请填写 HTTPUpgrade 路径" };
+      }
+      return {
+        host: optional(form.wsHost),
+        path: form.wsPath.trim(),
+        type: "httpupgrade",
+      };
+    }
+    case "xhttp": {
+      if (form.wsPath.trim() === "") {
+        return { error: "请填写 XHTTP 路径" };
+      }
+      return {
+        host: optional(form.wsHost),
+        mode: form.xhttpMode,
+        path: form.wsPath.trim(),
+        type: "xhttp",
+      };
+    }
     case "grpc": {
       if (form.grpcServiceName.trim() === "") {
         return { error: "请填写 gRPC serviceName" };
@@ -217,10 +295,30 @@ function buildTransport(
   }
 }
 
-function buildTls(form: ManualNodeForm): TlsDraft | null {
+function buildTls(form: ManualNodeForm): TlsDraft | null | { error: string } {
   // The Shadowsocks outbound has no TLS layer at all.
   if (form.protocol === "shadowsocks") {
     return null;
+  }
+  if (form.realityEnabled) {
+    if (form.serverName.trim() === "") {
+      return { error: "Reality 需要填写 SNI / serverName" };
+    }
+    if (form.publicKey.trim() === "") {
+      return { error: "Reality 需要填写 publicKey" };
+    }
+    return {
+      alpn: form.alpn
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry !== ""),
+      fingerprint: optional(form.fingerprint),
+      publicKey: form.publicKey.trim(),
+      serverName: form.serverName.trim(),
+      shortId: optional(form.shortId),
+      spiderX: optional(form.spiderX),
+      type: "reality",
+    };
   }
   // Hysteria2 has no plaintext mode, so the toggle does not apply to it.
   if (!form.tlsEnabled && usesStreamTransport(form.protocol)) {
@@ -233,6 +331,7 @@ function buildTls(form: ManualNodeForm): TlsDraft | null {
       .map((entry) => entry.trim())
       .filter((entry) => entry !== ""),
     fingerprint: optional(form.fingerprint),
+    pinnedSha256: optional(form.pinnedSha256),
     serverName: optional(form.serverName),
     type: "tls",
   };
@@ -268,6 +367,10 @@ export function buildManualNodeDraft(
   if (hasError(transport)) {
     return transport;
   }
+  const tls = buildTls(form);
+  if (hasError(tls)) {
+    return tls;
+  }
 
   return {
     draft: {
@@ -275,9 +378,101 @@ export function buildManualNodeDraft(
       name,
       port,
       server,
-      tls: buildTls(form),
+      tls,
       transport,
       udpEnabled: form.udpEnabled,
     },
   };
+}
+
+/** Fills the editable form from a draft returned by `session_node_draft`. */
+export function formFromManualNodeDraft(draft: ManualNodeDraft): ManualNodeForm {
+  const form: ManualNodeForm = {
+    ...emptyManualNodeForm,
+    name: draft.name,
+    server: draft.server,
+    port: String(draft.port),
+    udpEnabled: draft.udpEnabled,
+  };
+
+  switch (draft.credential.protocol) {
+    case "vless":
+      form.protocol = "vless";
+      form.userId = draft.credential.userId;
+      form.flow = draft.credential.flow ?? "";
+      break;
+    case "vmess":
+      form.protocol = "vmess";
+      form.userId = draft.credential.userId;
+      form.security = draft.credential.security;
+      form.alterId = String(draft.credential.alterId);
+      break;
+    case "trojan":
+      form.protocol = "trojan";
+      form.password = draft.credential.password;
+      break;
+    case "shadowsocks":
+      form.protocol = "shadowsocks";
+      form.method = draft.credential.method;
+      form.password = draft.credential.password;
+      break;
+    case "hysteria2":
+      form.protocol = "hysteria2";
+      form.authentication = draft.credential.authentication ?? "";
+      form.obfsEnabled = draft.credential.obfuscation !== null;
+      form.obfsMethod = draft.credential.obfuscation?.method ?? "Salamander";
+      form.obfsPassword = draft.credential.obfuscation?.password ?? "";
+      break;
+    case "tuic":
+      form.protocol = "tuic";
+      form.userId = draft.credential.uuid;
+      form.password = draft.credential.password ?? "";
+      form.congestionControl = draft.credential.congestionControl ?? "";
+      form.udpRelayMode = draft.credential.udpRelayMode ?? "";
+      form.udpOverStream = draft.credential.udpOverStream;
+      form.zeroRttHandshake = draft.credential.zeroRttHandshake;
+      break;
+  }
+
+  if (draft.transport?.type === "websocket") {
+    form.transport = "websocket";
+    form.wsPath = draft.transport.path;
+    form.wsHost = draft.transport.host ?? "";
+  } else if (draft.transport?.type === "httpupgrade") {
+    form.transport = "httpupgrade";
+    form.wsPath = draft.transport.path;
+    form.wsHost = draft.transport.host ?? "";
+  } else if (draft.transport?.type === "xhttp") {
+    form.transport = "xhttp";
+    form.wsPath = draft.transport.path;
+    form.wsHost = draft.transport.host ?? "";
+    form.xhttpMode = draft.transport.mode;
+  } else if (draft.transport?.type === "grpc") {
+    form.transport = "grpc";
+    form.grpcServiceName = draft.transport.serviceName;
+    form.grpcMode = draft.transport.mode;
+    form.grpcAuthority = draft.transport.authority ?? "";
+  } else if (draft.transport?.type === "tcp") {
+    form.transport = "tcp";
+  }
+
+  if (draft.tls?.type === "reality") {
+    form.realityEnabled = true;
+    form.tlsEnabled = true;
+    form.serverName = draft.tls.serverName;
+    form.publicKey = draft.tls.publicKey;
+    form.shortId = draft.tls.shortId ?? "";
+    form.spiderX = draft.tls.spiderX ?? "";
+    form.fingerprint = draft.tls.fingerprint ?? "";
+    form.alpn = draft.tls.alpn.join(",");
+  } else if (draft.tls?.type === "tls") {
+    form.tlsEnabled = true;
+    form.allowInsecure = draft.tls.allowInsecure;
+    form.serverName = draft.tls.serverName ?? "";
+    form.fingerprint = draft.tls.fingerprint ?? "";
+    form.pinnedSha256 = draft.tls.pinnedSha256 ?? "";
+    form.alpn = draft.tls.alpn.join(",");
+  }
+
+  return form;
 }

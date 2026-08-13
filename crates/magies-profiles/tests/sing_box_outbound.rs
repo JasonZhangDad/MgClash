@@ -53,6 +53,58 @@ fn generates_vless_websocket_tls_and_tcp_only_network() {
 }
 
 #[test]
+fn generates_vless_httpupgrade() {
+    let parsed = VlessParser
+        .parse(&format!(
+            "vless://{USER_ID}@edge.example.com:443?type=httpupgrade\
+             &path=%2Fupgrade&host=cdn.example.com&security=tls&sni=www.example.com"
+        ))
+        .unwrap();
+    let mut node = node(ProxyProtocol::Vless);
+    node.transport = Some(parsed.transport().clone());
+    node.tls = parsed.tls().cloned();
+
+    let outbound =
+        SingBoxOutboundConfigGenerator::generate(&node, NodeCredential::from(parsed.credential()))
+            .unwrap();
+
+    assert_eq!(
+        outbound.json()["transport"],
+        json!({
+            "type": "httpupgrade",
+            "path": "/upgrade",
+            "host": "cdn.example.com"
+        })
+    );
+}
+
+#[test]
+fn refuses_xhttp_because_the_pinned_sing_box_has_none() {
+    use magies_domain::XhttpMode;
+
+    let parsed = VlessParser
+        .parse(&format!(
+            "vless://{USER_ID}@edge.example.com:443?type=tcp&security=tls&sni=www.example.com"
+        ))
+        .unwrap();
+    let mut node = node(ProxyProtocol::Vless);
+    node.transport = Some(TransportConfig::XHttp {
+        path: "/xh".to_owned(),
+        host: None,
+        mode: XhttpMode::Auto,
+    });
+    node.tls = parsed.tls().cloned();
+
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &node,
+            NodeCredential::from(parsed.credential())
+        ),
+        Err(OutboundConfigError::XhttpUnsupported)
+    );
+}
+
+#[test]
 fn generates_vmess_grpc_reality() {
     let parsed = VmessParser
         .parse(&format!(

@@ -132,6 +132,35 @@ fn enables_a_loopback_clash_api_without_sharing_listener_ports() {
 }
 
 #[test]
+fn enables_outbound_multiplex_when_requested() {
+    let parsed = ShadowsocksParser
+        .parse("ss://aes-256-gcm:proxy-secret@edge.example.com:8388")
+        .unwrap();
+    let node = shadowsocks_node(true);
+    let dns = system_dns();
+    let route = RouteProfile::new(RoutingMode::Global, Vec::new(), RouteOutbound::Proxy).unwrap();
+    let profile = SingBoxRuntimeProfile::new(
+        &node,
+        NodeCredential::from(parsed.credential()),
+        &dns,
+        &route,
+    )
+    .with_mux(true);
+
+    let generated = SingBoxRuntimeConfigGenerator::generate(&profile).unwrap();
+    let proxy = generated.json()["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert_eq!(
+        proxy["multiplex"],
+        json!({ "enabled": true, "protocol": "h2mux" })
+    );
+}
+
+#[test]
 fn adds_tun_and_prepends_sniff_and_dns_hijack_actions() {
     let parsed = ShadowsocksParser
         .parse("ss://aes-256-gcm:password@192.0.2.1:8388")

@@ -9,13 +9,18 @@ use std::fmt::Write as _;
 
 use base64::Engine as _;
 use base64::engine::general_purpose;
-use magies_domain::{GrpcMode, ProxyNode, ProxyProtocol, TlsConfig, TransportConfig};
+use magies_domain::{
+    GrpcMode, ProxyNode, ProxyProtocol, TlsConfig, TransportConfig, XhttpMode,
+};
+
+use crate::xhttp_mode_name;
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde_json::{Value, json};
 use thiserror::Error;
 
 use crate::credential_codec::StoredNodeCredential;
 use crate::hysteria2::{Hysteria2Credential, Hysteria2ObfuscationMethod};
+use crate::tuic::{TuicCongestionControl, TuicCredential, TuicUdpRelayMode};
 use crate::vmess::{VmessCredential, VmessSecurity};
 use crate::{TrojanCredential, VlessCredential};
 
@@ -81,10 +86,11 @@ impl ShareLinkSerializer {
                 format!("{}:{}", encode(value.method()), encode(value.password()))
             }
             StoredNodeCredential::Hysteria2(value) => hysteria2_authority(value, &mut query),
+            StoredNodeCredential::Tuic(value) => tuic_authority(value, &mut query),
         };
         // Only VLESS and Trojan read a `type` parameter. Shadowsocks rejects
-        // unknown parameters outright, and Hysteria2 carries its own QUIC
-        // transport, so a missing transport is expected for both.
+        // unknown parameters outright, and Hysteria2/TUIC carry their own QUIC
+        // transport, so a missing transport is expected for all three.
         let carries_transport = matches!(
             node.protocol_type,
             ProxyProtocol::Vless | ProxyProtocol::Trojan
@@ -157,6 +163,7 @@ const fn scheme(protocol: ProxyProtocol) -> &'static str {
         ProxyProtocol::Trojan => "trojan",
         ProxyProtocol::Shadowsocks => "ss",
         ProxyProtocol::Hysteria2 => "hysteria2",
+        ProxyProtocol::Tuic => "tuic",
     }
 }
 
@@ -202,6 +209,13 @@ fn serialize_vmess(
                 document["host"] = Value::String(host.clone());
             }
         }
+        TransportConfig::HttpUpgrade { path, host } => {
+            document["net"] = Value::String("httpupgrade".to_owned());
+            document["path"] = Value::String(path.clone());
+            if let Some(host) = host {
+                document["host"] = Value::String(host.clone());
+            }
+        }
         TransportConfig::Grpc {
             service_name,
             mode,
@@ -214,6 +228,18 @@ fn serialize_vmess(
             }
             document["net"] = Value::String("grpc".to_owned());
             document["path"] = Value::String(service_name.clone());
+        }
+        TransportConfig::XHttp { path, host, mode } => {
+            // Legacy VMess JSON has no `mode` field, so only Auto survives a
+            // round-trip; any other mode would come back as Auto and lie.
+            if *mode != XhttpMode::Auto {
+                return Err(ShareLinkSerializerError::UnrepresentableVmessTransport);
+            }
+            document["net"] = Value::String("xhttp".to_owned());
+            document["path"] = Value::String(path.clone());
+            if let Some(host) = host {
+                document["host"] = Value::String(host.clone());
+            }
         }
     }
     match node.tls.as_ref() {
@@ -285,6 +311,44 @@ fn hysteria2_authority(credential: &Hysteria2Credential, query: &mut Query) -> S
     credential.authentication().map_or_else(String::new, encode)
 }
 
+fn tuic_authority(credential: &TuicCredential, query: &mut Query) -> String {
+    if let Some(congestion_control) = credential.congestion_control() {
+        query.set(
+            "congestion_control",
+            tuic_congestion_control_name(congestion_control),
+        );
+    }
+    if let Some(udp_relay_mode) = credential.udp_relay_mode() {
+        query.set("udp_relay_mode", tuic_udp_relay_mode_name(udp_relay_mode));
+    }
+    if credential.udp_over_stream() {
+        query.set("udp_over_stream", "1");
+    }
+    if credential.zero_rtt_handshake() {
+        query.set("zero_rtt_handshake", "1");
+    }
+    let uuid = encode(&credential.uuid().to_string());
+    credential.password().map_or_else(
+        || uuid.clone(),
+        |password| format!("{uuid}:{}", encode(password)),
+    )
+}
+
+const fn tuic_congestion_control_name(value: TuicCongestionControl) -> &'static str {
+    match value {
+        TuicCongestionControl::Cubic => "cubic",
+        TuicCongestionControl::NewReno => "new_reno",
+        TuicCongestionControl::Bbr => "bbr",
+    }
+}
+
+const fn tuic_udp_relay_mode_name(value: TuicUdpRelayMode) -> &'static str {
+    match value {
+        TuicUdpRelayMode::Native => "native",
+        TuicUdpRelayMode::Quic => "quic",
+    }
+}
+
 const fn security_name(security: VmessSecurity) -> &'static str {
     match security {
         VmessSecurity::Auto => "auto",
@@ -305,6 +369,13 @@ fn write_transport(transport: &TransportConfig, query: &mut Query) {
                 query.set("host", host);
             }
         }
+        TransportConfig::HttpUpgrade { path, host } => {
+            query.set("type", "httpupgrade");
+            query.set("path", path);
+            if let Some(host) = host {
+                query.set("host", host);
+            }
+        }
         TransportConfig::Grpc {
             service_name,
             mode,
@@ -315,6 +386,16 @@ fn write_transport(transport: &TransportConfig, query: &mut Query) {
             query.set("mode", format!("{mode:?}").to_lowercase());
             if let Some(authority) = authority {
                 query.set("authority", authority);
+            }
+        }
+        TransportConfig::XHttp { path, host, mode } => {
+            query.set("type", "xhttp");
+            query.set("path", path);
+            if let Some(host) = host {
+                query.set("host", host);
+            }
+            if *mode != XhttpMode::Auto {
+                query.set("mode", xhttp_mode_name(*mode));
             }
         }
     }
@@ -329,8 +410,9 @@ fn write_tls(protocol: ProxyProtocol, tls: &TlsConfig, query: &mut Query) {
             fingerprint,
             pinned_sha256,
         } => {
-            // Hysteria2 is TLS by definition and its parser rejects `security`.
-            if protocol != ProxyProtocol::Hysteria2 {
+            // Hysteria2 and TUIC are TLS by definition and their parsers
+            // reject `security`.
+            if !matches!(protocol, ProxyProtocol::Hysteria2 | ProxyProtocol::Tuic) {
                 query.set("security", "tls");
             }
             if let Some(server_name) = server_name {

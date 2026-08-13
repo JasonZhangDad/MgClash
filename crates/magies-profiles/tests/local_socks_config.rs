@@ -77,3 +77,23 @@ fn generates_a_loopback_sing_box_socks_inbound() {
         })
     );
 }
+
+#[test]
+fn allow_lan_binds_sing_box_socks_on_all_interfaces() {
+    let profile = LocalSocksProfile::new(18_082).unwrap().with_allow_lan(true);
+    let generated = LocalSocksConfigGenerator::generate(CoreType::SingBox, &profile);
+
+    assert_eq!(generated.json()["inbounds"][0]["listen"], "0.0.0.0");
+    assert!(profile.allow_lan());
+}
+
+#[test]
+fn disabling_udp_turns_off_xray_socks_udp_associate() {
+    let profile = LocalSocksProfile::new(18_083)
+        .unwrap()
+        .with_udp_enabled(false);
+    let generated = LocalSocksConfigGenerator::generate(CoreType::Xray, &profile);
+
+    assert_eq!(generated.json()["inbounds"][0]["settings"]["udp"], false);
+    assert!(!profile.udp_enabled());
+}

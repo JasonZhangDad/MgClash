@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    Hysteria2Credential, NodeCredential, ShadowsocksCredential, TrojanCredential, VlessCredential,
-    VmessCredential,
+    Hysteria2Credential, NodeCredential, ShadowsocksCredential, TrojanCredential, TuicCredential,
+    VlessCredential, VmessCredential,
 };
 
 const CREDENTIAL_PAYLOAD_VERSION: u8 = 1;
@@ -21,6 +21,7 @@ pub enum StoredNodeCredential {
     Trojan(TrojanCredential),
     Shadowsocks(ShadowsocksCredential),
     Hysteria2(Hysteria2Credential),
+    Tuic(TuicCredential),
 }
 
 impl StoredNodeCredential {
@@ -32,6 +33,7 @@ impl StoredNodeCredential {
             Self::Trojan(_) => ProxyProtocol::Trojan,
             Self::Shadowsocks(_) => ProxyProtocol::Shadowsocks,
             Self::Hysteria2(_) => ProxyProtocol::Hysteria2,
+            Self::Tuic(_) => ProxyProtocol::Tuic,
         }
     }
 
@@ -43,6 +45,7 @@ impl StoredNodeCredential {
             Self::Trojan(value) => NodeCredential::Trojan(value),
             Self::Shadowsocks(value) => NodeCredential::Shadowsocks(value),
             Self::Hysteria2(value) => NodeCredential::Hysteria2(value),
+            Self::Tuic(value) => NodeCredential::Tuic(value),
         }
     }
 }
@@ -68,6 +71,7 @@ impl_from_credential!(VmessCredential, Vmess);
 impl_from_credential!(TrojanCredential, Trojan);
 impl_from_credential!(ShadowsocksCredential, Shadowsocks);
 impl_from_credential!(Hysteria2Credential, Hysteria2);
+impl_from_credential!(TuicCredential, Tuic);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CredentialCodec;

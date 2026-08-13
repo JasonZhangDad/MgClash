@@ -199,6 +199,7 @@ fn the_unreachable_rejections_still_read_correctly() {
             protocol: ProxyProtocol::Hysteria2,
             tun: true,
             certificate_pin: false,
+            xhttp: false,
         }
         .to_string(),
         "no available Core supports Hysteria2 with TUN on"
@@ -208,6 +209,7 @@ fn the_unreachable_rejections_still_read_correctly() {
             protocol: ProxyProtocol::Vless,
             tun: false,
             certificate_pin: false,
+            xhttp: false,
         }
         .to_string(),
         "no available Core supports VLESS with TUN off"
@@ -219,6 +221,7 @@ fn the_unreachable_rejections_still_read_correctly() {
             protocol: ProxyProtocol::Hysteria2,
             tun: false,
             certificate_pin: true,
+            xhttp: false,
         }
         .to_string(),
         "no available Core supports Hysteria2 with TUN off and a pinned certificate"
@@ -281,4 +284,29 @@ fn a_pinned_hysteria2_node_has_no_usable_core() {
         CoreCapabilityMatrix::select(CorePreference::Auto, pinned),
         Err(CoreSelectionError::NoUsableCore { .. })
     ));
+}
+
+#[test]
+fn an_xhttp_node_is_routed_to_xray() {
+    let xhttp = CoreRequirements::new(ProxyProtocol::Vless, false, CpuArchitecture::X86_64)
+        .with_xhttp();
+
+    assert_eq!(
+        CoreCapabilityMatrix::select(CorePreference::Auto, xhttp).unwrap(),
+        CoreType::Xray
+    );
+    assert_eq!(
+        CoreCapabilityMatrix::rejection(CoreType::SingBox, xhttp),
+        Some(CoreRejection::XhttpUnsupported {
+            core: CoreType::SingBox
+        })
+    );
+    assert_eq!(
+        CoreCapabilityMatrix::select(CorePreference::Fixed(CoreType::SingBox), xhttp),
+        Err(CoreSelectionError::ChosenCoreUnusable {
+            rejection: CoreRejection::XhttpUnsupported {
+                core: CoreType::SingBox
+            }
+        })
+    );
 }

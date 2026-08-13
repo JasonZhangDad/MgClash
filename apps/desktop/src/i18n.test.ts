@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-// Vite inlines the file at build time, so the test needs no filesystem types
-// and reads exactly what the bundler sees.
+// Vite inlines the files at build time, so the test needs no filesystem types
+// and reads exactly what the bundler sees. The v2rayN-style shell splits what
+// used to be one file across App.tsx and its components, so every file that
+// can call `t(...)` has to be scanned, not just App.tsx.
 import appSource from "./App.tsx?raw";
+import dialogSource from "./components/Dialog.tsx?raw";
+import menuBarSource from "./components/MenuBar.tsx?raw";
+import msgViewSource from "./components/MsgView.tsx?raw";
+import statusBarSource from "./components/StatusBar.tsx?raw";
 
 import {
   DEFAULT_LOCALE,
@@ -21,7 +27,14 @@ import {
  * not appear as Chinese in a Russian window.
  */
 function usedKeys(): string[] {
-  return [...appSource.matchAll(/\bt\("((?:[^"\\]|\\.)*)"\)/g)].map(
+  const source = [
+    appSource,
+    menuBarSource,
+    statusBarSource,
+    msgViewSource,
+    dialogSource,
+  ].join("\n");
+  return [...source.matchAll(/\bt\("((?:[^"\\]|\\.)*)"\)/g)].map(
     (match) => match[1],
   );
 }

@@ -1,5 +1,5 @@
 use std::io;
-use std::net::{Ipv4Addr, TcpListener};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LocalProxyPortKind {
@@ -17,6 +17,20 @@ impl LocalProxyPortChecker {
     ///
     /// Returns a typed duplicate or bind error identifying the affected port.
     pub fn check(socks_port: u16, http_port: u16) -> Result<(), LocalProxyPortError> {
+        Self::check_with_allow_lan(socks_port, http_port, false)
+    }
+
+    /// Checks that the ports can bind on loopback, or on all interfaces when
+    /// Allow LAN is enabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed duplicate or bind error identifying the affected port.
+    pub fn check_with_allow_lan(
+        socks_port: u16,
+        http_port: u16,
+        allow_lan: bool,
+    ) -> Result<(), LocalProxyPortError> {
         if socks_port == 0 {
             return Err(LocalProxyPortError::InvalidPort {
                 kind: LocalProxyPortKind::Socks,
@@ -31,15 +45,30 @@ impl LocalProxyPortChecker {
             return Err(LocalProxyPortError::DuplicatePort { port: socks_port });
         }
 
-        let _socks = bind(LocalProxyPortKind::Socks, socks_port)?;
-        let _http = bind(LocalProxyPortKind::Http, http_port)?;
+        let host = if allow_lan {
+            Ipv4Addr::UNSPECIFIED
+        } else {
+            Ipv4Addr::LOCALHOST
+        };
+        let _socks = bind(LocalProxyPortKind::Socks, host, socks_port)?;
+        let _http = bind(LocalProxyPortKind::Http, host, http_port)?;
         Ok(())
     }
 }
 
-fn bind(kind: LocalProxyPortKind, port: u16) -> Result<TcpListener, LocalProxyPortError> {
-    TcpListener::bind((Ipv4Addr::LOCALHOST, port))
-        .map_err(|source| LocalProxyPortError::Unavailable { kind, port, source })
+fn bind(
+    kind: LocalProxyPortKind,
+    host: Ipv4Addr,
+    port: u16,
+) -> Result<TcpListener, LocalProxyPortError> {
+    TcpListener::bind(SocketAddr::from((host, port))).map_err(|source| {
+        LocalProxyPortError::Unavailable {
+            kind,
+            port,
+            host,
+            source,
+        }
+    })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -48,10 +77,11 @@ pub enum LocalProxyPortError {
     InvalidPort { kind: LocalProxyPortKind },
     #[error("SOCKS and HTTP local proxies cannot share port {port}")]
     DuplicatePort { port: u16 },
-    #[error("local {kind:?} proxy port 127.0.0.1:{port} is unavailable: {source}")]
+    #[error("local {kind:?} proxy port {host}:{port} is unavailable: {source}")]
     Unavailable {
         kind: LocalProxyPortKind,
         port: u16,
+        host: Ipv4Addr,
         #[source]
         source: io::Error,
     },

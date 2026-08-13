@@ -30,6 +30,23 @@ fn a_fresh_install_uses_the_documented_defaults() {
     // TUN needs elevation and takes over routing, so it is never on by default.
     assert!(!settings.tun_enabled);
     assert_eq!(settings.log_level, LogLevel::Info);
+    assert_eq!(settings.socks_port, 10_808);
+    assert_eq!(settings.http_port, 10_809);
+    assert_eq!(settings.clash_api_port, 9_090);
+    assert!(!settings.mux_enabled);
+    assert!(!settings.auto_select_lowest_latency);
+    assert_eq!(settings.url_test_address, "https://www.gstatic.com/generate_204");
+    assert!(!settings.allow_lan);
+    assert_eq!(
+        settings.speed_test_url,
+        "https://speed.cloudflare.com/__down?bytes=10000000"
+    );
+    assert!(settings.inbound_udp_enabled);
+    assert!(!settings.def_allow_insecure);
+    assert_eq!(settings.def_fingerprint, "");
+    assert_eq!(settings.hotkey_connect, "Ctrl+Enter");
+    assert_eq!(settings.hotkey_previous, "Ctrl+[");
+    assert_eq!(settings.hotkey_next, "Ctrl+]");
 }
 
 #[test]
@@ -44,11 +61,25 @@ fn saved_settings_survive_a_restart() {
         log_level: LogLevel::Debug,
         system_proxy_mode: SystemProxyModeSetting::Cleared,
         locale: LocaleSetting::Japanese,
+        socks_port: 20_808,
+        http_port: 20_809,
+        clash_api_port: 19_090,
+        mux_enabled: true,
+        auto_select_lowest_latency: true,
+        url_test_address: "https://www.google.com/generate_204".to_owned(),
+        allow_lan: true,
+        speed_test_url: "https://speed.cloudflare.com/__down?bytes=5000000".to_owned(),
+        inbound_udp_enabled: false,
+        def_allow_insecure: true,
+        def_fingerprint: "chrome".to_owned(),
+        hotkey_connect: "Ctrl+T".to_owned(),
+        hotkey_previous: "Alt+[".to_owned(),
+        hotkey_next: "Alt+]".to_owned(),
     };
 
     {
         let store = SqliteAppSettingsStore::open(database.path()).unwrap();
-        store.save(saved).unwrap();
+        store.save(&saved).unwrap();
     }
 
     let store = SqliteAppSettingsStore::open(database.path()).unwrap();
@@ -60,13 +91,13 @@ fn saving_twice_replaces_the_single_row() {
     let store = SqliteAppSettingsStore::open_in_memory().unwrap();
 
     store
-        .save(AppSettings {
+        .save(&AppSettings {
             connect_on_launch: true,
             ..AppSettings::default()
         })
         .unwrap();
     store
-        .save(AppSettings {
+        .save(&AppSettings {
             log_level: LogLevel::Error,
             ..AppSettings::default()
         })
@@ -89,7 +120,7 @@ fn every_level_round_trips_through_storage() {
         LogLevel::Trace,
     ] {
         store
-            .save(AppSettings {
+            .save(&AppSettings {
                 log_level: level,
                 ..AppSettings::default()
             })
@@ -104,7 +135,7 @@ fn a_corrupt_stored_level_is_a_typed_error() {
     let database = TestDatabase::new("app-settings-corrupt");
     {
         let store = SqliteAppSettingsStore::open(database.path()).unwrap();
-        store.save(AppSettings::default()).unwrap();
+        store.save(&AppSettings::default()).unwrap();
     }
     let connection = rusqlite::Connection::open(database.path()).unwrap();
     connection
@@ -143,7 +174,7 @@ fn every_core_preference_round_trips_through_storage() {
         CorePreferenceSetting::Xray,
     ] {
         store
-            .save(AppSettings {
+            .save(&AppSettings {
                 core_preference: preference,
                 ..AppSettings::default()
             })
@@ -158,7 +189,7 @@ fn a_corrupt_stored_core_preference_is_a_typed_error() {
     let database = TestDatabase::new("app-settings-core");
     {
         let store = SqliteAppSettingsStore::open(database.path()).unwrap();
-        store.save(AppSettings::default()).unwrap();
+        store.save(&AppSettings::default()).unwrap();
     }
     let connection = rusqlite::Connection::open(database.path()).unwrap();
     connection
@@ -250,7 +281,7 @@ fn every_system_proxy_mode_round_trips_through_storage() {
         SystemProxyModeSetting::Unchanged,
     ] {
         store
-            .save(AppSettings {
+            .save(&AppSettings {
                 system_proxy_mode: mode,
                 ..AppSettings::default()
             })
@@ -301,7 +332,7 @@ fn opening_twice_does_not_repeat_the_migration() {
     let database = TestDatabase::new("app-settings-migration-twice");
     let first = SqliteAppSettingsStore::open(database.path()).unwrap();
     first
-        .save(AppSettings {
+        .save(&AppSettings {
             system_proxy_mode: SystemProxyModeSetting::Cleared,
             ..AppSettings::default()
         })
@@ -343,7 +374,7 @@ fn every_language_round_trips_and_defaults_to_english() {
 
     for locale in LocaleSetting::ALL.iter().copied() {
         store
-            .save(AppSettings {
+            .save(&AppSettings {
                 locale,
                 ..AppSettings::default()
             })
@@ -361,7 +392,7 @@ fn an_unknown_language_is_a_typed_error() {
     let database = TestDatabase::new("app-settings-locale");
     {
         let store = SqliteAppSettingsStore::open(database.path()).unwrap();
-        store.save(AppSettings::default()).unwrap();
+        store.save(&AppSettings::default()).unwrap();
     }
     let connection = rusqlite::Connection::open(database.path()).unwrap();
     connection
