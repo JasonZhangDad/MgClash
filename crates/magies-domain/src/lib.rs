@@ -25,6 +25,7 @@ pub enum ProxyProtocol {
     Socks,
     Http,
     WireGuard,
+    AnyTls,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

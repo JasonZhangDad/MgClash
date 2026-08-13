@@ -273,6 +273,7 @@ const DICTIONARY: Dictionary = {
   "用 | 分隔": "Через |",
   "XHTTP 路径": "Путь XHTTP",
   "XHTTP 模式": "Режим XHTTP",
+  "AnyTLS 密码": "Пароль AnyTLS",
   "用户名": "Имя пользователя",
   "代理用户名": "Имя пользователя прокси",
   "HTTPUpgrade 路径": "Путь HTTPUpgrade",

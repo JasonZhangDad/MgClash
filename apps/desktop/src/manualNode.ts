@@ -157,12 +157,15 @@ const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 /**
- * Hysteria2 / TUIC carry their own QUIC transport and always run over TLS.
- * WireGuard carries its own tunnel and never runs over TLS at all.
+ * Hysteria2 / TUIC / WireGuard / AnyTLS carry their own tunnel and do not use
+ * a selectable stream transport.
  */
 export function usesStreamTransport(protocol: ProxyProtocol): boolean {
   return (
-    protocol !== "hysteria2" && protocol !== "tuic" && protocol !== "wireguard"
+    protocol !== "hysteria2" &&
+    protocol !== "tuic" &&
+    protocol !== "wireguard" &&
+    protocol !== "anytls"
   );
 }
 
@@ -301,6 +304,12 @@ function buildCredential(
         protocol: "wireguard",
         reserved,
       };
+    }
+    case "anytls": {
+      if (form.password.trim() === "") {
+        return { error: "请填写 AnyTLS 密码" };
+      }
+      return { password: form.password.trim(), protocol: "anytls" };
     }
   }
 }
@@ -551,6 +560,10 @@ export function formFromManualNodeDraft(draft: ManualNodeDraft): ManualNodeForm 
         draft.credential.reserved === null
           ? ""
           : draft.credential.reserved.join(",");
+      break;
+    case "anytls":
+      form.protocol = "anytls";
+      form.password = draft.credential.password;
       break;
   }
 

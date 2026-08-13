@@ -92,6 +92,17 @@ fn links() -> Vec<(&'static str, String)> {
             "https-tls",
             "https://alice:hunter2@edge.example.com#Secure".to_owned(),
         ),
+        (
+            "anytls-tls",
+            "anytls://hunter2@edge.example.com:443?sni=www.example.com&insecure=1#AnyTLS"
+                .to_owned(),
+        ),
+        (
+            "anytls-reality",
+            "anytls://hunter2@edge.example.com:443?security=reality\
+             &sni=www.example.com&pbk=public-key&sid=ab&fp=chrome#AnyTLS-Reality"
+                .to_owned(),
+        ),
     ]
 }
 
@@ -190,6 +201,10 @@ fn the_scheme_matches_what_the_parser_claims() {
         ("socks://edge.example.com:1080".to_owned(), "socks://"),
         ("http://edge.example.com:8080".to_owned(), "http://"),
         ("https://edge.example.com".to_owned(), "https://"),
+        (
+            "anytls://p@edge.example.com:443".to_owned(),
+            "anytls://",
+        ),
     ] {
         let (node, credential) = parse(&link);
 

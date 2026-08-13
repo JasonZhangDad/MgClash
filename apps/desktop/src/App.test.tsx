@@ -1111,6 +1111,36 @@ describe("App", () => {
     );
   });
 
+  it("creates an AnyTLS node without a transport picker", async () => {
+    createNodeMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([]);
+    await render();
+
+    await act(async () => {
+      selectValue("anytls", createSelect("节点协议"));
+    });
+
+    expect(
+      container.querySelector("select[aria-label='传输方式']"),
+    ).toBeNull();
+
+    await act(async () => {
+      typeInput("AnyTLS Node", createField("新建节点名称"));
+      typeInput("edge.example.com", createField("新建节点服务器"));
+      typeInput("443", createField("新建节点端口"));
+      typeInput("hunter2", createField("AnyTLS 密码"));
+    });
+    await act(async () => button("创建节点").click());
+
+    expect(createNodeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credential: { password: "hunter2", protocol: "anytls" },
+        transport: null,
+        tls: expect.objectContaining({ type: "tls" }),
+      }),
+    );
+  });
+
   it("hides the transport picker for TUIC and always sends TLS", async () => {
     createNodeMock.mockResolvedValue(SELECTED);
     loadNodesMock.mockResolvedValue([]);
@@ -3187,6 +3217,7 @@ describe("App", () => {
       "添加 SOCKS5 服务器",
       "添加 HTTP 服务器",
       "添加 WireGuard 服务器",
+      "添加 AnyTLS 服务器",
       "手动创建",
     ]) {
       await act(async () => button(label).click());

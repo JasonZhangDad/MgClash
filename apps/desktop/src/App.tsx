@@ -896,7 +896,13 @@ export default function App() {
           allowInsecure: settings?.defAllowInsecure,
           fingerprint: settings?.defFingerprint,
         }),
-        ...(protocol === undefined ? {} : { protocol }),
+        ...(protocol === undefined
+          ? {}
+          : {
+              protocol,
+              // AnyTLS has no plaintext mode; open with TLS already on.
+              ...(protocol === "anytls" ? { tlsEnabled: true } : {}),
+            }),
       });
       setDialog("create");
     },
@@ -2516,6 +2522,7 @@ export default function App() {
               <option value="hysteria2">Hysteria2</option>
               <option value="tuic">TUIC</option>
               <option value="wireguard">WireGuard</option>
+              <option value="anytls">AnyTLS</option>
             </select>
           </label>
 
@@ -2657,11 +2664,16 @@ export default function App() {
           {(createForm.protocol === "trojan" ||
             createForm.protocol === "shadowsocks" ||
             createForm.protocol === "socks" ||
-            createForm.protocol === "http") && (
+            createForm.protocol === "http" ||
+            createForm.protocol === "anytls") && (
             <label>
               {t("密码")}
               <input
-                aria-label={t("节点密码")}
+                aria-label={
+                  createForm.protocol === "anytls"
+                    ? t("AnyTLS 密码")
+                    : t("节点密码")
+                }
                 type="password"
                 placeholder={
                   createForm.protocol === "socks" || createForm.protocol === "http"
@@ -3089,10 +3101,48 @@ export default function App() {
               </>
             )}
 
+          {createForm.protocol === "anytls" && (
+            <>
+              <label>
+                <input
+                  aria-label={t("启用 TLS")}
+                  type="checkbox"
+                  checked={createForm.tlsEnabled || createForm.realityEnabled}
+                  disabled={busy || connected}
+                  onChange={(event) =>
+                    updateCreateForm({
+                      tlsEnabled: event.target.checked,
+                      realityEnabled: event.target.checked
+                        ? createForm.realityEnabled
+                        : false,
+                    })
+                  }
+                />
+                {t("启用 TLS")}
+              </label>
+              <label>
+                <input
+                  aria-label={t("启用 Reality")}
+                  type="checkbox"
+                  checked={createForm.realityEnabled}
+                  disabled={busy || connected}
+                  onChange={(event) =>
+                    updateCreateForm({
+                      realityEnabled: event.target.checked,
+                      tlsEnabled: event.target.checked || createForm.tlsEnabled,
+                    })
+                  }
+                />
+                {t("启用 Reality")}
+              </label>
+            </>
+          )}
+
           {(createForm.tlsEnabled ||
             createForm.realityEnabled ||
             createForm.protocol === "hysteria2" ||
-            createForm.protocol === "tuic") &&
+            createForm.protocol === "tuic" ||
+            createForm.protocol === "anytls") &&
             createForm.protocol !== "shadowsocks" &&
             createForm.protocol !== "socks" && (
               <>

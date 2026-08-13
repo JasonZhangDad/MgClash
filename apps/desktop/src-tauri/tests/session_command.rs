@@ -387,6 +387,21 @@ fn a_wireguard_node_imports_and_reports_its_own_tunnel() {
 }
 
 #[test]
+fn an_anytls_node_imports_and_reports_its_own_transport() {
+    let (mut service, _runtime, _fail_start) = service();
+    service
+        .import_node("anytls://hunter2@edge.example.com:443?sni=cdn.example.com#Tokyo")
+        .unwrap();
+
+    let node = &service.nodes().unwrap()[0];
+
+    assert_eq!(node.transport, "anytls");
+    assert_eq!(node.tls, Some("tls"));
+    assert_eq!(node.protocol, ProxyProtocol::AnyTls);
+    assert_eq!(service.selected_core(), Ok(CoreType::SingBox));
+}
+
+#[test]
 fn the_status_reports_sing_box_by_default() {
     let (mut service, _runtime, _fail_start) = service();
     assert_eq!(service.status().core, "sing-box");
@@ -1127,7 +1142,7 @@ fn rejects_an_unsupported_share_link_without_selecting_a_node() {
     let (mut service, _runtime, _fail_start) = service();
 
     assert!(matches!(
-        service.import_node("anytls://token@edge.example.com:443"),
+        service.import_node("naive://token@edge.example.com:443"),
         Err(SessionCommandError::ShareLink(_))
     ));
     assert!(service.status().node.is_none());
@@ -1468,7 +1483,7 @@ fn every_session_failure_carries_a_stable_code_for_the_ui() {
     assert_eq!(service.connect().unwrap_err().code(), "no_selected_node");
     assert_eq!(
         service
-            .import_node("anytls://token@edge.example.com")
+            .import_node("naive://token@edge.example.com")
             .unwrap_err()
             .code(),
         "invalid_share_link"

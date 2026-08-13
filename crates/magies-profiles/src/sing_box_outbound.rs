@@ -4,9 +4,10 @@ use magies_domain::{GrpcMode, ProxyNode, ProxyProtocol, TlsConfig, TransportConf
 use serde_json::{Value, json};
 
 use crate::{
-    HttpCredential, Hysteria2Credential, Hysteria2ObfuscationMethod, ShadowsocksCredential,
-    SocksCredential, TrojanCredential, TuicCongestionControl, TuicCredential, TuicUdpRelayMode,
-    VlessCredential, VmessCredential, VmessSecurity, WireGuardCredential,
+    AnyTlsCredential, HttpCredential, Hysteria2Credential, Hysteria2ObfuscationMethod,
+    ShadowsocksCredential, SocksCredential, TrojanCredential, TuicCongestionControl,
+    TuicCredential, TuicUdpRelayMode, VlessCredential, VmessCredential, VmessSecurity,
+    WireGuardCredential,
 };
 
 #[derive(Clone, Copy)]
@@ -20,6 +21,7 @@ pub enum NodeCredential<'a> {
     Socks(&'a SocksCredential),
     Http(&'a HttpCredential),
     WireGuard(&'a WireGuardCredential),
+    AnyTls(&'a AnyTlsCredential),
 }
 
 impl NodeCredential<'_> {
@@ -35,6 +37,7 @@ impl NodeCredential<'_> {
             Self::Socks(_) => ProxyProtocol::Socks,
             Self::Http(_) => ProxyProtocol::Http,
             Self::WireGuard(_) => ProxyProtocol::WireGuard,
+            Self::AnyTls(_) => ProxyProtocol::AnyTls,
         }
     }
 }
@@ -96,6 +99,12 @@ impl<'a> From<&'a HttpCredential> for NodeCredential<'a> {
 impl<'a> From<&'a WireGuardCredential> for NodeCredential<'a> {
     fn from(value: &'a WireGuardCredential) -> Self {
         Self::WireGuard(value)
+    }
+}
+
+impl<'a> From<&'a AnyTlsCredential> for NodeCredential<'a> {
+    fn from(value: &'a AnyTlsCredential) -> Self {
+        Self::AnyTls(value)
     }
 }
 
@@ -170,6 +179,9 @@ impl SingBoxOutboundConfigGenerator {
             NodeCredential::WireGuard(credential) => {
                 generate_wireguard(node, credential, &mut outbound)?;
             }
+            NodeCredential::AnyTls(credential) => {
+                generate_anytls(node, credential, &mut outbound)?;
+            }
         }
         Ok(GeneratedSingBoxOutbound { json: outbound })
     }
@@ -178,11 +190,16 @@ impl SingBoxOutboundConfigGenerator {
 /// Enables sing-box multiplex on a generated outbound when the user asked for it.
 ///
 /// Hysteria2 and TUIC already multiplex over QUIC, so mux is skipped there.
-/// WireGuard is its own tunnel with no stream layer to multiplex over.
+/// `WireGuard` is its own tunnel with no stream layer to multiplex over.
+/// `AnyTLS` carries its own session-pooling multiplex scheme and rejects the
+/// standard `multiplex` block outright.
 pub fn apply_sing_box_multiplex(outbound: &mut Value, protocol: ProxyProtocol) {
     if matches!(
         protocol,
-        ProxyProtocol::Hysteria2 | ProxyProtocol::Tuic | ProxyProtocol::WireGuard
+        ProxyProtocol::Hysteria2
+            | ProxyProtocol::Tuic
+            | ProxyProtocol::WireGuard
+            | ProxyProtocol::AnyTls
     ) {
         return;
     }
@@ -212,6 +229,7 @@ const fn protocol_name(protocol: ProxyProtocol) -> &'static str {
         ProxyProtocol::Socks => "socks",
         ProxyProtocol::Http => "http",
         ProxyProtocol::WireGuard => "wireguard",
+        ProxyProtocol::AnyTls => "anytls",
     }
 }
 
@@ -439,7 +457,30 @@ fn generate_tuic(
     Ok(())
 }
 
-/// WireGuard is its own tunnel: no stream transport, no TLS, and no `network`
+/// `AnyTLS` is TLS from the first byte, so it never carries a stream
+/// transport; unlike Hysteria2/TUIC, its TLS layer may also be Reality
+/// (v2rayN exposes this combination even though upstream `AnyTLS` is
+/// TLS-only).
+fn generate_anytls(
+    node: &ProxyNode,
+    credential: &AnyTlsCredential,
+    outbound: &mut Value,
+) -> Result<(), OutboundConfigError> {
+    if node.transport.is_some() {
+        return Err(OutboundConfigError::UnsupportedTransport {
+            protocol: node.protocol_type,
+        });
+    }
+    let tls = node.tls.as_ref().ok_or(OutboundConfigError::MissingTls {
+        protocol: node.protocol_type,
+    })?;
+    outbound["password"] = Value::String(credential.password().to_owned());
+    outbound["tls"] = generated_tls(tls)?;
+    apply_network(node, outbound);
+    Ok(())
+}
+
+/// `WireGuard` is its own tunnel: no stream transport, no TLS, and no `network`
 /// restriction sing-box's `wireguard` outbound has no field for.
 fn generate_wireguard(
     node: &ProxyNode,

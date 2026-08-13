@@ -234,6 +234,29 @@ describe("buildManualNodeDraft", () => {
     ).toBe("reserved 必须是 3 个 0-255 的整数，以逗号分隔");
   });
 
+  it("builds an AnyTLS draft with required TLS", () => {
+    const draft = draftOf({
+      password: "hunter2",
+      protocol: "anytls",
+      tlsEnabled: true,
+    });
+
+    expect(draft.transport).toBeNull();
+    expect(draft.tls).toEqual(
+      expect.objectContaining({ type: "tls" }),
+    );
+    expect(draft.credential).toEqual({
+      password: "hunter2",
+      protocol: "anytls",
+    });
+  });
+
+  it("rejects an empty AnyTLS password", () => {
+    expect(errorOf({ password: " ", protocol: "anytls", tlsEnabled: true })).toBe(
+      "请填写 AnyTLS 密码",
+    );
+  });
+
   it("always sends TLS and no transport for Hysteria2", () => {
     const draft = draftOf({
       authentication: "token",

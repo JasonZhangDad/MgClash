@@ -442,6 +442,40 @@ fn hysteria2_is_refused_the_same_way_the_matrix_refuses_it() {
     );
 }
 
+#[test]
+fn anytls_is_refused_the_same_way_the_matrix_refuses_it() {
+    // The manual draft never produces an AnyTLS node with a transport, so the
+    // node is assembled directly to reach the generator's own guard.
+    let (mut node, _) = build_node(vless(), None);
+    node.protocol_type = ProxyProtocol::AnyTls;
+    node.port = NonZeroU16::new(8443).unwrap();
+
+    let (_, credential) = anytls_node();
+
+    assert_eq!(
+        XrayOutboundConfigGenerator::generate(&node, credential.as_node_credential()).unwrap_err(),
+        XrayOutboundError::ProtocolUnsupported {
+            protocol: ProxyProtocol::AnyTls,
+        }
+    );
+}
+
+fn anytls_node() -> (ProxyNode, StoredNodeCredential) {
+    ManualNodeDraft {
+        name: "Tokyo".to_owned(),
+        server: "edge.example.com".to_owned(),
+        port: 8443,
+        udp_enabled: true,
+        transport: None,
+        tls: Some(plain_tls()),
+        credential: ManualCredentialDraft::AnyTls {
+            password: "hunter2".to_owned(),
+        },
+    }
+    .build(Uuid::new_v4(), CredentialRef::new("node/anytls").unwrap())
+    .unwrap()
+}
+
 fn hysteria2_node() -> (ProxyNode, StoredNodeCredential) {
     ManualNodeDraft {
         name: "Tokyo".to_owned(),
@@ -516,11 +550,13 @@ fn the_generator_agrees_with_the_capability_matrix() {
         );
     }
 
-    // The one protocol the matrix excludes.
-    assert!(!CoreCapabilityMatrix::supports(
-        CoreType::Xray,
-        CoreRequirements::new(ProxyProtocol::Hysteria2, false, CpuArchitecture::Aarch64)
-    ));
+    // Protocols the matrix excludes entirely.
+    for excluded in [ProxyProtocol::Hysteria2, ProxyProtocol::AnyTls] {
+        assert!(!CoreCapabilityMatrix::supports(
+            CoreType::Xray,
+            CoreRequirements::new(excluded, false, CpuArchitecture::Aarch64)
+        ));
+    }
 }
 
 /// Both generators must accept the same node, so switching Cores never needs a

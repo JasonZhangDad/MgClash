@@ -273,6 +273,7 @@ const DICTIONARY: Dictionary = {
   "用 | 分隔": "| 区切り",
   "XHTTP 路径": "XHTTP パス",
   "XHTTP 模式": "XHTTP モード",
+  "AnyTLS 密码": "AnyTLS パスワード",
   "用户名": "ユーザー名",
   "代理用户名": "プロキシのユーザー名",
   "HTTPUpgrade 路径": "HTTPUpgrade パス",

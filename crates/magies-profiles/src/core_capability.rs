@@ -44,12 +44,15 @@ const SING_BOX_CAPABILITIES: &[CoreCapability] = &[
     capability(ProxyProtocol::Socks, true, false),
     capability(ProxyProtocol::Http, true, false),
     capability(ProxyProtocol::WireGuard, true, false),
+    // Added in sing-box 1.12.0, carried by the pinned 1.13.18. Xray ships no
+    // AnyTLS outbound at all, so this stays sing-box-only.
+    capability(ProxyProtocol::AnyTls, true, false),
 ];
 
 /// Xray covers the stream protocols but has no Hysteria2 or TUIC outbound and
 /// no TUN inbound of its own — TUN there needs an external tun2socks.
 ///
-/// WireGuard is deliberately absent too: Xray does ship a `wireguard`
+/// `WireGuard` is deliberately absent too: Xray does ship a `wireguard`
 /// outbound, but nothing in this codebase's Xray patterns pins a verified
 /// field-for-field shape for it the way the other outbounds are pinned
 /// against upstream, so it stays sing-box-only rather than guessing.
@@ -331,6 +334,7 @@ pub const fn protocol_name(protocol: ProxyProtocol) -> &'static str {
         ProxyProtocol::Socks => "SOCKS5",
         ProxyProtocol::Http => "HTTP",
         ProxyProtocol::WireGuard => "WireGuard",
+        ProxyProtocol::AnyTls => "AnyTLS",
     }
 }
 

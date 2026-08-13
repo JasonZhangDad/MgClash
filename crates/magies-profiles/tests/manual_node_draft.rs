@@ -60,6 +60,19 @@ fn hysteria2_draft() -> ManualNodeDraft {
     value
 }
 
+fn anytls() -> ManualCredentialDraft {
+    ManualCredentialDraft::AnyTls {
+        password: "hunter2".to_owned(),
+    }
+}
+
+/// `AnyTLS` is the other protocol that requires TLS (or Reality) up front.
+fn anytls_draft() -> ManualNodeDraft {
+    let mut value = draft(anytls());
+    value.tls = Some(plain_tls());
+    value
+}
+
 fn wireguard() -> ManualCredentialDraft {
     ManualCredentialDraft::WireGuard {
         private_key: "private-key".to_owned(),
@@ -273,6 +286,72 @@ fn builds_a_wireguard_node() {
 }
 
 #[test]
+fn builds_an_anytls_node_with_tls() {
+    let (node, credential) = build(anytls_draft()).unwrap();
+
+    assert_eq!(node.protocol_type, ProxyProtocol::AnyTls);
+    // AnyTLS is TLS from the first byte: no stream transport of its own.
+    assert!(node.transport.is_none());
+    assert!(matches!(node.tls, Some(TlsConfig::Tls { .. })));
+    let StoredNodeCredential::AnyTls(credential) = credential else {
+        panic!("expected an AnyTLS credential");
+    };
+    assert_eq!(credential.password(), "hunter2");
+}
+
+#[test]
+fn builds_an_anytls_node_with_reality() {
+    let mut value = draft(anytls());
+    value.tls = Some(TlsConfig::Reality {
+        server_name: "edge.example.com".to_owned(),
+        public_key: "key".to_owned(),
+        short_id: None,
+        fingerprint: None,
+        alpn: Vec::new(),
+        spider_x: None,
+    });
+
+    let (node, _) = build(value).unwrap();
+
+    assert!(matches!(node.tls, Some(TlsConfig::Reality { .. })));
+}
+
+#[test]
+fn rejects_a_transport_for_anytls() {
+    let mut value = anytls_draft();
+    value.transport = Some(TransportConfig::Tcp);
+
+    assert_eq!(
+        build(value).unwrap_err(),
+        ManualNodeDraftError::AnyTlsRejectsTransport
+    );
+}
+
+#[test]
+fn rejects_anytls_without_tls_or_reality() {
+    let mut value = anytls_draft();
+    value.tls = None;
+
+    assert_eq!(
+        build(value).unwrap_err(),
+        ManualNodeDraftError::AnyTlsRequiresTls
+    );
+}
+
+#[test]
+fn rejects_an_empty_anytls_password() {
+    let mut value = anytls_draft();
+    value.credential = ManualCredentialDraft::AnyTls {
+        password: "  ".to_owned(),
+    };
+
+    assert_eq!(
+        build(value).unwrap_err(),
+        ManualNodeDraftError::MissingAnyTlsPassword
+    );
+}
+
+#[test]
 fn rejects_a_transport_for_wireguard() {
     let mut value = draft(wireguard());
     value.transport = Some(TransportConfig::Tcp);
@@ -440,6 +519,7 @@ fn every_accepted_draft_generates_a_sing_box_outbound() {
             password: "hunter2".to_owned(),
         }),
         hysteria2_draft(),
+        anytls_draft(),
         draft(ManualCredentialDraft::Socks {
             username: Some("alice".to_owned()),
             password: Some("hunter2".to_owned()),

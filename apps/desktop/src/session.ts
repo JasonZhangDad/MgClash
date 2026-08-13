@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type ProxyProtocol =
+  | "anytls"
   | "hysteria2"
   | "http"
   | "shadowsocks"
@@ -15,8 +16,8 @@ export interface NodeSummary {
   deletable: boolean;
   enabled: boolean;
   groupId: string | null;
-  /// The stream transport; Hysteria2/TUIC report their own QUIC transport and
-  /// WireGuard reports its own tunnel.
+  /// The stream transport; Hysteria2/TUIC report their own QUIC transport,
+  /// WireGuard its own tunnel, and AnyTLS its TLS session.
   transport: string;
   /// The TLS layer, or null for plaintext.
   tls: string | null;
@@ -165,7 +166,8 @@ export type ManualCredentialDraft =
       privateKey: string;
       protocol: "wireguard";
       reserved: [number, number, number] | null;
-    };
+    }
+  | { password: string; protocol: "anytls" };
 
 export type TransportDraft =
   | { type: "tcp" }

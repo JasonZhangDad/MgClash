@@ -93,6 +93,7 @@ impl ShareLinkSerializer {
                 user_pass_authority(value.username(), value.password())
             }
             StoredNodeCredential::WireGuard(value) => wireguard_authority(value, &mut query),
+            StoredNodeCredential::AnyTls(value) => encode(value.password()),
         };
         // Only VLESS and Trojan read a `type` parameter. Shadowsocks rejects
         // unknown parameters outright, and Hysteria2/TUIC carry their own QUIC
@@ -113,7 +114,7 @@ impl ShareLinkSerializer {
         }
         // Shadowsocks has no TLS layer of its own in this model; SOCKS never
         // carries TLS either, HTTP signals it through the `https` scheme
-        // rather than a query parameter, and WireGuard authenticates peers by
+        // rather than a query parameter, and `WireGuard` authenticates peers by
         // key instead of certificate, so none of the four write TLS fields here.
         if let Some(tls) = node.tls.as_ref()
             && !matches!(
@@ -189,6 +190,7 @@ const fn scheme(protocol: ProxyProtocol, has_tls: bool) -> &'static str {
         ProxyProtocol::Http if has_tls => "https",
         ProxyProtocol::Http => "http",
         ProxyProtocol::WireGuard => "wireguard",
+        ProxyProtocol::AnyTls => "anytls",
     }
 }
 
@@ -370,7 +372,7 @@ fn tuic_authority(credential: &TuicCredential, query: &mut Query) -> String {
     )
 }
 
-/// The private key is the userinfo; everything else WireGuard needs has no
+/// The private key is the userinfo; everything else `WireGuard` needs has no
 /// natural home in the authority, so it all becomes query parameters.
 fn wireguard_authority(credential: &WireGuardCredential, query: &mut Query) -> String {
     query.set("publickey", credential.peer_public_key());
@@ -471,8 +473,12 @@ fn write_tls(protocol: ProxyProtocol, tls: &TlsConfig, query: &mut Query) {
             pinned_sha256,
         } => {
             // Hysteria2 and TUIC are TLS by definition and their parsers
-            // reject `security`.
-            if !matches!(protocol, ProxyProtocol::Hysteria2 | ProxyProtocol::Tuic) {
+            // reject `security`. AnyTLS defaults `security` to `tls` when the
+            // link omits it, so a plain TLS node round-trips without it too.
+            if !matches!(
+                protocol,
+                ProxyProtocol::Hysteria2 | ProxyProtocol::Tuic | ProxyProtocol::AnyTls
+            ) {
                 query.set("security", "tls");
             }
             if let Some(server_name) = server_name {

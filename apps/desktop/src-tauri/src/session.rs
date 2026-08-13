@@ -181,9 +181,9 @@ const fn system_proxy_mode_name(mode: &SystemProxyMode) -> &'static str {
     }
 }
 
-/// Hysteria2 and TUIC carry their own QUIC transport, and WireGuard is its own
-/// tunnel; the model stores `None` for all three, so the protocol decides
-/// which label a missing transport gets.
+/// Hysteria2 and TUIC carry their own QUIC transport, WireGuard is its own
+/// tunnel, and AnyTLS is TLS from the first byte; the model stores `None` for
+/// all three, so the protocol decides which label a missing transport gets.
 const fn transport_name(protocol: ProxyProtocol, transport: Option<&TransportConfig>) -> &'static str {
     match transport {
         Some(TransportConfig::Tcp) => "tcp",
@@ -192,6 +192,7 @@ const fn transport_name(protocol: ProxyProtocol, transport: Option<&TransportCon
         Some(TransportConfig::Grpc { .. }) => "grpc",
         Some(TransportConfig::XHttp { .. }) => "xhttp",
         None if matches!(protocol, ProxyProtocol::WireGuard) => "wireguard",
+        None if matches!(protocol, ProxyProtocol::AnyTls) => "anytls",
         None => "quic",
     }
 }
