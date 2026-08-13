@@ -309,6 +309,33 @@ pub enum TransportConfig {
         #[serde(default)]
         mode: XhttpMode,
     },
+    /// mKCP (Xray's `kcp`/`mkcp` network), Xray-only: the pinned sing-box
+    /// 1.13.18 has no mKCP transport, so the sing-box outbound generator must
+    /// refuse this variant with a typed error rather than emit an unsupported
+    /// wire format.
+    ///
+    /// Modern Xray docs describe `header`/`seed` as superseded by `FinalMask`,
+    /// but older share links still carry them, so they are accepted and
+    /// emitted here for share-link parity; if a given Xray build rejects them
+    /// at runtime that is a server/version compatibility issue, not a bug in
+    /// this generator.
+    #[serde(rename = "kcp")]
+    Kcp {
+        #[serde(default)]
+        mtu: Option<u32>,
+        #[serde(default)]
+        tti: Option<u32>,
+        #[serde(default, rename = "uplinkCapacity")]
+        uplink_capacity: Option<u32>,
+        #[serde(default, rename = "downlinkCapacity")]
+        downlink_capacity: Option<u32>,
+        #[serde(default)]
+        congestion: bool,
+        #[serde(default, rename = "headerType")]
+        header_type: Option<String>,
+        #[serde(default)]
+        seed: Option<String>,
+    },
 }
 
 /// The XHTTP stream mode Xray negotiates with the server.

@@ -80,6 +80,9 @@ pub struct SessionDefaults {
     pub system_proxy: SystemProxyMode,
     /// When true the next connect asks the Core for multiplex / mux.
     pub mux_enabled: bool,
+    /// When true the next connect fragments the TLS `ClientHello` (v2rayN's
+    /// Fragment anti-detection toggle).
+    pub fragment_enabled: bool,
 }
 
 impl SessionDefaults {
@@ -102,6 +105,7 @@ impl SessionDefaults {
             route: route_profile_for(RoutingMode::Global),
             system_proxy: SystemProxyMode::Managed,
             mux_enabled: false,
+            fragment_enabled: false,
         }
     }
 
@@ -192,6 +196,7 @@ const fn transport_name(protocol: ProxyProtocol, transport: Option<&TransportCon
         Some(TransportConfig::HttpUpgrade { .. }) => "httpupgrade",
         Some(TransportConfig::Grpc { .. }) => "grpc",
         Some(TransportConfig::XHttp { .. }) => "xhttp",
+        Some(TransportConfig::Kcp { .. }) => "kcp",
         None if matches!(protocol, ProxyProtocol::WireGuard) => "wireguard",
         None if matches!(protocol, ProxyProtocol::AnyTls) => "anytls",
         None if matches!(protocol, ProxyProtocol::Naive) => "naive",
@@ -1416,7 +1421,8 @@ where
         .with_core(core)
         .with_local_proxies(self.defaults.socks, self.defaults.http)
         .with_clash_api_port(self.defaults.clash_api_port)
-        .with_mux(self.defaults.mux_enabled);
+        .with_mux(self.defaults.mux_enabled)
+        .with_fragment(self.defaults.fragment_enabled);
         // The two are mutually exclusive in DesktopSession, so TUN replaces
         // System Proxy rather than being layered on top of it.
         let profile = match self.tun_profile()? {
@@ -1488,6 +1494,11 @@ where
         } else {
             requirements
         };
+        let requirements = if matches!(node.transport, Some(TransportConfig::Kcp { .. })) {
+            requirements.with_kcp()
+        } else {
+            requirements
+        };
         CoreCapabilityMatrix::select(self.core_preference, requirements)
     }
 
@@ -1554,6 +1565,11 @@ where
     /// Turns Core multiplex / mux on or off for the next session.
     pub fn set_mux_enabled(&mut self, enabled: bool) {
         self.defaults.mux_enabled = enabled;
+    }
+
+    /// Turns TLS `ClientHello` fragmentation on or off for the next session.
+    pub fn set_fragment_enabled(&mut self, enabled: bool) {
+        self.defaults.fragment_enabled = enabled;
     }
 
     /// Turns TUN routing on or off for the next session.

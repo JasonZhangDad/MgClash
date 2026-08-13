@@ -62,6 +62,9 @@ where
     if profile.mux_enabled {
         runtime_profile = runtime_profile.with_mux(true);
     }
+    if profile.fragment_enabled {
+        runtime_profile = runtime_profile.with_fragment(true);
+    }
     if let Some(tun) = profile.tun.as_ref() {
         runtime_profile = runtime_profile.with_tun(tun, profile.dns_hijack);
     }
@@ -102,6 +105,9 @@ where
     }
     if profile.mux_enabled {
         runtime_profile = runtime_profile.with_mux(true);
+    }
+    if profile.fragment_enabled {
+        runtime_profile = runtime_profile.with_fragment(true);
     }
     Ok(XrayRuntimeConfigGenerator::generate(&runtime_profile)
         .map_err(|source| DesktopSessionError::XrayConfig { source })?
@@ -183,6 +189,7 @@ pub struct DesktopSessionProfile {
     dns_hijack: bool,
     system_proxy: SystemProxyMode,
     mux_enabled: bool,
+    fragment_enabled: bool,
 }
 
 impl DesktopSessionProfile {
@@ -202,6 +209,7 @@ impl DesktopSessionProfile {
             dns_hijack: false,
             system_proxy: SystemProxyMode::Unchanged,
             mux_enabled: false,
+            fragment_enabled: false,
         }
     }
 
@@ -233,6 +241,14 @@ impl DesktopSessionProfile {
     #[must_use]
     pub const fn with_mux(mut self, enabled: bool) -> Self {
         self.mux_enabled = enabled;
+        self
+    }
+
+    /// Turns on TLS `ClientHello` fragmentation (v2rayN's Fragment toggle) for
+    /// this session.
+    #[must_use]
+    pub const fn with_fragment(mut self, enabled: bool) -> Self {
+        self.fragment_enabled = enabled;
         self
     }
 

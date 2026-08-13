@@ -18,7 +18,8 @@ use serde_json::{Value, json};
 use crate::{
     DnsProfile, GeneratedCoreConfig, LocalHttpConfigGenerator, LocalHttpProfile,
     LocalSocksConfigGenerator, LocalSocksProfile, NodeCredential, XrayDnsConfigGenerator,
-    XrayOutboundConfigGenerator, XrayOutboundError, apply_xray_mux,
+    XrayOutboundConfigGenerator, XrayOutboundError, apply_xray_fragment, apply_xray_mux,
+    xray_fragment_outbound,
 };
 
 /// The pool Xray hands out fake addresses from, matching sing-box's range so a
@@ -34,6 +35,7 @@ pub struct XrayRuntimeProfile<'a> {
     http: LocalHttpProfile,
     api_port: Option<NonZeroU16>,
     mux_enabled: bool,
+    fragment_enabled: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -58,6 +60,7 @@ impl<'a> XrayRuntimeProfile<'a> {
             http: LocalHttpProfile::default(),
             api_port: None,
             mux_enabled: false,
+            fragment_enabled: false,
         }
     }
 
@@ -71,6 +74,7 @@ impl<'a> XrayRuntimeProfile<'a> {
             http: LocalHttpProfile::default(),
             api_port: None,
             mux_enabled: false,
+            fragment_enabled: false,
         }
     }
 
@@ -107,6 +111,14 @@ impl<'a> XrayRuntimeProfile<'a> {
         self.mux_enabled = enabled;
         self
     }
+
+    /// Turns on TLS `ClientHello` fragmentation (v2rayN's Fragment toggle) for
+    /// the next generated config.
+    #[must_use]
+    pub const fn with_fragment(mut self, enabled: bool) -> Self {
+        self.fragment_enabled = enabled;
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -138,8 +150,14 @@ impl XrayRuntimeConfigGenerator {
                 if profile.mux_enabled {
                     apply_xray_mux(&mut outbound, selected.credential);
                 }
+                if profile.fragment_enabled {
+                    apply_xray_fragment(&mut outbound);
+                }
                 outbound
             });
+            if profile.fragment_enabled {
+                outbounds.push(xray_fragment_outbound());
+            }
         }
         outbounds.push(json!({ "protocol": "freedom", "tag": "direct" }));
 

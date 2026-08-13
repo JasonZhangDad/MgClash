@@ -13,11 +13,22 @@ export type TransportKind =
   | "websocket"
   | "httpupgrade"
   | "xhttp"
-  | "grpc";
+  | "grpc"
+  | "kcp";
 
 export type GrpcMode = "gun" | "multi" | "guna";
 
 export type XhttpMode = "auto" | "packet-up" | "stream-up" | "stream-one";
+
+/** mKCP obfuscation header types Xray recognizes; `""` means unset/default. */
+export type KcpHeaderType =
+  | ""
+  | "none"
+  | "srtp"
+  | "utp"
+  | "wechat-video"
+  | "dtls"
+  | "wireguard";
 
 /** Every field the manual creation form can collect, as raw strings. */
 export interface ManualNodeForm {
@@ -31,6 +42,13 @@ export interface ManualNodeForm {
   grpcAuthority: string;
   grpcMode: GrpcMode;
   grpcServiceName: string;
+  kcpCongestion: boolean;
+  kcpDownlinkCapacity: string;
+  kcpHeaderType: KcpHeaderType;
+  kcpMtu: string;
+  kcpSeed: string;
+  kcpTti: string;
+  kcpUplinkCapacity: string;
   localAddress: string;
   method: string;
   mtu: string;
@@ -79,6 +97,13 @@ export const emptyManualNodeForm: ManualNodeForm = {
   grpcAuthority: "",
   grpcMode: "gun",
   grpcServiceName: "",
+  kcpCongestion: false,
+  kcpDownlinkCapacity: "",
+  kcpHeaderType: "",
+  kcpMtu: "",
+  kcpSeed: "",
+  kcpTti: "",
+  kcpUplinkCapacity: "",
   localAddress: "",
   method: "aes-256-gcm",
   mtu: "",
@@ -413,7 +438,47 @@ function buildTransport(
         type: "grpc",
       };
     }
+    case "kcp": {
+      const mtu = parseOptionalUint(form.kcpMtu);
+      if (hasError(mtu)) {
+        return { error: "mKCP mtu 必须是不小于 0 的整数" };
+      }
+      const tti = parseOptionalUint(form.kcpTti);
+      if (hasError(tti)) {
+        return { error: "mKCP tti 必须是不小于 0 的整数" };
+      }
+      const uplinkCapacity = parseOptionalUint(form.kcpUplinkCapacity);
+      if (hasError(uplinkCapacity)) {
+        return { error: "mKCP uplinkCapacity 必须是不小于 0 的整数" };
+      }
+      const downlinkCapacity = parseOptionalUint(form.kcpDownlinkCapacity);
+      if (hasError(downlinkCapacity)) {
+        return { error: "mKCP downlinkCapacity 必须是不小于 0 的整数" };
+      }
+      return {
+        congestion: form.kcpCongestion,
+        downlinkCapacity,
+        headerType: form.kcpHeaderType === "" ? null : form.kcpHeaderType,
+        mtu,
+        seed: optional(form.kcpSeed),
+        tti,
+        type: "kcp",
+        uplinkCapacity,
+      };
+    }
   }
+}
+
+/** Parses an optional non-negative integer field, or an error marker. */
+function parseOptionalUint(value: string): number | null | { error: string } {
+  if (value.trim() === "") {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return { error: "invalid" };
+  }
+  return parsed;
 }
 
 function buildTls(form: ManualNodeForm): TlsDraft | null | { error: string } {
@@ -639,6 +704,21 @@ export function formFromManualNodeDraft(draft: ManualNodeDraft): ManualNodeForm 
     form.grpcServiceName = draft.transport.serviceName;
     form.grpcMode = draft.transport.mode;
     form.grpcAuthority = draft.transport.authority ?? "";
+  } else if (draft.transport?.type === "kcp") {
+    form.transport = "kcp";
+    form.kcpMtu = draft.transport.mtu === null ? "" : String(draft.transport.mtu);
+    form.kcpTti = draft.transport.tti === null ? "" : String(draft.transport.tti);
+    form.kcpUplinkCapacity =
+      draft.transport.uplinkCapacity === null
+        ? ""
+        : String(draft.transport.uplinkCapacity);
+    form.kcpDownlinkCapacity =
+      draft.transport.downlinkCapacity === null
+        ? ""
+        : String(draft.transport.downlinkCapacity);
+    form.kcpCongestion = draft.transport.congestion;
+    form.kcpHeaderType = (draft.transport.headerType ?? "") as KcpHeaderType;
+    form.kcpSeed = draft.transport.seed ?? "";
   } else if (draft.transport?.type === "tcp") {
     form.transport = "tcp";
   }

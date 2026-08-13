@@ -8,7 +8,7 @@ use crate::{
     DnsProfile, GeneratedCoreConfig, LocalHttpConfigGenerator, LocalHttpProfile,
     LocalSocksConfigGenerator, LocalSocksProfile, NodeCredential, OutboundConfigError,
     SingBoxDnsConfigGenerator, SingBoxOutboundConfigGenerator, SingBoxTunConfigGenerator,
-    TunProfile, apply_sing_box_multiplex,
+    TunProfile, apply_sing_box_fragment, apply_sing_box_multiplex,
 };
 
 pub struct SingBoxRuntimeProfile<'a> {
@@ -21,6 +21,7 @@ pub struct SingBoxRuntimeProfile<'a> {
     tun: Option<&'a TunProfile>,
     dns_hijack: bool,
     mux_enabled: bool,
+    fragment_enabled: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -47,6 +48,7 @@ impl<'a> SingBoxRuntimeProfile<'a> {
             tun: None,
             dns_hijack: false,
             mux_enabled: false,
+            fragment_enabled: false,
         }
     }
 
@@ -62,6 +64,7 @@ impl<'a> SingBoxRuntimeProfile<'a> {
             tun: None,
             dns_hijack: false,
             mux_enabled: false,
+            fragment_enabled: false,
         }
     }
 
@@ -117,6 +120,14 @@ impl<'a> SingBoxRuntimeProfile<'a> {
         self.mux_enabled = enabled;
         self
     }
+
+    /// Turns on TLS `ClientHello` fragmentation (v2rayN's Fragment toggle) for
+    /// the next generated config.
+    #[must_use]
+    pub const fn with_fragment(mut self, enabled: bool) -> Self {
+        self.fragment_enabled = enabled;
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -148,6 +159,9 @@ impl SingBoxRuntimeConfigGenerator {
                         .clone();
                 if profile.mux_enabled {
                     apply_sing_box_multiplex(&mut outbound, selected.node.protocol_type);
+                }
+                if profile.fragment_enabled {
+                    apply_sing_box_fragment(&mut outbound);
                 }
                 outbound
             });

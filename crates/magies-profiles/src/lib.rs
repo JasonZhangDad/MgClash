@@ -84,7 +84,7 @@ pub use share_link_qr::{
 pub use share_link_serializer::{ShareLinkSerializer, ShareLinkSerializerError};
 pub use sing_box_outbound::{
     GeneratedSingBoxOutbound, NodeCredential, OutboundConfigError, SingBoxOutboundConfigGenerator,
-    apply_sing_box_multiplex,
+    apply_sing_box_fragment, apply_sing_box_multiplex,
 };
 pub use sing_box_runtime_config::{
     RuntimeConfigError, SingBoxRuntimeConfigGenerator, SingBoxRuntimeProfile,
@@ -116,10 +116,13 @@ pub use tuic::{
 };
 pub use tun_config::{SingBoxTunConfigGenerator, TunProfile, TunProfileError, TunRouteSettings};
 pub use vmess::{ParsedVmessNode, VmessCredential, VmessParseError, VmessParser, VmessSecurity};
-pub use wireguard::{ParsedWireGuardNode, WireGuardCredential, WireGuardParseError, WireGuardParser};
+pub use wireguard::{
+    ParsedWireGuardNode, WireGuardCredential, WireGuardParseError, WireGuardParser,
+};
 pub use xray_dns_config::{FAKE_DNS_SERVER, XrayDnsConfigGenerator};
 pub use xray_outbound::{
-    GeneratedXrayOutbound, XrayOutboundConfigGenerator, XrayOutboundError, apply_xray_mux,
+    FRAGMENT_OUTBOUND_TAG, GeneratedXrayOutbound, XrayOutboundConfigGenerator, XrayOutboundError,
+    apply_xray_fragment, apply_xray_mux, xray_fragment_outbound,
 };
 pub use xray_runtime_config::{
     XrayRuntimeConfigError, XrayRuntimeConfigGenerator, XrayRuntimeProfile,
@@ -356,6 +359,10 @@ pub enum VlessParseError {
     UnsupportedGrpcMode { value: String },
     #[error("unsupported VLESS XHTTP mode: {value}")]
     UnsupportedXhttpMode { value: String },
+    #[error("unsupported VLESS KCP header type: {value}")]
+    UnsupportedKcpHeaderType { value: String },
+    #[error("VLESS KCP parameter {name} must be an unsigned integer, got {value}")]
+    InvalidKcpParameter { name: &'static str, value: String },
     #[error("invalid VLESS ALPN list")]
     InvalidAlpn,
     #[error("invalid VLESS certificate pin: {value}")]
@@ -497,9 +504,69 @@ fn parse_transport(parameters: &mut QueryParameters) -> Result<TransportConfig, 
                 authority: parameters.take("authority"),
             })
         }
+        // `mkcp` is the name Xray's own docs use for the same transport;
+        // share links from either spelling must still parse.
+        "kcp" | "mkcp" => parse_kcp_settings(parameters),
         value => Err(VlessParseError::UnsupportedTransport {
             value: value.to_owned(),
         }),
+    }
+}
+
+/// Parses the mKCP query parameters shared by every sharing-URI parser that
+/// offers the transport (`mtu`, `tti`, `uplinkCapacity`, `downlinkCapacity`,
+/// `congestion`, `headerType`, `seed`).
+pub(crate) fn parse_kcp_settings(
+    parameters: &mut QueryParameters,
+) -> Result<TransportConfig, VlessParseError> {
+    let mtu = parse_optional_u32(parameters, "mtu")?;
+    let tti = parse_optional_u32(parameters, "tti")?;
+    let uplink_capacity = parse_optional_u32(parameters, "uplinkCapacity")?;
+    let downlink_capacity = parse_optional_u32(parameters, "downlinkCapacity")?;
+    let congestion = match parameters.take_non_empty("congestion")?.as_deref() {
+        None | Some("0") => false,
+        Some("1") => true,
+        Some(value) => {
+            return Err(VlessParseError::InvalidKcpParameter {
+                name: "congestion",
+                value: value.to_owned(),
+            });
+        }
+    };
+    let header_type = match parameters.take_non_empty("headerType")? {
+        None => None,
+        Some(value) => Some(validate_kcp_header_type(value)?),
+    };
+    let seed = parameters.take_non_empty("seed")?;
+    Ok(TransportConfig::Kcp {
+        mtu,
+        tti,
+        uplink_capacity,
+        downlink_capacity,
+        congestion,
+        header_type,
+        seed,
+    })
+}
+
+fn parse_optional_u32(
+    parameters: &mut QueryParameters,
+    name: &'static str,
+) -> Result<Option<u32>, VlessParseError> {
+    let Some(value) = parameters.take_non_empty(name)? else {
+        return Ok(None);
+    };
+    value
+        .parse()
+        .map(Some)
+        .map_err(|_| VlessParseError::InvalidKcpParameter { name, value })
+}
+
+/// Validates a KCP obfuscation header type against Xray's known set.
+pub(crate) fn validate_kcp_header_type(value: String) -> Result<String, VlessParseError> {
+    match value.as_str() {
+        "none" | "srtp" | "utp" | "wechat-video" | "dtls" | "wireguard" => Ok(value),
+        _ => Err(VlessParseError::UnsupportedKcpHeaderType { value }),
     }
 }
 

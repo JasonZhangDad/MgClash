@@ -16,6 +16,10 @@ const USER_ID: &str = "b0dd64e4-0fbd-4038-9139-d1f32a68a0dc";
 
 /// Every link shape the parsers accept, so the serializer is exercised against
 /// the transports, TLS layers and credential fields that actually occur.
+#[expect(
+    clippy::too_many_lines,
+    reason = "a flat list of fixture links; splitting it would not make any single case clearer"
+)]
 fn links() -> Vec<(&'static str, String)> {
     vec![
         (
@@ -41,6 +45,14 @@ fn links() -> Vec<(&'static str, String)> {
             format!("vless://{USER_ID}@edge.example.com:443?flow=xtls-rprx-vision&security=tls"),
         ),
         (
+            "vless-kcp",
+            format!(
+                "vless://{USER_ID}@edge.example.com:443?type=kcp&mtu=1350&tti=50\
+                 &uplinkCapacity=5&downlinkCapacity=20&congestion=1\
+                 &headerType=wechat-video&seed=s3cr3t#KCP"
+            ),
+        ),
+        (
             "vmess-tcp",
             format!("vmess://{USER_ID}@edge.example.com:443"),
         ),
@@ -56,6 +68,12 @@ fn links() -> Vec<(&'static str, String)> {
         (
             "trojan",
             "trojan://hunter2@edge.example.com:443?sni=www.example.com#Trojan".to_owned(),
+        ),
+        (
+            "trojan-kcp",
+            "trojan://hunter2@edge.example.com:443?type=kcp&headerType=dtls\
+             &seed=s3cr3t&sni=www.example.com#TrojanKCP"
+                .to_owned(),
         ),
         (
             "shadowsocks",
@@ -215,10 +233,7 @@ fn the_scheme_matches_what_the_parser_claims() {
         ("socks://edge.example.com:1080".to_owned(), "socks://"),
         ("http://edge.example.com:8080".to_owned(), "http://"),
         ("https://edge.example.com".to_owned(), "https://"),
-        (
-            "anytls://p@edge.example.com:443".to_owned(),
-            "anytls://",
-        ),
+        ("anytls://p@edge.example.com:443".to_owned(), "anytls://"),
     ] {
         let (node, credential) = parse(&link);
 

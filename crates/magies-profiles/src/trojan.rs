@@ -10,8 +10,8 @@ use url::Url;
 use uuid::Uuid;
 
 use super::{
-    QueryParameters, VlessParseError, decode_component, default_name, parse_port, parse_server,
-    parse_tls_with_default, parse_xhttp_mode, validate_percent_encoding,
+    QueryParameters, VlessParseError, decode_component, default_name, parse_kcp_settings,
+    parse_port, parse_server, parse_tls_with_default, parse_xhttp_mode, validate_percent_encoding,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -289,6 +289,7 @@ fn parse_transport(parameters: &mut QueryParameters) -> Result<TransportConfig, 
                 authority: parameters.take("authority"),
             })
         }
+        "kcp" | "mkcp" => parse_kcp_settings(parameters).map_err(invalid_uri),
         value => Err(TrojanParseError::UnsupportedTransport {
             value: value.to_owned(),
         }),

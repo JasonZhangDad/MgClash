@@ -58,7 +58,8 @@ impl NaiveParser {
         // `url` does not accept `naive+https` / `naive+quic` as schemes, so the
         // link is rewritten to plain `naive://` before parsing; `quic` carries
         // the meaning the compound scheme encoded.
-        let url = Url::parse(&normalized).map_err(|source| NaiveParseError::MalformedUrl { source })?;
+        let url =
+            Url::parse(&normalized).map_err(|source| NaiveParseError::MalformedUrl { source })?;
         if !matches!(url.path(), "" | "/") {
             return Err(NaiveParseError::UnexpectedPath);
         }

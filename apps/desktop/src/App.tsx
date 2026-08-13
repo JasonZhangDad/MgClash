@@ -9,6 +9,7 @@ import {
   SHADOWSOCKS_METHODS,
   usesStreamTransport,
   type GrpcMode,
+  type KcpHeaderType,
   type ManualNodeForm,
   type TransportKind,
   type XhttpMode,
@@ -3028,6 +3029,7 @@ export default function App() {
                 <option value="httpupgrade">HTTPUpgrade</option>
                 <option value="xhttp">XHTTP</option>
                 <option value="grpc">gRPC</option>
+                <option value="kcp">mKCP</option>
               </select>
             </label>
           )}
@@ -3139,6 +3141,107 @@ export default function App() {
                       updateCreateForm({ grpcAuthority: event.target.value })
                     }
                   />
+                </label>
+              </>
+            )}
+
+          {usesStreamTransport(createForm.protocol) &&
+            createForm.transport === "kcp" && (
+              <>
+                <label>
+                  mtu
+                  <input
+                    aria-label={t("mKCP mtu")}
+                    placeholder={t("留空表示使用默认")}
+                    value={createForm.kcpMtu}
+                    disabled={busy || connected}
+                    onChange={(event) =>
+                      updateCreateForm({ kcpMtu: event.target.value })
+                    }
+                  />
+                </label>
+                <label>
+                  tti
+                  <input
+                    aria-label={t("mKCP tti")}
+                    placeholder={t("留空表示使用默认")}
+                    value={createForm.kcpTti}
+                    disabled={busy || connected}
+                    onChange={(event) =>
+                      updateCreateForm({ kcpTti: event.target.value })
+                    }
+                  />
+                </label>
+                <label>
+                  uplinkCapacity
+                  <input
+                    aria-label={t("mKCP uplinkCapacity")}
+                    placeholder={t("留空表示使用默认")}
+                    value={createForm.kcpUplinkCapacity}
+                    disabled={busy || connected}
+                    onChange={(event) =>
+                      updateCreateForm({ kcpUplinkCapacity: event.target.value })
+                    }
+                  />
+                </label>
+                <label>
+                  downlinkCapacity
+                  <input
+                    aria-label={t("mKCP downlinkCapacity")}
+                    placeholder={t("留空表示使用默认")}
+                    value={createForm.kcpDownlinkCapacity}
+                    disabled={busy || connected}
+                    onChange={(event) =>
+                      updateCreateForm({
+                        kcpDownlinkCapacity: event.target.value,
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  {t("伪装类型")}
+                  <select
+                    aria-label={t("mKCP 伪装类型")}
+                    value={createForm.kcpHeaderType}
+                    disabled={busy || connected}
+                    onChange={(event) =>
+                      updateCreateForm({
+                        kcpHeaderType: event.target.value as KcpHeaderType,
+                      })
+                    }
+                  >
+                    <option value="">{t("默认")}</option>
+                    <option value="none">none</option>
+                    <option value="srtp">srtp</option>
+                    <option value="utp">utp</option>
+                    <option value="wechat-video">wechat-video</option>
+                    <option value="dtls">dtls</option>
+                    <option value="wireguard">wireguard</option>
+                  </select>
+                </label>
+                <label>
+                  seed
+                  <input
+                    aria-label={t("mKCP seed")}
+                    placeholder={t("留空表示不使用")}
+                    value={createForm.kcpSeed}
+                    disabled={busy || connected}
+                    onChange={(event) =>
+                      updateCreateForm({ kcpSeed: event.target.value })
+                    }
+                  />
+                </label>
+                <label>
+                  <input
+                    aria-label={t("mKCP 拥塞控制")}
+                    type="checkbox"
+                    checked={createForm.kcpCongestion}
+                    disabled={busy || connected}
+                    onChange={(event) =>
+                      updateCreateForm({ kcpCongestion: event.target.checked })
+                    }
+                  />
+                  {t("启用拥塞控制")}
                 </label>
               </>
             )}
@@ -4083,6 +4186,23 @@ export default function App() {
             </label>
             <p className="hint">
               {t("sing-box 使用 h2mux；Xray 使用 mux。含 Vision flow 的 VLESS 与 Hysteria2 / TUIC 会自动跳过。")}
+            </p>
+            <label className="checkbox-label">
+              <input
+                aria-label={t("启用 Fragment")}
+                type="checkbox"
+                checked={settings.fragmentEnabled}
+                disabled={busy || connected}
+                onChange={(event) =>
+                  void onChangeSettings({
+                    fragmentEnabled: event.target.checked,
+                  })
+                }
+              />
+              {t("启用 Fragment 反检测（下次连接生效）")}
+            </label>
+            <p className="hint">
+              {t("将 TLS ClientHello 拆分发送以规避基于明文特征的检测；sing-box 使用 TLS fragment/record_fragment，Xray 使用 freedom fragment 出站。仅对含 TLS 握手的节点生效。")}
             </p>
             <label className="checkbox-label">
               <input

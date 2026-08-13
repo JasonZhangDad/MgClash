@@ -141,6 +141,46 @@ fn accepts_root_path_raw_alias_explicit_none_and_tcp_header_none() {
 }
 
 #[test]
+fn parses_kcp_and_mkcp_transports() {
+    let kcp = TrojanParser
+        .parse(&format!(
+            "trojan://{PASSWORD}@edge.example.com:443?type=kcp\
+             &mtu=1350&headerType=dtls&seed=s3cr3t&security=none#KCP"
+        ))
+        .unwrap();
+    assert_eq!(
+        kcp.transport(),
+        &TransportConfig::Kcp {
+            mtu: Some(1350),
+            tti: None,
+            uplink_capacity: None,
+            downlink_capacity: None,
+            congestion: false,
+            header_type: Some("dtls".to_owned()),
+            seed: Some("s3cr3t".to_owned()),
+        }
+    );
+
+    let mkcp = TrojanParser
+        .parse(&format!(
+            "trojan://{PASSWORD}@edge.example.com:443?type=mkcp&security=none#mKCP"
+        ))
+        .unwrap();
+    assert_eq!(
+        mkcp.transport(),
+        &TransportConfig::Kcp {
+            mtu: None,
+            tti: None,
+            uplink_capacity: None,
+            downlink_capacity: None,
+            congestion: false,
+            header_type: None,
+            seed: None,
+        }
+    );
+}
+
+#[test]
 fn rejects_invalid_identity_endpoint_and_path_fields() {
     let cases = [
         "vless://password@example.com:443".to_owned(),
@@ -185,8 +225,8 @@ fn rejects_duplicate_unknown_and_unsupported_transport_fields() {
             "trojan://{PASSWORD}@example.com:443?unknown=value"
         ))
         .unwrap_err();
-    let kcp = TrojanParser
-        .parse(&format!("trojan://{PASSWORD}@example.com:443?type=kcp"))
+    let unsupported_transport = TrojanParser
+        .parse(&format!("trojan://{PASSWORD}@example.com:443?type=quic"))
         .unwrap_err();
     let tcp_header = TrojanParser
         .parse(&format!(
@@ -207,8 +247,8 @@ fn rejects_duplicate_unknown_and_unsupported_transport_fields() {
         } if name == "unknown"
     ));
     assert!(matches!(
-        &kcp,
-        TrojanParseError::UnsupportedTransport { value } if value == "kcp"
+        &unsupported_transport,
+        TrojanParseError::UnsupportedTransport { value } if value == "quic"
     ));
     assert!(matches!(
         &tcp_header,

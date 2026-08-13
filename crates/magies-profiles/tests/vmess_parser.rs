@@ -148,6 +148,111 @@ fn parses_aead_ipv6_grpc_reality() {
 }
 
 #[test]
+fn parses_aead_kcp_and_mkcp_transports() {
+    let kcp = VmessParser
+        .parse(&format!(
+            "vmess://{USER_ID}@edge.example.com:443?type=kcp\
+             &mtu=1350&headerType=utp&seed=s3cr3t#KCP"
+        ))
+        .unwrap();
+    assert_eq!(
+        kcp.transport(),
+        &TransportConfig::Kcp {
+            mtu: Some(1350),
+            tti: None,
+            uplink_capacity: None,
+            downlink_capacity: None,
+            congestion: false,
+            header_type: Some("utp".to_owned()),
+            seed: Some("s3cr3t".to_owned()),
+        }
+    );
+
+    let mkcp = VmessParser
+        .parse(&format!(
+            "vmess://{USER_ID}@edge.example.com:443?type=mkcp#mKCP"
+        ))
+        .unwrap();
+    assert_eq!(
+        mkcp.transport(),
+        &TransportConfig::Kcp {
+            mtu: None,
+            tti: None,
+            uplink_capacity: None,
+            downlink_capacity: None,
+            congestion: false,
+            header_type: None,
+            seed: None,
+        }
+    );
+}
+
+#[test]
+fn parses_legacy_kcp_transport_with_header_and_seed_from_type_and_path() {
+    let value = json!({
+        "v": "2",
+        "add": "edge.example.com",
+        "port": 443,
+        "id": USER_ID,
+        "net": "kcp",
+        "type": "wechat-video",
+        "path": "s3cr3t"
+    });
+    let parsed = VmessParser.parse(&legacy_uri(&value)).unwrap();
+
+    assert_eq!(
+        parsed.transport(),
+        &TransportConfig::Kcp {
+            mtu: None,
+            tti: None,
+            uplink_capacity: None,
+            downlink_capacity: None,
+            congestion: false,
+            header_type: Some("wechat-video".to_owned()),
+            seed: Some("s3cr3t".to_owned()),
+        }
+    );
+
+    let mkcp = json!({
+        "v": "2",
+        "add": "edge.example.com",
+        "port": 443,
+        "id": USER_ID,
+        "net": "mkcp",
+    });
+    let parsed = VmessParser.parse(&legacy_uri(&mkcp)).unwrap();
+    assert_eq!(
+        parsed.transport(),
+        &TransportConfig::Kcp {
+            mtu: None,
+            tti: None,
+            uplink_capacity: None,
+            downlink_capacity: None,
+            congestion: false,
+            header_type: None,
+            seed: None,
+        }
+    );
+}
+
+#[test]
+fn rejects_an_invalid_legacy_kcp_header_type() {
+    let value = json!({
+        "v": "2",
+        "add": "edge.example.com",
+        "port": 443,
+        "id": USER_ID,
+        "net": "kcp",
+        "type": "bogus"
+    });
+    let error = VmessParser.parse(&legacy_uri(&value)).unwrap_err();
+    assert!(matches!(
+        &error,
+        VmessParseError::UnsupportedKcpHeaderType { value } if value == "bogus"
+    ));
+}
+
+#[test]
 fn parses_v2rayn_legacy_json_with_string_fields() {
     let parsed = VmessParser
         .parse(&legacy_uri(&default_legacy_node()))
@@ -303,7 +408,7 @@ fn rejects_legacy_values_that_cannot_be_represented_losslessly() {
         ),
         (
             "unsupported transport",
-            json!({"v": "2", "add": "example.com", "port": 443, "id": USER_ID, "net": "kcp"}),
+            json!({"v": "2", "add": "example.com", "port": 443, "id": USER_ID, "net": "quic"}),
         ),
         (
             "unsupported tcp header",
@@ -327,7 +432,7 @@ fn rejects_legacy_values_that_cannot_be_represented_losslessly() {
     ));
     assert!(matches!(
         &errors[1],
-        VmessParseError::UnsupportedTransport { value } if value == "kcp"
+        VmessParseError::UnsupportedTransport { value } if value == "quic"
     ));
     assert!(matches!(
         &errors[2],

@@ -153,6 +153,53 @@ pub fn apply_xray_mux(outbound: &mut Value, credential: NodeCredential<'_>) {
     });
 }
 
+/// The tag of the freedom outbound that fragments the TLS `ClientHello`,
+/// matching v2rayN's Fragment toggle.
+pub const FRAGMENT_OUTBOUND_TAG: &str = "fragment";
+
+/// Builds the freedom outbound that fragments the TLS `ClientHello`.
+///
+/// v2rayN's own values: split only the initial `tlshello` packet into pieces
+/// of 100-200 bytes, spaced 10-20ms apart.
+#[must_use]
+pub fn xray_fragment_outbound() -> Value {
+    json!({
+        "tag": FRAGMENT_OUTBOUND_TAG,
+        "protocol": "freedom",
+        "settings": {
+            "fragment": {
+                "packets": "tlshello",
+                "length": "100-200",
+                "interval": "10-20"
+            }
+        }
+    })
+}
+
+/// Routes the proxy outbound's dialer through the fragment outbound.
+///
+/// Unlike sing-box's TLS-field fragment, Xray's freedom fragment outbound
+/// only recognizes the `tlshello` packet marker regardless of the proxy
+/// outbound's own transport, so this applies unconditionally rather than
+/// checking for a TLS block first.
+///
+/// # Panics
+///
+/// Never panics: `streamSettings` is set to an object on the line right
+/// above the `expect`, so the object cast always succeeds.
+pub fn apply_xray_fragment(outbound: &mut Value) {
+    if !outbound["streamSettings"].is_object() {
+        outbound["streamSettings"] = json!({});
+    }
+    let stream = outbound["streamSettings"]
+        .as_object_mut()
+        .expect("streamSettings was just ensured to be an object");
+    if !stream.get("sockopt").is_some_and(Value::is_object) {
+        stream.insert("sockopt".to_owned(), json!({}));
+    }
+    stream["sockopt"]["dialerProxy"] = Value::String(FRAGMENT_OUTBOUND_TAG.to_owned());
+}
+
 fn vless_settings(node: &ProxyNode, credential: &VlessCredential) -> Value {
     let mut user = json!({
         "id": credential.user_id().to_string(),
@@ -249,6 +296,41 @@ fn stream_settings(node: &ProxyNode) -> Result<Value, XrayOutboundError> {
             }
             settings["mode"] = Value::String(xhttp_mode_name(*mode).to_owned());
             stream["xhttpSettings"] = settings;
+        }
+        TransportConfig::Kcp {
+            mtu,
+            tti,
+            uplink_capacity,
+            downlink_capacity,
+            congestion,
+            header_type,
+            seed,
+        } => {
+            // Classic `kcpSettings` shape: widely accepted by Xray builds.
+            // Modern Xray docs mark `header`/`seed` as superseded by
+            // FinalMask, but older share links still carry them, so they are
+            // still emitted here for parity; a build that rejects them at
+            // runtime is a server/version mismatch, not a generator bug.
+            let mut settings = json!({ "congestion": congestion });
+            if let Some(mtu) = mtu {
+                settings["mtu"] = json!(mtu);
+            }
+            if let Some(tti) = tti {
+                settings["tti"] = json!(tti);
+            }
+            if let Some(uplink_capacity) = uplink_capacity {
+                settings["uplinkCapacity"] = json!(uplink_capacity);
+            }
+            if let Some(downlink_capacity) = downlink_capacity {
+                settings["downlinkCapacity"] = json!(downlink_capacity);
+            }
+            settings["header"] = json!({
+                "type": header_type.as_deref().unwrap_or("none"),
+            });
+            if let Some(seed) = seed {
+                settings["seed"] = Value::String(seed.clone());
+            }
+            stream["kcpSettings"] = settings;
         }
     }
 
@@ -347,6 +429,7 @@ const fn network_name(transport: &TransportConfig) -> &'static str {
         TransportConfig::HttpUpgrade { .. } => "httpupgrade",
         TransportConfig::Grpc { .. } => "grpc",
         TransportConfig::XHttp { .. } => "xhttp",
+        TransportConfig::Kcp { .. } => "kcp",
     }
 }
 

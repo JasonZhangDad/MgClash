@@ -254,6 +254,58 @@ fn serialize_vmess(
         .ok_or(ShareLinkSerializerError::MissingTransport {
             protocol: ProxyProtocol::Vmess,
         })?;
+    write_legacy_vmess_transport(transport, &mut document)?;
+    match node.tls.as_ref() {
+        None => document["tls"] = Value::String("none".to_owned()),
+        Some(TlsConfig::Tls {
+            server_name,
+            allow_insecure,
+            alpn,
+            fingerprint,
+            pinned_sha256,
+        }) => {
+            // `pcs` exists in the document but the parser rejects it, so a
+            // pinned VMess node cannot be read back from this form.
+            if pinned_sha256.is_some() {
+                return Err(ShareLinkSerializerError::UnrepresentableVmessTls);
+            }
+            document["tls"] = Value::String("tls".to_owned());
+            if let Some(server_name) = server_name {
+                document["sni"] = Value::String(server_name.clone());
+            }
+            if *allow_insecure {
+                document["insecure"] = Value::String("1".to_owned());
+            }
+            if !alpn.is_empty() {
+                document["alpn"] = Value::String(alpn.join(","));
+            }
+            if let Some(fingerprint) = fingerprint {
+                document["fp"] = Value::String(fingerprint.clone());
+            }
+        }
+        // Reality has no representation in the VMess document at all.
+        Some(TlsConfig::Reality { .. }) => {
+            return Err(ShareLinkSerializerError::UnrepresentableVmessTls);
+        }
+    }
+
+    let payload = serde_json::to_vec(&document)
+        .map_err(|_| ShareLinkSerializerError::UnrepresentableVmessTls)?;
+    Ok(format!(
+        "vmess://{}",
+        general_purpose::STANDARD.encode(payload)
+    ))
+}
+
+/// Writes a node's transport into the legacy `VMess` JSON document.
+///
+/// What the document cannot express is refused rather than dropped: the
+/// parser reading it back would produce a different node, which is worse
+/// than an error at export time.
+fn write_legacy_vmess_transport(
+    transport: &TransportConfig,
+    document: &mut Value,
+) -> Result<(), ShareLinkSerializerError> {
     match transport {
         TransportConfig::Tcp => document["net"] = Value::String("tcp".to_owned()),
         TransportConfig::WebSocket { path, host } => {
@@ -295,47 +347,64 @@ fn serialize_vmess(
                 document["host"] = Value::String(host.clone());
             }
         }
-    }
-    match node.tls.as_ref() {
-        None => document["tls"] = Value::String("none".to_owned()),
-        Some(TlsConfig::Tls {
-            server_name,
-            allow_insecure,
-            alpn,
-            fingerprint,
-            pinned_sha256,
-        }) => {
-            // `pcs` exists in the document but the parser rejects it, so a
-            // pinned VMess node cannot be read back from this form.
-            if pinned_sha256.is_some() {
-                return Err(ShareLinkSerializerError::UnrepresentableVmessTls);
-            }
-            document["tls"] = Value::String("tls".to_owned());
-            if let Some(server_name) = server_name {
-                document["sni"] = Value::String(server_name.clone());
-            }
-            if *allow_insecure {
-                document["insecure"] = Value::String("1".to_owned());
-            }
-            if !alpn.is_empty() {
-                document["alpn"] = Value::String(alpn.join(","));
-            }
-            if let Some(fingerprint) = fingerprint {
-                document["fp"] = Value::String(fingerprint.clone());
-            }
-        }
-        // Reality has no representation in the VMess document at all.
-        Some(TlsConfig::Reality { .. }) => {
-            return Err(ShareLinkSerializerError::UnrepresentableVmessTls);
+        TransportConfig::Kcp {
+            mtu,
+            tti,
+            uplink_capacity,
+            downlink_capacity,
+            congestion,
+            header_type,
+            seed,
+        } => {
+            write_legacy_vmess_kcp(
+                *mtu,
+                *tti,
+                *uplink_capacity,
+                *downlink_capacity,
+                *congestion,
+                header_type.as_deref(),
+                seed.as_deref(),
+                document,
+            )?;
         }
     }
+    Ok(())
+}
 
-    let payload = serde_json::to_vec(&document)
-        .map_err(|_| ShareLinkSerializerError::UnrepresentableVmessTls)?;
-    Ok(format!(
-        "vmess://{}",
-        general_purpose::STANDARD.encode(payload)
-    ))
+/// Writes a KCP transport into the legacy `VMess` JSON document.
+///
+/// The document only has room for `type` (header) and `path` (seed),
+/// matching the v2rayN convention the parser reads back; the numeric knobs
+/// have no field and would silently vanish, so they are rejected instead of
+/// lying about a round trip.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one argument per KCP field, mirroring the transport variant's own shape"
+)]
+fn write_legacy_vmess_kcp(
+    mtu: Option<u32>,
+    tti: Option<u32>,
+    uplink_capacity: Option<u32>,
+    downlink_capacity: Option<u32>,
+    congestion: bool,
+    header_type: Option<&str>,
+    seed: Option<&str>,
+    document: &mut Value,
+) -> Result<(), ShareLinkSerializerError> {
+    if mtu.is_some()
+        || tti.is_some()
+        || uplink_capacity.is_some()
+        || downlink_capacity.is_some()
+        || congestion
+    {
+        return Err(ShareLinkSerializerError::UnrepresentableVmessTransport);
+    }
+    document["net"] = Value::String("kcp".to_owned());
+    document["type"] = Value::String(header_type.unwrap_or("none").to_owned());
+    if let Some(seed) = seed {
+        document["path"] = Value::String(seed.to_owned());
+    }
+    Ok(())
 }
 
 fn trojan_authority(credential: &TrojanCredential, query: &mut Query) -> String {
@@ -474,6 +543,38 @@ fn write_transport(transport: &TransportConfig, query: &mut Query) {
             }
             if *mode != XhttpMode::Auto {
                 query.set("mode", xhttp_mode_name(*mode));
+            }
+        }
+        TransportConfig::Kcp {
+            mtu,
+            tti,
+            uplink_capacity,
+            downlink_capacity,
+            congestion,
+            header_type,
+            seed,
+        } => {
+            query.set("type", "kcp");
+            if let Some(mtu) = mtu {
+                query.set("mtu", mtu.to_string());
+            }
+            if let Some(tti) = tti {
+                query.set("tti", tti.to_string());
+            }
+            if let Some(uplink_capacity) = uplink_capacity {
+                query.set("uplinkCapacity", uplink_capacity.to_string());
+            }
+            if let Some(downlink_capacity) = downlink_capacity {
+                query.set("downlinkCapacity", downlink_capacity.to_string());
+            }
+            if *congestion {
+                query.set("congestion", "1");
+            }
+            if let Some(header_type) = header_type {
+                query.set("headerType", header_type);
+            }
+            if let Some(seed) = seed {
+                query.set("seed", seed);
             }
         }
     }

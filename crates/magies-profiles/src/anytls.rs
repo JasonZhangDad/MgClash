@@ -275,9 +275,9 @@ fn apply_insecure(
                 security: "reality",
             })
         }
-        None if allow_insecure => Err(AnyTlsParseError::UnsupportedInsecureSecurity {
-            security: "none",
-        }),
+        None if allow_insecure => {
+            Err(AnyTlsParseError::UnsupportedInsecureSecurity { security: "none" })
+        }
         Some(TlsConfig::Reality { .. }) | None => Ok(()),
     }
 }
