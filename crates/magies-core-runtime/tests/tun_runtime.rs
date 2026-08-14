@@ -146,7 +146,7 @@ fn failed_readiness_cleans_up_the_core_and_can_be_reset() {
 #[test]
 fn polling_reports_a_core_that_exits_after_startup() {
     let address = available_address();
-    let (binary, spec) = fake_spec("listen", address.port(), Duration::from_millis(80));
+    let (binary, spec) = fake_spec("serve-once", address.port(), Duration::ZERO);
     let mut runtime = TunRuntime::default();
     runtime
         .start(target("linux", "x86_64"), &spec, address, HEALTH_TIMEOUT)

@@ -20,6 +20,18 @@ fn main() {
             let _listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
             sleep(Duration::from_millis(lifetime_ms));
         }
+        "serve-once" => {
+            let port = arguments
+                .next()
+                .expect("port is required")
+                .parse::<u16>()
+                .expect("port must be valid");
+            let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
+            // Exits only once the health probe has connected, so "the core
+            // exited after startup" is an ordering rather than a race against
+            // a sleep that a loaded runner can lose.
+            let _ = listener.accept();
+        }
         "run" => loop {
             sleep(Duration::from_secs(60));
         },
