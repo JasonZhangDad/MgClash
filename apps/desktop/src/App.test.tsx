@@ -2841,11 +2841,14 @@ describe("App", () => {
 
     expect(remove?.disabled).toBe(true);
     expect(remove?.textContent).toBe("订阅节点不可移除");
-    // Editing a node the subscription owns is not offered at all.
-    expect(
-      container.querySelector("[aria-label='节点操作 Managed Tokyo']")
-        ?.textContent,
-    ).not.toContain("编辑");
+    // Editing a node the subscription owns is not offered at all. The menu has
+    // an 编辑 group heading, so the absence has to be read off the actions.
+    const actions = [
+      ...container
+        .querySelector("[aria-label='节点操作 Managed Tokyo']")!
+        .querySelectorAll<HTMLButtonElement>("button"),
+    ].map((button) => button.textContent);
+    expect(actions).not.toContain("编辑");
   });
 
   it("adds a subscription without exposing its URL in the list", async () => {
@@ -4605,6 +4608,33 @@ describe("App", () => {
       localStorage.getItem("mgclash.columnWidths") ?? "{}",
     ) as Record<string, number>;
     expect(stored["名称"]).toBeGreaterThan(48);
+  });
+
+
+  it("groups the node menu instead of stacking thirteen items", async () => {
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    await render();
+
+    const opener = container.querySelector<HTMLButtonElement>(
+      "[aria-label='操作 Tokyo Edge']",
+    );
+    await act(async () => opener?.click());
+    const menu = container.querySelector("[aria-label='节点操作 Tokyo Edge']");
+    if (!menu) {
+      throw new Error("the node menu did not open");
+    }
+
+    const labels = [...menu.querySelectorAll(".menu-group-label")].map(
+      (entry) => entry.textContent,
+    );
+    expect(labels).toEqual(["连接", "编辑", "分享", "排序", "移除"]);
+    // Grouping is presentation: every action is still one click away.
+    const actions = [...menu.querySelectorAll("button")].map(
+      (entry) => entry.textContent,
+    );
+    expect(actions).toContain("设为活动");
+    expect(actions).toContain("显示二维码");
+    expect(actions).toContain("移除重复");
   });
 
   it("changes the main window layout from the menu", async () => {
