@@ -888,26 +888,31 @@ fn write_manifest(
     Ok(())
 }
 
+#[cfg(unix)]
 fn mark_executable(path: &Path) -> Result<(), CoreInstallError> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions = fs::metadata(path)
-            .map_err(|source| CoreInstallError::Write {
-                path: path.to_path_buf(),
-                source,
-            })?
-            .permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions).map_err(|source| CoreInstallError::Write {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path)
+        .map_err(|source| CoreInstallError::Write {
             path: path.to_path_buf(),
             source,
-        })?;
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-    }
+        })?
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).map_err(|source| CoreInstallError::Write {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+/// Windows has no execute bit; the downloaded file is runnable as it lands. The
+/// `Result` is kept so both targets share one signature and one call site.
+#[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "signature must match the Unix implementation"
+)]
+fn mark_executable(_path: &Path) -> Result<(), CoreInstallError> {
     Ok(())
 }
 
