@@ -10,12 +10,35 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-#[cfg(unix)]
 use magies_core_runtime::elevated::ElevatedCore;
 #[cfg(target_os = "macos")]
 use magies_core_runtime::elevated::OsascriptLauncher as HostElevationLauncher;
 #[cfg(all(unix, not(target_os = "macos")))]
 use magies_core_runtime::elevated::PkexecLauncher as HostElevationLauncher;
+#[cfg(windows)]
+use magies_core_runtime::elevated::RunAsLauncher as HostElevationLauncher;
+
+/// The prompt this OS asks with.
+///
+/// macOS has `osascript`, a Linux desktop has polkit, and Windows has UAC —
+/// which shows a program rather than a command, so it is handed a script file
+/// the user can open and read.
+fn host_elevation_launcher(runtime_directory: &Path) -> HostElevationLauncher {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = runtime_directory;
+        HostElevationLauncher
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let _ = runtime_directory;
+        HostElevationLauncher
+    }
+    #[cfg(windows)]
+    {
+        HostElevationLauncher::new(runtime_directory.join("elevate-core.ps1"))
+    }
+}
 use magies_core_runtime::{
     CoreBinaryError, CoreBinaryRequirement, CoreOutput, Sha256Hash, Sha256HashParseError,
     SingBoxAdapter, SingBoxAdapterError, ValidatedCoreBinary, XrayAdapter, XrayAdapterError,
@@ -27,7 +50,6 @@ use magies_session::{
     CoreSessionControl, SingBoxCoreControl, SingBoxCoreSessionError, XrayCoreControl,
     XrayCoreSessionError,
 };
-#[cfg(unix)]
 use magies_session::{ElevatedSingBoxControl, ElevatedSingBoxSessionError};
 use thiserror::Error;
 
@@ -149,12 +171,10 @@ impl LazySingBoxControl {
 
     /// The health port and deadline the plain control was built with, so a
     /// TUN start waits on the same readiness signal.
-    #[cfg(unix)]
     pub(crate) const fn health_address(&self) -> SocketAddr {
         self.health_address
     }
 
-    #[cfg(unix)]
     pub(crate) const fn health_timeout(&self) -> Duration {
         self.health_timeout
     }
@@ -239,12 +259,9 @@ pub struct HostCoreControl {
     /// Whether the next start needs a TUN device. Only Unix acts on it: macOS
     /// and Linux can both raise privileges themselves, so there
     /// the device belongs to root, so that start is a different one.
-    #[cfg(unix)]
     tun: bool,
-    #[cfg(unix)]
     elevated: Option<ElevatedSingBoxControl<HostElevationLauncher>>,
     /// Where the elevated Core leaves its PID and log files.
-    #[cfg(unix)]
     runtime_directory: PathBuf,
 }
 
@@ -255,11 +272,8 @@ impl HostCoreControl {
             sing_box: LazySingBoxControl::from_env(health_address, health_timeout),
             xray: LazyXrayControl::from_env(health_address, health_timeout),
             current: CoreType::SingBox,
-            #[cfg(unix)]
             tun: false,
-            #[cfg(unix)]
             elevated: None,
-            #[cfg(unix)]
             runtime_directory: std::env::temp_dir(),
         }
     }
@@ -283,29 +297,17 @@ impl HostCoreControl {
                 health_timeout,
             ),
             current: CoreType::SingBox,
-            #[cfg(unix)]
             tun: false,
-            #[cfg(unix)]
             elevated: None,
-            #[cfg(unix)]
             runtime_directory: std::env::temp_dir(),
         }
     }
 
     /// Points the elevated Core's PID and log files at the session runtime
     /// directory, where the app already writes the generated config.
-    #[cfg(unix)]
     #[must_use]
     pub fn with_runtime_directory(mut self, directory: impl Into<PathBuf>) -> Self {
         self.runtime_directory = directory.into();
-        self
-    }
-
-    /// Accepted and ignored: only Unix starts a Core it does not own, so
-    /// nowhere else is there a PID or log file to place.
-    #[cfg(not(unix))]
-    #[must_use]
-    pub fn with_runtime_directory(self, _directory: impl Into<PathBuf>) -> Self {
         self
     }
 
@@ -326,10 +328,9 @@ impl HostCoreControl {
     /// it. Adopting it makes it stoppable again — the next TUN start or
     /// disconnect ends it, both of which the user asked for. Nothing is killed
     /// here, so launching the app never asks for a password on its own.
-    #[cfg(unix)]
     pub fn reclaim_elevated_core(&mut self) -> Option<u32> {
         let mut core = ElevatedCore::new(
-            HostElevationLauncher,
+            host_elevation_launcher(&self.runtime_directory),
             self.runtime_directory.join("elevated-core.pid"),
             self.runtime_directory.join("elevated-core.log"),
         );
@@ -348,7 +349,6 @@ impl HostCoreControl {
     /// Only a sing-box TUN session does, and only where the app can raise
     /// privileges itself: the device belongs to root on macOS and needs
     /// `CAP_NET_ADMIN` on Linux. Xray has no TUN inbound to open.
-    #[cfg(unix)]
     #[must_use]
     pub const fn selects_elevated_start(&self) -> bool {
         self.tun && matches!(self.current, CoreType::SingBox)
@@ -358,7 +358,6 @@ impl HostCoreControl {
     ///
     /// The binary is resolved and pinned exactly as the plain path resolves it
     /// — running an unverified Core would be worse as root, not better.
-    #[cfg(unix)]
     fn start_elevated(&mut self, config_path: &Path) -> Result<CoreOutput, HostCoreError> {
         // The child-process control cannot own this session; stopping it here
         // keeps a Core from an earlier non-TUN session from lingering.
@@ -376,7 +375,7 @@ impl HostCoreControl {
         let control = self.elevated.insert(ElevatedSingBoxControl::new(
             binary,
             ElevatedCore::new(
-                HostElevationLauncher,
+                host_elevation_launcher(&self.runtime_directory),
                 self.runtime_directory.join("elevated-core.pid"),
                 self.runtime_directory.join("elevated-core.log"),
             ),
@@ -410,14 +409,12 @@ impl CoreSessionControl for HostCoreControl {
         )
     )]
     fn select_network_mode(&mut self, tun: bool) {
-        #[cfg(unix)]
         {
             self.tun = tun;
         }
     }
 
     fn start(&mut self, config_path: &Path) -> Result<Self::Output, Self::Error> {
-        #[cfg(unix)]
         if self.selects_elevated_start() {
             return self.start_elevated(config_path);
         }
@@ -433,17 +430,13 @@ impl CoreSessionControl for HostCoreControl {
     fn stop(&mut self) -> Result<(), Self::Error> {
         // All of them are stopped: a Core switched away from mid-session — or a
         // TUN toggled off — would otherwise be left running.
-        #[cfg(unix)]
         let elevated = match self.elevated.as_mut() {
             Some(control) => control.stop().map_err(HostCoreError::Elevated),
             None => Ok(()),
         };
         let sing_box = self.sing_box.stop().map_err(HostCoreError::SingBox);
         let xray = self.xray.stop().map_err(HostCoreError::Xray);
-        #[cfg(unix)]
-        return elevated.and(sing_box).and(xray);
-        #[cfg(not(unix))]
-        return sing_box.and(xray);
+        elevated.and(sing_box).and(xray)
     }
 }
 
@@ -453,7 +446,6 @@ pub enum HostCoreError {
     SingBox(LazySingBoxError),
     #[error(transparent)]
     Xray(LazyXrayError),
-    #[cfg(unix)]
     #[error(transparent)]
     Elevated(ElevatedSingBoxSessionError),
 }
@@ -463,7 +455,6 @@ impl HostCoreError {
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
-            #[cfg(unix)]
             Self::Elevated(error) => error.code(),
             Self::SingBox(error) => error.code(),
             Self::Xray(error) => error.code(),

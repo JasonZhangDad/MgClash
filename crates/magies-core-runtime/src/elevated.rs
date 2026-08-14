@@ -6,9 +6,14 @@
 //! and `inbound/tun[tun-in]: started at utun4` under `sudo`. No code signing
 //! and no Network Extension entitlement is involved.
 //!
-//! An elevated Core cannot be a child process the app owns: the authorization
-//! prompt runs the Core under its own privileged shell, so the app tracks it by
-//! PID file and stops it by signalling that PID.
+//! Linux wants the same thing for a different reason — the device needs
+//! `CAP_NET_ADMIN` — and Windows needs an administrator for Wintun. All three
+//! ask the desktop's own prompt (`osascript`, polkit, UAC) rather than
+//! collecting a password themselves.
+//!
+//! An elevated Core cannot be a child process the app owns: the prompt runs the
+//! Core under its own privileged shell, so the app tracks it by PID file and
+//! stops it by asking the OS about that PID.
 
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -63,6 +68,7 @@ pub trait ElevationLauncher {
 /// The macOS authorization prompt.
 pub struct OsascriptLauncher;
 
+#[cfg(unix)]
 impl ElevationLauncher for OsascriptLauncher {
     fn launch(&self, script: &str) -> Result<(), ElevatedCoreError> {
         // The inner script is embedded in AppleScript source, so its quotes and
@@ -86,6 +92,138 @@ impl ElevationLauncher for OsascriptLauncher {
         } else {
             ElevatedCoreError::LaunchRejected { message }
         })
+    }
+}
+
+/// What the UAC prompt runs, as one PowerShell line.
+///
+/// Windows has no equivalent of the Unix script above: the Core is started by
+/// `Start-Process`, which reports the PID the app then tracks. Standard error
+/// is the stream sing-box logs to, so that is the file the log panel follows;
+/// standard output goes beside it, because `Start-Process` refuses to point
+/// both redirections at one file.
+#[must_use]
+pub fn windows_elevation_script(
+    binary: &Path,
+    config: &Path,
+    pid_file: &Path,
+    log_file: &Path,
+) -> String {
+    let mut standard_output = log_file.as_os_str().to_owned();
+    standard_output.push(".out");
+    format!(
+        "$p = Start-Process -FilePath {} -ArgumentList 'run','-c',{} -RedirectStandardError {} -RedirectStandardOutput {} -WindowStyle Hidden -PassThru; $p.Id | Out-File -Encoding ascii {}",
+        powershell_quote(binary),
+        powershell_quote(config),
+        powershell_quote(log_file),
+        powershell_quote(Path::new(&standard_output)),
+        powershell_quote(pid_file),
+    )
+}
+
+/// Quotes one path for PowerShell, which escapes a single quote by doubling it.
+fn powershell_quote(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "''"))
+}
+
+/// What `taskkill` is asked to do.
+///
+/// Asked politely first: a forced kill skips the Core's own shutdown, and on
+/// Windows that shutdown is what takes the TUN routes back out.
+#[must_use]
+pub fn taskkill_arguments(pid: u32, force: bool) -> Vec<String> {
+    let mut arguments = vec!["/PID".to_owned(), pid.to_string(), "/T".to_owned()];
+    if force {
+        arguments.push("/F".to_owned());
+    }
+    arguments
+}
+
+/// What `tasklist` is asked, to learn whether a PID is still a process.
+#[must_use]
+pub fn tasklist_arguments(pid: u32) -> Vec<String> {
+    vec![
+        "/FI".to_owned(),
+        format!("PID eq {pid}"),
+        "/NH".to_owned(),
+        "/FO".to_owned(),
+        "CSV".to_owned(),
+    ]
+}
+
+/// Whether `tasklist` answered with the process rather than with its
+/// "no tasks" sentence.
+///
+/// The PID is read out of its own CSV column: a substring search would also
+/// match a memory figure that happens to contain the digits.
+#[must_use]
+pub fn parse_tasklist_output(output: &str, pid: u32) -> bool {
+    output.lines().any(|line| {
+        line.split(',')
+            .nth(1)
+            .is_some_and(|column| column.trim().trim_matches('"').parse() == Ok(pid))
+    })
+}
+
+/// Maps what PowerShell says about a refused elevation.
+#[must_use]
+pub fn runas_error(message: &str) -> ElevatedCoreError {
+    if message.contains("canceled by the user") || message.contains("cancelled by the user") {
+        ElevatedCoreError::AuthorizationDeclined
+    } else {
+        ElevatedCoreError::LaunchRejected {
+            message: message.trim().to_owned(),
+        }
+    }
+}
+
+/// The UAC prompt.
+///
+/// The script is written to a file and run by an elevated PowerShell rather
+/// than passed as a nested command line: UAC shows the user a program, not a
+/// command, so a script they can open and read is the only readable form of
+/// what they are approving.
+#[cfg(windows)]
+pub struct RunAsLauncher {
+    script_file: PathBuf,
+}
+
+#[cfg(windows)]
+impl RunAsLauncher {
+    #[must_use]
+    pub fn new(script_file: impl Into<PathBuf>) -> Self {
+        Self {
+            script_file: script_file.into(),
+        }
+    }
+}
+
+#[cfg(windows)]
+impl ElevationLauncher for RunAsLauncher {
+    fn launch(&self, script: &str) -> Result<(), ElevatedCoreError> {
+        fs::write(&self.script_file, script).map_err(|source| {
+            ElevatedCoreError::LogUnreadable {
+                path: self.script_file.clone(),
+                source,
+            }
+        })?;
+        let output = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &format!(
+                    "Start-Process -Verb RunAs -WindowStyle Hidden -Wait -FilePath 'powershell' \
+-ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',{}",
+                    powershell_quote(&self.script_file)
+                ),
+            ])
+            .output()
+            .map_err(|source| ElevatedCoreError::LaunchFailed { source })?;
+        if output.status.success() {
+            return Ok(());
+        }
+        Err(runas_error(&String::from_utf8_lossy(&output.stderr)))
     }
 }
 
@@ -118,6 +256,7 @@ pub fn pkexec_error(code: Option<i32>, message: &str) -> ElevatedCoreError {
     }
 }
 
+#[cfg(unix)]
 impl ElevationLauncher for PkexecLauncher {
     fn launch(&self, script: &str) -> Result<(), ElevatedCoreError> {
         let output = Command::new("pkexec")
@@ -195,12 +334,11 @@ impl<L: ElevationLauncher> ElevatedCore<L> {
         // Truncated before the shell appends to it, so the panel shows this
         // session rather than replaying the last one.
         let tail = LogTail::open(&self.log_file, Arc::clone(&self.stopped))?;
-        self.launcher.launch(&elevation_script(
-            binary,
-            config,
-            &self.pid_file,
-            &self.log_file,
-        ))?;
+        #[cfg(unix)]
+        let script = elevation_script(binary, config, &self.pid_file, &self.log_file);
+        #[cfg(windows)]
+        let script = windows_elevation_script(binary, config, &self.pid_file, &self.log_file);
+        self.launcher.launch(&script)?;
         let pid = self.read_pid()?;
         self.pid = Some(pid);
         let (sender, output) = output::output_channel();
@@ -297,7 +435,7 @@ impl<L: ElevationLauncher> ElevatedCore<L> {
             let _ = fs::remove_file(&self.pid_file);
             return Ok(());
         }
-        self.launcher.launch(&format!("kill {pid}"))?;
+        self.launcher.launch(&stop_script(pid))?;
         let _ = fs::remove_file(&self.pid_file);
         Ok(())
     }
@@ -391,6 +529,7 @@ fn wait_for_exit(pid: u32) -> bool {
 }
 
 /// Whether a PID names a live process, without disturbing it.
+#[cfg(unix)]
 fn process_is_alive(pid: u32) -> bool {
     Command::new("kill")
         .arg("-0")
@@ -399,11 +538,45 @@ fn process_is_alive(pid: u32) -> bool {
         .is_ok_and(|output| output.status.success())
 }
 
+#[cfg(windows)]
+fn process_is_alive(pid: u32) -> bool {
+    Command::new("tasklist")
+        .args(tasklist_arguments(pid))
+        .output()
+        .is_ok_and(|output| parse_tasklist_output(&String::from_utf8_lossy(&output.stdout), pid))
+}
+
+/// Asks the Core to stop, without forcing it.
+#[cfg(unix)]
 fn signal_terminate(pid: u32) -> bool {
     Command::new("kill")
         .arg(pid.to_string())
         .output()
         .is_ok_and(|output| output.status.success())
+}
+
+#[cfg(windows)]
+fn signal_terminate(pid: u32) -> bool {
+    Command::new("taskkill")
+        .args(taskkill_arguments(pid, false))
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+/// What the app runs to end a Core it could not stop unprivileged.
+///
+/// The elevated process belongs to another user, so this is handed back to the
+/// prompt rather than run directly.
+#[cfg(unix)]
+fn stop_script(pid: u32) -> String {
+    format!("kill {pid}")
+}
+
+#[cfg(windows)]
+fn stop_script(pid: u32) -> String {
+    // Forced here: this is the second attempt, after the polite one either
+    // failed outright or was refused for want of privileges.
+    format!("taskkill {}", taskkill_arguments(pid, true).join(" "))
 }
 
 #[derive(Debug, Error)]
