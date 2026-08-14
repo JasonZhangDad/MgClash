@@ -8,6 +8,7 @@ import appSource from "./App.tsx?raw";
 import appHelpersSource from "./appHelpers.ts?raw";
 import cameraScannerSource from "./components/CameraScanner.tsx?raw";
 import connectionsViewSource from "./components/ConnectionsView.tsx?raw";
+import nodeContextMenuSource from "./components/NodeContextMenu.tsx?raw";
 import proxiesViewSource from "./components/ProxiesView.tsx?raw";
 import dialogSource from "./components/Dialog.tsx?raw";
 import menuBarSource from "./components/MenuBar.tsx?raw";
@@ -36,6 +37,7 @@ function usedKeys(): string[] {
     appHelpersSource,
     cameraScannerSource,
     connectionsViewSource,
+    nodeContextMenuSource,
     proxiesViewSource,
     menuBarSource,
     statusBarSource,

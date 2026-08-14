@@ -177,6 +177,7 @@ import { MsgView } from "./components/MsgView";
 import { CameraScanner } from "./components/CameraScanner";
 import { ConnectionsView } from "./components/ConnectionsView";
 import { SortableHeader } from "./components/SortableHeader";
+import { NodeContextMenu } from "./components/NodeContextMenu";
 import { ProxiesView } from "./components/ProxiesView";
 import { Dialog } from "./components/Dialog";
 
@@ -2464,197 +2465,62 @@ export default function App() {
                     const batch = checkedNodes.has(target.id)
                       ? [...checkedNodes].filter((id) => visible.has(id))
                       : [target.id];
-                    const suffix = batch.length > 1 ? ` (${batch.length})` : "";
                     return (
-                      <ul
-                        className="context-menu"
-                        role="menu"
-                        aria-label={`节点操作 ${target.name}`}
-                        style={{ left: nodeMenu.x, top: nodeMenu.y }}
-                      >
-                        <li>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            disabled={
-                              busy || selected || !target.enabled
-                            }
-                            onClick={act(() => void run(() => switchNode(target.id)))}
-                          >
-                            {t("设为活动")}
-                          </button>
-                        </li>
-                        <li>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            disabled={busy || (connected && selected)}
-                            onClick={act(() =>
-                              void run(async () => {
-                                setNodes(
-                                  await setNodeEnabled(target.id, !target.enabled),
-                                );
-                                setStatus(await loadSessionStatus());
-                              }),
-                            )}
-                          >
-                            {target.enabled ? t("禁用节点") : t("启用节点")}
-                          </button>
-                        </li>
-                        <li>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            disabled={
-                              busy ||
-                              (batch.length === 1
-                                ? !target.enabled
-                                : !batch.some((id) =>
-                                    nodes.some(
-                                      (candidate) =>
-                                        candidate.id === id && candidate.enabled,
-                                    ),
-                                  ))
-                            }
-                            onClick={act(() =>
-                              batch.length > 1
-                                ? void onTestNodes(batch)
-                                : void onTestNode(target.id),
-                            )}
-                          >
-                            {`测试延迟${suffix}`}
-                          </button>
-                        </li>
-                        <li>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            disabled={busy || !target.deletable}
-                            onClick={act(() => void onCloneNode(target.id))}
-                          >
-                            {t("克隆所选")}
-                          </button>
-                        </li>
-                        <li>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            disabled={busy}
-                            onClick={act(() =>
-                              batch.length > 1
-                                ? void onExportNodeLinks(batch)
-                                : void onExportNodeLink(target.id),
-                            )}
-                          >
-                            {`导出分享链接${suffix}`}
-                          </button>
-                        </li>
-                        <li>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            disabled={busy}
-                            onClick={act(() => void onShowNodeQrCode(target))}
-                          >
-                            {t("显示二维码")}
-                          </button>
-                        </li>
-                        <li>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            disabled={busy}
-                            onClick={act(() => onGroupNode(target))}
-                          >
-                            {t("设置分组")}
-                          </button>
-                        </li>
-                        <li>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            disabled={busy || (connected && selected)}
-                            onClick={act(() => {
-                              setFrontingNodeId(target.id);
-                              setFrontChoice(target.frontNodeId ?? "");
-                            })}
-                          >
-                            {t("前置代理")}
-                          </button>
-                        </li>
-                        <li>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            disabled={busy || !reorderable || index === 0}
-                            onClick={act(() => void onMoveNode(target.id, "up"))}
-                          >
-                            {t("上移")}
-                          </button>
-                        </li>
-                        <li>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            disabled={busy || !reorderable || index === nodes.length - 1}
-                            onClick={act(() => void onMoveNode(target.id, "down"))}
-                          >
-                            {t("下移")}
-                          </button>
-                        </li>
-                        <li>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            disabled={busy || !reorderable || nodes.length < 2}
-                            onClick={act(() => void onSortNodesByLatency())}
-                          >
-                            {t("按延迟排序")}
-                          </button>
-                        </li>
-                        {target.deletable && (
-                          <li>
-                            <button
-                              type="button"
-                              role="menuitem"
-                              disabled={busy || (connected && selected)}
-                              onClick={act(() => void onEditNode(target))}
-                            >
-                              {t("编辑")}
-                            </button>
-                          </li>
+                      <NodeContextMenu
+                        target={target}
+                        position={{ x: nodeMenu.x, y: nodeMenu.y }}
+                        batch={batch}
+                        busy={busy}
+                        connected={connected}
+                        selected={target.id === node?.id}
+                        // Reordering acts on the whole list, so it cannot follow
+                        // a filtered view.
+                        reorderable={reorderable}
+                        index={nodes.findIndex((item) => item.id === target.id)}
+                        nodeCount={nodes.length}
+                        hasEnabledInBatch={batch.some((id) =>
+                          nodes.some(
+                            (candidate) => candidate.id === id && candidate.enabled,
+                          ),
                         )}
-                        <li>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            className="danger"
-                            disabled={
-                              busy ||
-                              !target.deletable ||
-                              (connected && batch.some((id) => id === node?.id))
-                            }
-                            onClick={act(() =>
-                              batch.length > 1
-                                ? void onDeleteNodes(batch)
-                                : void onDeleteNode(target.id),
-                            )}
-                          >
-                            {target.deletable ? `移除所选${suffix}` : "订阅节点不可移除"}
-                          </button>
-                        </li>
-                        <li>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            className="danger"
-                            disabled={busy || connected}
-                            onClick={act(() => void onRemoveDuplicateNodes())}
-                          >
-                            {t("移除重复")}
-                          </button>
-                        </li>
-                      </ul>
+                        runningNodeId={node?.id ?? null}
+                        t={t}
+                        onActivate={act(() => void run(() => switchNode(target.id)))}
+                        onToggleEnabled={act(() =>
+                          void run(async () => {
+                            setNodes(await setNodeEnabled(target.id, !target.enabled));
+                            setStatus(await loadSessionStatus());
+                          }),
+                        )}
+                        onTest={act(() =>
+                          batch.length > 1
+                            ? void onTestNodes(batch)
+                            : void onTestNode(target.id),
+                        )}
+                        onClone={act(() => void onCloneNode(target.id))}
+                        onExportLinks={act(() =>
+                          batch.length > 1
+                            ? void onExportNodeLinks(batch)
+                            : void onExportNodeLink(target.id),
+                        )}
+                        onShowQrCode={act(() => void onShowNodeQrCode(target))}
+                        onGroup={act(() => onGroupNode(target))}
+                        onSetFront={act(() => {
+                          setFrontingNodeId(target.id);
+                          setFrontChoice(target.frontNodeId ?? "");
+                        })}
+                        onEdit={act(() => void onEditNode(target))}
+                        onMove={(direction) =>
+                          act(() => void onMoveNode(target.id, direction))()
+                        }
+                        onSortByLatency={act(() => void onSortNodesByLatency())}
+                        onDelete={act(() =>
+                          batch.length > 1
+                            ? void onDeleteNodes(batch)
+                            : void onDeleteNode(target.id),
+                        )}
+                        onRemoveDuplicates={act(() => void onRemoveDuplicateNodes())}
+                      />
                     );
                   })()}
 
