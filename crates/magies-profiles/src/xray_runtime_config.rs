@@ -17,6 +17,7 @@ use magies_routing::{RouteProfile, XrayRouteConfigGenerator};
 use serde_json::{Value, json};
 
 use crate::NodeGroupStrategy;
+use crate::apply_config_template;
 use crate::xray_outbound::{
     XrayOutboundConfigGenerator, XrayOutboundError, apply_xray_final_fragment, apply_xray_fragment,
     apply_xray_mux, normalize_xray_finalmask_tcp, xray_fragment_outbound_with_options,
@@ -49,6 +50,7 @@ pub struct XrayRuntimeProfile<'a> {
     fragment_enabled: bool,
     final_fragment_enabled: bool,
     udp_noise_enabled: bool,
+    template: Option<&'a Value>,
 }
 
 #[derive(Clone, Copy)]
@@ -84,6 +86,7 @@ impl<'a> XrayRuntimeProfile<'a> {
             fragment_enabled: false,
             final_fragment_enabled: false,
             udp_noise_enabled: false,
+            template: None,
         }
     }
 
@@ -102,6 +105,7 @@ impl<'a> XrayRuntimeProfile<'a> {
             fragment_enabled: false,
             final_fragment_enabled: false,
             udp_noise_enabled: false,
+            template: None,
         }
     }
 
@@ -123,6 +127,16 @@ impl<'a> XrayRuntimeProfile<'a> {
         self.socks = socks;
         self.http = http;
         Ok(self)
+    }
+
+    /// Applies a user-supplied template to the generated document.
+    ///
+    /// A JSON Merge Patch, not a replacement: see [`apply_config_template`]
+    /// and ADR 0005.
+    #[must_use]
+    pub const fn with_template(mut self, template: &'a Value) -> Self {
+        self.template = Some(template);
+        self
     }
 
     /// Exposes Xray's stats API on a loopback port.
@@ -307,6 +321,11 @@ impl XrayRuntimeConfigGenerator {
                 "probeUrl": group.probe.url(),
                 "probeInterval": group.probe.interval(),
             });
+        }
+
+        if let Some(template) = profile.template {
+            // Last, so `xray run -test` validates what the user will run.
+            apply_config_template(&mut config, template);
         }
 
         Ok(GeneratedCoreConfig::from_json(CoreType::Xray, config))

@@ -87,6 +87,7 @@ fn saved_settings_survive_a_restart() {
         fragment_enabled: true,
         udp_noise_enabled: true,
         final_fragment_enabled: true,
+        config_template: "{\"log\":{\"level\":\"debug\"}}".to_owned(),
     };
 
     {
@@ -496,4 +497,30 @@ fn an_unknown_language_is_a_typed_error() {
         store.load(),
         Err(AppSettingsStoreError::InvalidStoredValue { .. })
     ));
+}
+
+#[test]
+fn a_config_template_that_is_not_a_json_object_is_refused_on_save() {
+    let store = SqliteAppSettingsStore::open_in_memory().unwrap();
+
+    // Refused here rather than at connect: a template that cannot be a config
+    // should fail while the user is looking at the editor, not later when they
+    // press Connect and the Core rejects a document they cannot see.
+    for template in ["not json", "[1, 2]", "\"a string\""] {
+        let settings = AppSettings {
+            config_template: template.to_owned(),
+            ..AppSettings::default()
+        };
+        assert!(
+            matches!(
+                store.save(&settings),
+                Err(AppSettingsStoreError::InvalidConfigTemplate { .. })
+            ),
+            "{template} should not be storable"
+        );
+    }
+
+    // Empty means no template at all, which is the default.
+    store.save(&AppSettings::default()).unwrap();
+    assert_eq!(store.load().unwrap().config_template, "");
 }

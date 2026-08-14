@@ -243,6 +243,7 @@ const DEFAULT_SETTINGS = {
   hotkeyConnect: "Ctrl+Enter",
   hotkeyPrevious: "Ctrl+[",
   hotkeyNext: "Ctrl+]",
+  configTemplate: "",
 };
 
 const SUBSCRIPTION = {
@@ -3375,6 +3376,58 @@ describe("App", () => {
       providers: [],
       rules,
     });
+  });
+
+  it("shows the Core config template that is already saved", async () => {
+    loadAppSettingsMock.mockResolvedValue({
+      ...DEFAULT_SETTINGS,
+      configTemplate: '{"log":{"level":"debug"}}',
+    });
+    await render();
+    await act(async () => button("参数设置").click());
+
+    // Opening the panel has to show what is in force, not an empty box that
+    // reads as "no template" and saves as one.
+    const template = container.querySelector<HTMLTextAreaElement>(
+      "textarea[aria-label='Core 配置模板']",
+    );
+    expect(template?.value).toBe('{"log":{"level":"debug"}}');
+  });
+
+  it("saves a Core config template and reports one the app cannot use", async () => {
+    saveAppSettingsMock.mockResolvedValue({
+      ...DEFAULT_SETTINGS,
+      configTemplate: "{}",
+    });
+    await render();
+    await act(async () => button("参数设置").click());
+
+    const template = container.querySelector<HTMLTextAreaElement>(
+      "textarea[aria-label='Core 配置模板']",
+    );
+    expect(template).not.toBeNull();
+
+    await act(async () => {
+      type('{"log":{"level":"debug"}}', template!);
+    });
+    await act(async () => button("保存配置模板").click());
+
+    expect(saveAppSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ configTemplate: '{"log":{"level":"debug"}}' }),
+    );
+
+    // The refusal comes from the command, which is where the JSON is parsed;
+    // the panel only has to show it.
+    saveAppSettingsMock.mockRejectedValueOnce({
+      code: "settings_unavailable",
+      message: "the Core config template must be a JSON object: expected a JSON object",
+    });
+    await act(async () => {
+      type("[1,2]", template!);
+    });
+    await act(async () => button("保存配置模板").click());
+
+    expect(container.textContent).toContain("must be a JSON object");
   });
 
   it("keeps a visible error when a background refresh fails", async () => {

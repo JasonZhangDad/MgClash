@@ -229,6 +229,11 @@ export default function App() {
   const [routeDirty, setRouteDirty] = useState(false);
   const [routeRuleKind, setRouteRuleKind] = useState<RouteRuleKind>("domainSuffix");
   const [routeRuleValue, setRouteRuleValue] = useState("");
+  /// Edited as text and saved on demand: a template is not valid on most
+  /// keystrokes, so saving it on change would reject what the user is still
+  /// typing. Seeded from the saved settings, so the panel opens showing what
+  /// is in force rather than an empty box that reads as "no template".
+  const [configTemplate, setConfigTemplate] = useState("");
   const [routeRuleOutbound, setRouteRuleOutbound] =
     useState<RouteOutbound>("proxy");
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
@@ -342,6 +347,12 @@ export default function App() {
       // The layout still applies to this launch even if it cannot be stored.
     }
   }, [layout]);
+
+  useEffect(() => {
+    // Follows the saved value, which changes on load and after a save; an edit
+    // in progress is never overwritten, because nothing else moves it.
+    setConfigTemplate(settings?.configTemplate ?? "");
+  }, [settings?.configTemplate]);
 
   useEffect(() => {
     if (nodeMenu === null) {
@@ -5180,6 +5191,27 @@ export default function App() {
             <p className="hint">
               {t("在最终落地阶段拆分 TLS 记录；sing-box 使用 route-options tls_record_fragment，Xray 使用 freedom finalmask 包装代理出站。")}
             </p>
+            <label>
+              {t("Core 配置模板")}
+              <textarea
+                aria-label={t("Core 配置模板")}
+                disabled={busy}
+                rows={6}
+                placeholder={'{"log":{"level":"debug"}}'}
+                value={configTemplate}
+                onChange={(event) => setConfigTemplate(event.target.value)}
+              />
+            </label>
+            <p className="hint">
+              {t("以 JSON Merge Patch 的形式叠加在生成的配置之上：可以新增本应用不涉及的字段、改写已生成的字段，或用 null 删除它。留空表示不使用模板。保存时校验，连接时由 Core 再次校验。")}
+            </p>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void onChangeSettings({ configTemplate })}
+            >
+              {t("保存配置模板")}
+            </button>
             <label className="checkbox-label">
               <input
                 aria-label={t("启用 UDP Noise")}

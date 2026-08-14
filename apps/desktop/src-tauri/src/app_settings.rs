@@ -127,6 +127,12 @@ const ADD_FINAL_FRAGMENT_ENABLED: &str = "
     ALTER TABLE app_settings ADD COLUMN final_fragment_enabled INTEGER NOT NULL DEFAULT 0;
 ";
 
+/// Adds the user-supplied Core config template (ADR 0005). Empty by default,
+/// which means the generators produce exactly what they produced before.
+const ADD_CONFIG_TEMPLATE: &str = "
+    ALTER TABLE app_settings ADD COLUMN config_template TEXT NOT NULL DEFAULT '';
+";
+
 /// Default URL used when measuring latency through the connected node.
 pub const DEFAULT_URL_TEST_ADDRESS: &str = "https://www.gstatic.com/generate_204";
 
@@ -198,6 +204,9 @@ pub struct AppSettings {
     pub udp_noise_enabled: bool,
     /// Fragment TLS at the final landing stage (v2rayN Final tail fragmentation).
     pub final_fragment_enabled: bool,
+    /// A JSON Merge Patch applied to whatever the generators produce, or empty
+    /// for none. See ADR 0005; validated on save, not at connect.
+    pub config_template: String,
 }
 
 impl Default for AppSettings {
@@ -234,6 +243,7 @@ impl Default for AppSettings {
             fragment_enabled: false,
             udp_noise_enabled: false,
             final_fragment_enabled: false,
+            config_template: String::new(),
         }
     }
 }
@@ -244,6 +254,37 @@ pub enum AppSettingsStoreError {
     Database(#[from] rusqlite::Error),
     #[error("the application settings database contains unsupported log level `{value}`")]
     InvalidStoredValue { value: String },
+    #[error("the Core config template must be a JSON object: {message}")]
+    InvalidConfigTemplate { message: String },
+}
+
+/// Parses a stored Core config template.
+///
+/// Empty means no template. Anything else has to be a JSON **object**: a merge
+/// patch that is an array or a scalar would replace the whole document rather
+/// than patch it, which is never what someone editing a template means.
+///
+/// # Errors
+///
+/// Returns a typed error when the text is not JSON, or is JSON that is not an
+/// object.
+pub fn parse_config_template(
+    template: &str,
+) -> Result<Option<serde_json::Value>, AppSettingsStoreError> {
+    if template.trim().is_empty() {
+        return Ok(None);
+    }
+    let value: serde_json::Value = serde_json::from_str(template).map_err(|source| {
+        AppSettingsStoreError::InvalidConfigTemplate {
+            message: source.to_string(),
+        }
+    })?;
+    if !value.is_object() {
+        return Err(AppSettingsStoreError::InvalidConfigTemplate {
+            message: "expected a JSON object".to_owned(),
+        });
+    }
+    Ok(Some(value))
 }
 
 pub struct SqliteAppSettingsStore {
@@ -294,6 +335,7 @@ impl SqliteAppSettingsStore {
             ADD_FRAGMENT_ENABLED,
             ADD_UDP_NOISE_ENABLED,
             ADD_FINAL_FRAGMENT_ENABLED,
+            ADD_CONFIG_TEMPLATE,
         ] {
             if let Err(error) = connection.execute_batch(migration)
                 && !error.to_string().contains("duplicate column")
@@ -317,7 +359,7 @@ impl SqliteAppSettingsStore {
         let row = self
             .connection
             .query_row(
-                "SELECT connect_on_launch, close_to_tray, launch_at_login, core_preference, tun_enabled, log_level, system_proxy_mode, locale, socks_port, http_port, clash_api_port, mux_enabled, auto_select_lowest_latency, url_test_address, url_test_interval_seconds, url_test_tolerance_ms, allow_lan, speed_test_url, inbound_udp_enabled, def_allow_insecure, def_fingerprint, hotkey_connect, hotkey_previous, hotkey_next, fragment_enabled, udp_noise_enabled, final_fragment_enabled
+                "SELECT connect_on_launch, close_to_tray, launch_at_login, core_preference, tun_enabled, log_level, system_proxy_mode, locale, socks_port, http_port, clash_api_port, mux_enabled, auto_select_lowest_latency, url_test_address, url_test_interval_seconds, url_test_tolerance_ms, allow_lan, speed_test_url, inbound_udp_enabled, def_allow_insecure, def_fingerprint, hotkey_connect, hotkey_previous, hotkey_next, fragment_enabled, udp_noise_enabled, final_fragment_enabled, config_template
                  FROM app_settings WHERE id = 1",
                 [],
                 |row| {
@@ -349,6 +391,7 @@ impl SqliteAppSettingsStore {
                         row.get::<_, i64>(24)?,
                         row.get::<_, i64>(25)?,
                         row.get::<_, i64>(26)?,
+                        row.get::<_, String>(27)?,
                     ))
                 },
             )
@@ -381,6 +424,7 @@ impl SqliteAppSettingsStore {
             fragment_enabled,
             udp_noise_enabled,
             final_fragment_enabled,
+            config_template,
         )) = row
         else {
             return Ok(AppSettings::default());
@@ -424,6 +468,7 @@ impl SqliteAppSettingsStore {
             fragment_enabled: fragment_enabled != 0,
             udp_noise_enabled: udp_noise_enabled != 0,
             final_fragment_enabled: final_fragment_enabled != 0,
+            config_template,
         })
     }
 
@@ -431,11 +476,13 @@ impl SqliteAppSettingsStore {
     ///
     /// # Errors
     ///
-    /// Returns a typed database error when `SQLite` cannot update the row.
+    /// Returns a typed error when the Core config template is not a JSON
+    /// object, or a database error when `SQLite` cannot update the row.
     pub fn save(&self, settings: &AppSettings) -> Result<(), AppSettingsStoreError> {
+        parse_config_template(&settings.config_template)?;
         self.connection.execute(
-            "INSERT INTO app_settings (id, connect_on_launch, close_to_tray, launch_at_login, core_preference, tun_enabled, log_level, system_proxy_mode, locale, socks_port, http_port, clash_api_port, mux_enabled, auto_select_lowest_latency, url_test_address, url_test_interval_seconds, url_test_tolerance_ms, allow_lan, speed_test_url, inbound_udp_enabled, def_allow_insecure, def_fingerprint, hotkey_connect, hotkey_previous, hotkey_next, fragment_enabled, udp_noise_enabled, final_fragment_enabled)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)
+            "INSERT INTO app_settings (id, connect_on_launch, close_to_tray, launch_at_login, core_preference, tun_enabled, log_level, system_proxy_mode, locale, socks_port, http_port, clash_api_port, mux_enabled, auto_select_lowest_latency, url_test_address, url_test_interval_seconds, url_test_tolerance_ms, allow_lan, speed_test_url, inbound_udp_enabled, def_allow_insecure, def_fingerprint, hotkey_connect, hotkey_previous, hotkey_next, fragment_enabled, udp_noise_enabled, final_fragment_enabled, config_template)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)
              ON CONFLICT(id) DO UPDATE SET
                  connect_on_launch = excluded.connect_on_launch,
                  close_to_tray = excluded.close_to_tray,
@@ -463,7 +510,8 @@ impl SqliteAppSettingsStore {
                  hotkey_next = excluded.hotkey_next,
                  fragment_enabled = excluded.fragment_enabled,
                  udp_noise_enabled = excluded.udp_noise_enabled,
-                 final_fragment_enabled = excluded.final_fragment_enabled",
+                 final_fragment_enabled = excluded.final_fragment_enabled,
+                 config_template = excluded.config_template",
             params![
                 i64::from(settings.connect_on_launch),
                 i64::from(settings.close_to_tray),
@@ -492,6 +540,7 @@ impl SqliteAppSettingsStore {
                 i64::from(settings.fragment_enabled),
                 i64::from(settings.udp_noise_enabled),
                 i64::from(settings.final_fragment_enabled),
+            settings.config_template.as_str(),
             ],
         )?;
         Ok(())

@@ -1683,6 +1683,10 @@ fn set_app_settings(
                 service.set_mux_enabled(settings.mux_enabled);
                 service.set_fragment_enabled(settings.fragment_enabled);
                 service.set_final_fragment_enabled(settings.final_fragment_enabled);
+                service.set_config_template(
+                    crate::app_settings::parse_config_template(&settings.config_template)
+                        .unwrap_or_default(),
+                );
                 service.set_udp_noise_enabled(settings.udp_noise_enabled);
                 service.set_group_probe(
                     &settings.url_test_address,
@@ -2223,6 +2227,10 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         service.set_mux_enabled(settings.mux_enabled);
         service.set_fragment_enabled(settings.fragment_enabled);
         service.set_final_fragment_enabled(settings.final_fragment_enabled);
+        service.set_config_template(
+            crate::app_settings::parse_config_template(&settings.config_template)
+                .unwrap_or_default(),
+        );
         service.set_udp_noise_enabled(settings.udp_noise_enabled);
         // A probe stored by an older build could be out of range; the startup
         // path keeps the defaults rather than refusing to launch.

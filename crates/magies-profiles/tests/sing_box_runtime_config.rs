@@ -667,3 +667,35 @@ fn a_route_that_asks_nothing_about_the_traffic_does_not_sniff() {
         "{rules:?}"
     );
 }
+
+#[test]
+fn a_template_is_applied_to_the_generated_document() {
+    let parsed = ShadowsocksParser
+        .parse("ss://aes-256-gcm:proxy-secret@edge.example.com:8388")
+        .unwrap();
+    let node = shadowsocks_node(true);
+    let dns = system_dns();
+    let route = RouteProfile::new(RoutingMode::Global, Vec::new(), RouteOutbound::Proxy).unwrap();
+    let template = json!({
+        "log": { "level": "debug" },
+        "experimental": { "cache_file": { "enabled": true } },
+    });
+    let profile = SingBoxRuntimeProfile::new(
+        &node,
+        NodeCredential::from(parsed.credential()),
+        &dns,
+        &route,
+    )
+    .with_template(&template);
+
+    let generated = SingBoxRuntimeConfigGenerator::generate(&profile).unwrap();
+
+    // The template wins where it overlaps and adds what it does not, but the
+    // outbound the session actually needs is still the generator's.
+    assert_eq!(generated.json()["log"]["level"], "debug");
+    assert_eq!(
+        generated.json()["experimental"]["cache_file"]["enabled"],
+        true
+    );
+    assert_eq!(generated.json()["outbounds"][0]["type"], "shadowsocks");
+}
