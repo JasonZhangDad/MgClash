@@ -28,6 +28,7 @@ export type DialogId =
   | "import"
   | "create"
   | "settings"
+  | "config"
   | "about"
   | null;
 

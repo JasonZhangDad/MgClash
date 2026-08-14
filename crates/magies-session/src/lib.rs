@@ -317,6 +317,8 @@ pub struct DesktopSessionProfile {
     /// A user-supplied Core config template, applied to whatever the generator
     /// produced. See ADR 0005.
     config_template: Option<serde_json::Value>,
+    /// A user-edited document that replaces generation entirely. See ADR 0005.
+    config_override: Option<serde_json::Value>,
     dns_hijack: bool,
     system_proxy: SystemProxyMode,
     mux_enabled: bool,
@@ -345,6 +347,7 @@ impl DesktopSessionProfile {
             clash_api_port: None,
             tun: None,
             config_template: None,
+            config_override: None,
             dns_hijack: false,
             system_proxy: SystemProxyMode::Unchanged,
             mux_enabled: false,
@@ -366,6 +369,16 @@ impl DesktopSessionProfile {
     ) -> Self {
         self.socks = socks;
         self.http = http;
+        self
+    }
+
+    /// Replaces generation with a document the user edited.
+    ///
+    /// The template is a patch on what the app produces; an override is
+    /// instead of it.
+    #[must_use]
+    pub fn with_config_override(mut self, document: serde_json::Value) -> Self {
+        self.config_override = Some(document);
         self
     }
 
@@ -606,6 +619,55 @@ where
         Ok(credentials)
     }
 
+    /// The document a connect would hand the Core, without starting anything.
+    ///
+    /// The same code path a connect takes, so what the user is shown is what
+    /// would run — a preview assembled separately would drift from it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same typed errors a connect would fail generation with.
+    pub fn preview_config(
+        &self,
+        profile: &DesktopSessionProfile,
+    ) -> Result<serde_json::Value, DesktopSessionError<C::Error, P::Error>> {
+        self.generate_document(profile)
+    }
+
+    fn generate_document(
+        &self,
+        profile: &DesktopSessionProfile,
+    ) -> Result<serde_json::Value, DesktopSessionError<C::Error, P::Error>> {
+        if let Some(document) = profile.config_override.as_ref() {
+            // Verbatim. An override is text the user edited from the generated
+            // document; regenerating any part of it would mean showing them one
+            // config and running another.
+            return Ok(document.clone());
+        }
+        let payload = self
+            .secret_store
+            .get(&profile.node.credential_ref)
+            .map_err(|source| DesktopSessionError::Secret { source })?;
+        let credential = CredentialCodec::decode(&payload)
+            .map_err(|source| DesktopSessionError::Credential { source })?;
+        let member_credentials = self.extra_credentials(profile, &credential)?;
+        Ok(match &credential {
+            StoredNodeCredential::Custom(custom) => {
+                if profile.core != custom.core() {
+                    return Err(DesktopSessionError::CustomCoreMismatch {
+                        profile: profile.core,
+                        required: custom.core(),
+                    });
+                }
+                parse_custom_document(custom.document())?
+            }
+            _ => match profile.core {
+                CoreType::SingBox => generate_sing_box(profile, &credential, &member_credentials)?,
+                CoreType::Xray => generate_xray(profile, &credential, &member_credentials)?,
+            },
+        })
+    }
+
     /// Loads the node secret, generates and writes the configuration, starts
     /// the Core, and only then enables System Proxy.
     ///
@@ -630,28 +692,7 @@ where
             return Err(DesktopSessionError::ConflictingNetworkModes);
         }
 
-        let payload = self
-            .secret_store
-            .get(&profile.node.credential_ref)
-            .map_err(|source| DesktopSessionError::Secret { source })?;
-        let credential = CredentialCodec::decode(&payload)
-            .map_err(|source| DesktopSessionError::Credential { source })?;
-        let member_credentials = self.extra_credentials(profile, &credential)?;
-        let generated = match &credential {
-            StoredNodeCredential::Custom(custom) => {
-                if profile.core != custom.core() {
-                    return Err(DesktopSessionError::CustomCoreMismatch {
-                        profile: profile.core,
-                        required: custom.core(),
-                    });
-                }
-                parse_custom_document(custom.document())?
-            }
-            _ => match profile.core {
-                CoreType::SingBox => generate_sing_box(profile, &credential, &member_credentials)?,
-                CoreType::Xray => generate_xray(profile, &credential, &member_credentials)?,
-            },
-        };
+        let generated = self.generate_document(profile)?;
         let bytes = serde_json::to_vec(&generated)
             .map_err(|source| DesktopSessionError::Serialize { source })?;
         let path = self

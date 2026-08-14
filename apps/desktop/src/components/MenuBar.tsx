@@ -22,6 +22,7 @@ interface MenuBarProps {
   onExportPreferences: () => void;
   onImportPreferences: () => void;
   onExportProfile: () => void;
+  onViewConfig: () => void;
   onImportProfile: () => void;
   onPreviousNode: () => void;
   onNextNode: () => void;
@@ -59,6 +60,7 @@ export function MenuBar({
   onExportPreferences,
   onImportPreferences,
   onExportProfile,
+  onViewConfig,
   onImportProfile,
   onPreviousNode,
   onNextNode,
@@ -184,6 +186,9 @@ export function MenuBar({
             </button>
             <button type="button" role="menuitem" disabled={busy} onClick={onExportProfile}>
               {t("导出完整配置")}
+            </button>
+            <button type="button" role="menuitem" disabled={busy} onClick={onViewConfig}>
+              {t("查看配置")}
             </button>
             <button
               type="button"

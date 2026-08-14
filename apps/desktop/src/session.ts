@@ -91,6 +91,9 @@ export interface AppSettings {
   /// A JSON Merge Patch applied to the generated Core config, or empty for
   /// none. Parsed and validated by the settings command (ADR 0005).
   configTemplate: string;
+  /// A document that replaces generation entirely, or empty for none. The
+  /// template patches what the app produces; this is instead of it.
+  configOverride: string;
   udpNoiseEnabled: boolean;
   autoSelectLowestLatency: boolean;
   urlTestAddress: string;
@@ -405,6 +408,11 @@ export function setDnsSettings(settings: DnsSettings): Promise<SessionStatus> {
 
 export function importNode(uri: string): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_import_node", { uri });
+}
+
+/// The Core configuration the next connect would write, as text.
+export function previewCoreConfig(): Promise<string> {
+  return invoke<string>("session_preview_config");
 }
 
 export function loadAppSettings(): Promise<AppSettings> {

@@ -480,6 +480,7 @@ describe("the remaining command wrappers", () => {
     const settings: AppSettings = {
       allowLan: false,
       autoSelectLowestLatency: false,
+      configOverride: "",
       configTemplate: "",
       clashApiPort: 9_090,
       closeToTray: true,

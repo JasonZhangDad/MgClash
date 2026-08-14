@@ -48,6 +48,7 @@ import {
   importNode,
   importNodes,
   loadAppSettings,
+  previewCoreConfig,
   loadLogs,
   loadNodeDraft,
   saveAppSettings,
@@ -229,6 +230,8 @@ export default function App() {
   const [routeDirty, setRouteDirty] = useState(false);
   const [routeRuleKind, setRouteRuleKind] = useState<RouteRuleKind>("domainSuffix");
   const [routeRuleValue, setRouteRuleValue] = useState("");
+  /// The generated document, read on demand and editable into an override.
+  const [coreConfig, setCoreConfig] = useState("");
   /// Edited as text and saved on demand: a template is not valid on most
   /// keystrokes, so saving it on change would reject what the user is still
   /// typing. Seeded from the saved settings, so the panel opens showing what
@@ -2019,6 +2022,13 @@ export default function App() {
         onExportPreferences={() => void onExportPreferences()}
         onImportPreferences={() => void onImportPreferences()}
         onExportProfile={() => void onExportProfile()}
+        onViewConfig={() => {
+          setDialog("config");
+          setCoreConfig("");
+          void previewCoreConfig().then(setCoreConfig, (failure: unknown) =>
+            setError(describeFailure(failure)),
+          );
+        }}
         onImportProfile={() => void onImportProfile()}
         onPreviousNode={() => void onStepNode(-1)}
         onNextNode={() => void onStepNode(1)}
@@ -5489,6 +5499,45 @@ export default function App() {
           </div>
         )}
 
+      </Dialog>
+
+      <Dialog
+        hidden={dialog !== "config"}
+        title={t("查看配置")}
+        ariaLabel={t("查看配置")}
+        wide
+        onClose={() => setDialog(null)}
+      >
+        <p className="hint">
+          {t("这是下次连接将写给 Core 的完整配置，包含已生效的模板。编辑后保存为覆盖配置，连接时会原样使用它，不再重新生成——节点或路由改变时它不会跟着变。")}
+        </p>
+        <textarea
+          aria-label={t("生成的 Core 配置")}
+          rows={20}
+          value={coreConfig}
+          onChange={(event) => setCoreConfig(event.target.value)}
+        />
+        <div className="actions">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void onChangeSettings({ configOverride: coreConfig })}
+          >
+            {t("保存为覆盖配置")}
+          </button>
+          <button
+            type="button"
+            disabled={busy || (settings?.configOverride ?? "") === ""}
+            onClick={() => void onChangeSettings({ configOverride: "" })}
+          >
+            {t("清除覆盖配置")}
+          </button>
+        </div>
+        {(settings?.configOverride ?? "") !== "" && (
+          <p className="hint">
+            {t("覆盖配置已生效：连接使用的是这份文档，而不是生成的配置。")}
+          </p>
+        )}
       </Dialog>
 
       <Dialog

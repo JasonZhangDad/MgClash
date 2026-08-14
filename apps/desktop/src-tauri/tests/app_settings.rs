@@ -88,6 +88,7 @@ fn saved_settings_survive_a_restart() {
         udp_noise_enabled: true,
         final_fragment_enabled: true,
         config_template: "{\"log\":{\"level\":\"debug\"}}".to_owned(),
+        config_override: "{\"outbounds\":[]}".to_owned(),
     };
 
     {
@@ -523,4 +524,26 @@ fn a_config_template_that_is_not_a_json_object_is_refused_on_save() {
     // Empty means no template at all, which is the default.
     store.save(&AppSettings::default()).unwrap();
     assert_eq!(store.load().unwrap().config_template, "");
+}
+
+#[test]
+fn a_config_override_that_is_not_a_json_object_is_refused_on_save() {
+    let store = SqliteAppSettingsStore::open_in_memory().unwrap();
+
+    // The override is handed to the Core as the whole document, so it has the
+    // same shape requirement as a template — and its own error, because the
+    // two are edited in different places.
+    for document in ["not json", "[1, 2]"] {
+        let settings = AppSettings {
+            config_override: document.to_owned(),
+            ..AppSettings::default()
+        };
+        assert!(
+            matches!(
+                store.save(&settings),
+                Err(AppSettingsStoreError::InvalidConfigOverride { .. })
+            ),
+            "{document} should not be storable"
+        );
+    }
 }

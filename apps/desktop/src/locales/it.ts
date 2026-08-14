@@ -109,6 +109,14 @@ const DICTIONARY: Dictionary = {
   "缺少 Core": "Nessun Core",
   "网络": "Rete",
   "入站": "Ingresso",
+  "查看配置": "Mostra configurazione",
+  "生成的 Core 配置": "Configurazione del Core generata",
+  "保存为覆盖配置": "Salva come sostituzione",
+  "清除覆盖配置": "Rimuovi sostituzione",
+  "这是下次连接将写给 Core 的完整配置，包含已生效的模板。编辑后保存为覆盖配置，连接时会原样使用它，不再重新生成——节点或路由改变时它不会跟着变。":
+    "La configurazione completa che la prossima connessione scriverà per il Core, modello attivo compreso. Modificala e salvala come sostituzione: la connessione la userà così com'è invece di generarla, e non seguirà un cambio di nodo o di route.",
+  "覆盖配置已生效：连接使用的是这份文档，而不是生成的配置。":
+    "Una sostituzione è attiva: la connessione usa questo documento, non quello generato.",
   "Core 配置模板": "Modello di configurazione del Core",
   "保存配置模板": "Salva modello",
   "以 JSON Merge Patch 的形式叠加在生成的配置之上：可以新增本应用不涉及的字段、改写已生成的字段，或用 null 删除它。留空表示不使用模板。保存时校验，连接时由 Core 再次校验。":
