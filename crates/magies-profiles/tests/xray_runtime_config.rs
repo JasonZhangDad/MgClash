@@ -10,7 +10,7 @@ use magies_profiles::{
     ManualNodeDraft, PlainDnsTransport, StoredNodeCredential, XrayRuntimeConfigError,
     XrayRuntimeConfigGenerator, XrayRuntimeProfile,
 };
-use magies_routing::{RouteOutbound, RouteProfile, RoutingMode};
+use magies_routing::{RouteOutbound, RouteProfile, RoutingMode, RoutingRule};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -522,4 +522,33 @@ fn urltest_group_uses_a_leastping_balancer_instead_of_a_proxy_outbound() {
         .unwrap();
     assert_eq!(catch_all["balancerTag"], "proxy");
     assert!(catch_all.get("outboundTag").is_none());
+}
+
+#[test]
+fn a_blocked_rule_brings_the_blackhole_outbound_with_it() {
+    let (node, credential) = node();
+    let dns = dns(false);
+    let route = RouteProfile::new(
+        RoutingMode::Rule,
+        vec![RoutingRule::domain_suffix("ads.example", RouteOutbound::Block, 0, true).unwrap()],
+        RouteOutbound::Proxy,
+    )
+    .unwrap();
+
+    let config = generate(&XrayRuntimeProfile::new(
+        &node,
+        credential.as_node_credential(),
+        &dns,
+        &route,
+    ));
+
+    // The rule names `block`, so an outbound with that tag has to exist or Xray
+    // refuses the config.
+    let blackhole = config["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["tag"] == "block")
+        .expect("the blocked rule needs a blackhole outbound");
+    assert_eq!(blackhole["protocol"], "blackhole");
 }

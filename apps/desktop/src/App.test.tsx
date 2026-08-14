@@ -3956,6 +3956,54 @@ describe("App", () => {
     ).toEqual([expect.stringContaining("cdn.example.net")]);
   });
 
+
+  it("offers a blocked outbound for rules but not as the default", async () => {
+    setRouteSettingsMock.mockResolvedValue(IDLE);
+    await render();
+
+    const ruleOutbound = container.querySelector<HTMLSelectElement>(
+      "select[aria-label='规则出口']",
+    );
+    const setOutbound = container.querySelector<HTMLSelectElement>(
+      "select[aria-label='规则集出口']",
+    );
+    const defaultOutbound = container.querySelector<HTMLSelectElement>(
+      "select[aria-label='默认出口']",
+    );
+    const values = (select: HTMLSelectElement | null) =>
+      [...(select?.options ?? [])].map((option) => option.value);
+    expect(values(ruleOutbound)).toEqual(["proxy", "direct", "block"]);
+    expect(values(setOutbound)).toEqual(["proxy", "direct", "block"]);
+    // Blocking everything by default is not a routing mode the window offers.
+    expect(values(defaultOutbound)).toEqual(["proxy", "direct"]);
+
+    await act(async () => selectValue("block", ruleOutbound!));
+    const value = container.querySelector<HTMLInputElement>(
+      "input[aria-label='规则值']",
+    );
+    await act(async () => typeInput("ads.example", value!));
+    await act(async () => button("添加规则").click());
+
+    const rows = [
+      ...container.querySelectorAll("[aria-label='路由规则列表'] tbody tr"),
+    ];
+    expect(rows[0]?.textContent).toContain("拦截");
+
+    await act(async () => button("保存路由").click());
+    expect(setRouteSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rules: [
+          {
+            enabled: true,
+            kind: "domainSuffix",
+            outbound: "block",
+            value: "ads.example",
+          },
+        ],
+      }),
+    );
+  });
+
   it("changes the main window layout from the menu", async () => {
     await render();
 

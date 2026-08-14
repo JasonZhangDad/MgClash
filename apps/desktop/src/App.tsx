@@ -127,6 +127,7 @@ import {
   noticeWasDismissed,
   regionFlag,
   ROUTE_KIND_LABEL,
+  ROUTE_OUTBOUND_LABEL,
   runtimeOrderedRoute,
   savedLayout,
   savedTheme,
@@ -4335,6 +4336,7 @@ export default function App() {
                 >
                   <option value="proxy">{t("代理")}</option>
                   <option value="direct">{t("直连")}</option>
+                  <option value="block">{t("拦截")}</option>
                 </select>
               </label>
             </div>
@@ -4368,7 +4370,7 @@ export default function App() {
                       <td>{index + 1}</td>
                       <td>{t(ROUTE_KIND_LABEL[rule.kind])}</td>
                       <td>{rule.value}</td>
-                      <td>{rule.outbound === "proxy" ? "代理" : "直连"}</td>
+                      <td>{t(ROUTE_OUTBOUND_LABEL[rule.outbound])}</td>
                       <td>
                         <input
                           aria-label={`启用规则 ${index + 1}`}
@@ -4485,6 +4487,7 @@ export default function App() {
                 >
                   <option value="proxy">{t("代理")}</option>
                   <option value="direct">{t("直连")}</option>
+                  <option value="block">{t("拦截")}</option>
                 </select>
               </label>
             </div>
@@ -4514,7 +4517,7 @@ export default function App() {
                       <td>{provider.name}</td>
                       <td>{provider.url}</td>
                       <td>{provider.format}</td>
-                      <td>{provider.outbound === "proxy" ? t("代理") : t("直连")}</td>
+                      <td>{t(ROUTE_OUTBOUND_LABEL[provider.outbound])}</td>
                       <td>
                         <input
                           aria-label={`${t("启用规则集")} ${provider.name}`}

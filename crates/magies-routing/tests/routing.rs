@@ -266,3 +266,32 @@ fn rejects_a_rule_provider_that_is_not_a_safe_tag_or_https_source() {
         .is_err()
     );
 }
+
+#[test]
+fn a_blocked_rule_rejects_the_connection_instead_of_routing_it() {
+    // sing-box 1.11 dropped the `block` outbound in favour of a reject action,
+    // so a blocked rule names no outbound at all.
+    let rules = vec![
+        RoutingRule::domain_suffix("ads.example", RouteOutbound::Block, 0, true).unwrap(),
+        RoutingRule::domain_suffix("cn", RouteOutbound::Direct, 1, true).unwrap(),
+    ];
+    let profile = RouteProfile::new(RoutingMode::Rule, rules, RouteOutbound::Proxy).unwrap();
+    let config = SingBoxRouteConfigGenerator::generate(&profile);
+
+    assert_eq!(
+        config.json()["rules"][1],
+        json!({ "domain_suffix": [".ads.example"], "action": "reject" })
+    );
+    assert_eq!(config.json()["rules"][2]["action"], "route");
+    assert_eq!(config.json()["rules"][2]["outbound"], "direct");
+}
+
+#[test]
+fn blocking_everything_by_default_is_refused() {
+    // `final` has to name an outbound, and a profile that drops every packet is
+    // not a mode the window offers.
+    assert_eq!(
+        RouteProfile::new(RoutingMode::Rule, Vec::new(), RouteOutbound::Block).unwrap_err(),
+        RouteConfigError::BlockCannotBeFinal
+    );
+}

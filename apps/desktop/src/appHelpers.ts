@@ -1,5 +1,5 @@
 import type { PlatformSummary } from "./platform";
-import type { RouteRuleKind, RouteSettings } from "./session";
+import type { RouteOutbound, RouteRuleKind, RouteSettings } from "./session";
 import { isCommandError } from "./session";
 
 export const REFRESH_INTERVAL_MS = 3_000;
@@ -25,6 +25,13 @@ export type DialogId =
   | "settings"
   | "about"
   | null;
+
+/** How each route outbound reads in the rule tables. */
+export const ROUTE_OUTBOUND_LABEL: Record<RouteOutbound, string> = {
+  block: "拦截",
+  direct: "直连",
+  proxy: "代理",
+};
 
 export type MainLayout = "horizontal" | "vertical" | "tab";
 export type MainTab = "profiles" | "proxies" | "connections" | "msg";

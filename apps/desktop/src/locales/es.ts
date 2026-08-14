@@ -70,6 +70,7 @@ const DICTIONARY: Dictionary = {
   "尚未添加规则集": "Aún no hay conjuntos",
   "序号": "N.º",
   "当前没有连接": "Ninguna conexión ahora mismo",
+  "拦截": "Bloquear",
   "按延迟排序": "Ordenar por latencia",
   "允许来自局域网的连接": "Permitir conexiones de la LAN",
   "开启后本地 SOCKS/HTTP 监听 0.0.0.0，局域网设备可使用本机代理；Clash API 仍仅本机可访问。下次连接生效。": "Si se activa, SOCKS/HTTP escuchan en 0.0.0.0 para la LAN; la API Clash sigue solo local. Se aplica en la próxima conexión.",
