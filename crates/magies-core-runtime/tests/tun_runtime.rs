@@ -104,17 +104,21 @@ fn startup_validation_failure_enters_a_typed_failed_state() {
 }
 
 #[test]
-fn rejects_unsigned_macos_before_starting_a_core() {
+fn no_longer_refuses_macos_before_starting_a_core() {
     let address = available_address();
-    let (binary, spec) = fake_spec("run", address.port(), Duration::ZERO);
+    let (binary, spec) = fake_spec("listen", address.port(), Duration::from_secs(60));
     let mut runtime = TunRuntime::default();
 
-    assert!(matches!(
-        runtime.start(target("macos", "x86_64"), &spec, address, HEALTH_TIMEOUT),
-        Err(TunRuntimeError::UnsupportedPlatform(OperatingSystem::MacOs))
-    ));
-    assert_eq!(runtime.state(), TunState::Stopped);
-    assert_eq!(runtime.process_id(), None);
+    // macOS wants privileges, not a signature, so it runs like every other
+    // platform. The privileges themselves are the caller's problem — this
+    // state machine only stops refusing before it starts.
+    let started = runtime
+        .start(target("macos", "x86_64"), &spec, address, HEALTH_TIMEOUT)
+        .unwrap_or_else(|error| panic!("macOS TUN should start: {error}"));
+
+    assert!(started.health.ready_after <= HEALTH_TIMEOUT);
+    assert_eq!(runtime.state(), TunState::Running);
+    runtime.stop().unwrap();
     remove_file(binary).unwrap();
 }
 

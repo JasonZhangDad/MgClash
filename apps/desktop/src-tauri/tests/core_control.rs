@@ -307,3 +307,37 @@ fn stopping_an_unstarted_host_control_is_not_an_error() {
 fn address() -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], 59_999))
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn only_a_macos_sing_box_tun_start_is_elevated() {
+    let mut control = HostCoreControl::from_env(address(), Duration::from_millis(10));
+
+    // macOS opens a `utun` only for root, so that start goes behind an
+    // authorization prompt. Nothing else does: a plain session needs no
+    // password, and Xray has no TUN inbound for root to open.
+    assert!(!control.selects_elevated_start());
+
+    control.select_network_mode(true);
+    assert!(control.selects_elevated_start());
+
+    control.select_core(CoreType::Xray);
+    assert!(!control.selects_elevated_start());
+
+    control.select_core(CoreType::SingBox);
+    control.select_network_mode(false);
+    assert!(!control.selects_elevated_start());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn an_unconfigured_core_fails_the_same_way_on_the_elevated_path() {
+    let mut control = HostCoreControl::from_env(address(), Duration::from_millis(10));
+
+    // The pin is resolved before the prompt: an unverified binary would be
+    // worse as root, not better.
+    control.select_network_mode(true);
+    let error = control.start(Path::new("/nonexistent.json")).unwrap_err();
+
+    assert_eq!(error.code(), "core_not_configured");
+}

@@ -12,6 +12,7 @@
 
 use std::fs::{self, File};
 use std::io::{self, Read};
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -21,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use thiserror::Error;
 
+use crate::health::CoreHealth;
 use crate::output::{self, CoreOutput, CoreOutputStream};
 
 /// The shell the elevation prompt runs, and what it leaves behind for polling.
@@ -173,6 +175,39 @@ impl<L: ElevationLauncher> ElevatedCore<L> {
         self.pid.is_some_and(process_is_alive)
     }
 
+    /// Waits until the elevated Core accepts a TCP connection at `address`.
+    ///
+    /// Deliberately not [`crate::CoreRuntime::wait_for_tcp_health`]: that one learns
+    /// the Core died by reaping a child process, and an elevated Core is not
+    /// ours to reap. Liveness here is the PID still existing.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when the Core exits before the port opens, or
+    /// when it never opens before `timeout`.
+    pub fn wait_for_tcp_health(
+        &self,
+        address: SocketAddr,
+        timeout: Duration,
+    ) -> Result<CoreHealth, ElevatedCoreError> {
+        let started_at = Instant::now();
+        loop {
+            if !self.is_running() {
+                return Err(ElevatedCoreError::ExitedBeforeReady);
+            }
+            let remaining = timeout.saturating_sub(started_at.elapsed());
+            if remaining.is_zero() {
+                return Err(ElevatedCoreError::HealthTimedOut { address, timeout });
+            }
+            if TcpStream::connect_timeout(&address, HEALTH_ATTEMPT.min(remaining)).is_ok() {
+                return Ok(CoreHealth {
+                    ready_after: started_at.elapsed(),
+                });
+            }
+            sleep(HEALTH_RETRY.min(timeout.saturating_sub(started_at.elapsed())));
+        }
+    }
+
     /// Stops the Core, asking for privileges again when the app cannot signal
     /// it directly.
     ///
@@ -270,6 +305,10 @@ impl Read for LogTail {
     }
 }
 
+/// How long one connection attempt is given, and how long before the next.
+const HEALTH_ATTEMPT: Duration = Duration::from_millis(25);
+const HEALTH_RETRY: Duration = Duration::from_millis(20);
+
 /// How long a signalled process is given to go before privileges are asked for.
 const EXIT_GRACE: Duration = Duration::from_secs(2);
 
@@ -316,6 +355,13 @@ pub enum ElevatedCoreError {
     },
     #[error("the elevated Core wrote {value:?} instead of a process id")]
     PidMalformed { value: String },
+    #[error("the elevated Core exited before it was ready")]
+    ExitedBeforeReady,
+    #[error("the elevated Core did not open {address} within {timeout:?}")]
+    HealthTimedOut {
+        address: SocketAddr,
+        timeout: Duration,
+    },
     #[error("the elevated Core log at {} could not be read: {source}", path.display())]
     LogUnreadable {
         path: PathBuf,
@@ -329,7 +375,10 @@ impl ElevatedCoreError {
         match self {
             Self::AuthorizationDeclined => "tun_authorization_declined",
             Self::LaunchRejected { .. } | Self::LaunchFailed { .. } => "tun_elevation_failed",
-            Self::PidUnreadable { .. } | Self::PidMalformed { .. } => "tun_core_did_not_start",
+            Self::PidUnreadable { .. } | Self::PidMalformed { .. } | Self::ExitedBeforeReady => {
+                "tun_core_did_not_start"
+            }
+            Self::HealthTimedOut { .. } => "tun_core_unhealthy",
             Self::LogUnreadable { .. } => "tun_core_log_unreadable",
         }
     }

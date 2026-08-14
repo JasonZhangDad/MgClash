@@ -10,9 +10,12 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[cfg(target_os = "macos")]
+use magies_core_runtime::elevated::{ElevatedCore, OsascriptLauncher};
 use magies_core_runtime::{
     CoreBinaryError, CoreBinaryRequirement, CoreOutput, Sha256Hash, Sha256HashParseError,
-    SingBoxAdapter, SingBoxAdapterError, XrayAdapter, XrayAdapterError, locate_core_binary,
+    SingBoxAdapter, SingBoxAdapterError, ValidatedCoreBinary, XrayAdapter, XrayAdapterError,
+    locate_core_binary,
 };
 use magies_domain::CoreType;
 use magies_platform::{PlatformError, TargetPlatform};
@@ -20,6 +23,8 @@ use magies_session::{
     CoreSessionControl, SingBoxCoreControl, SingBoxCoreSessionError, XrayCoreControl,
     XrayCoreSessionError,
 };
+#[cfg(target_os = "macos")]
+use magies_session::{ElevatedSingBoxControl, ElevatedSingBoxSessionError};
 use thiserror::Error;
 
 pub const BINARY_PATH_VARIABLE: &str = "MAGIES_SING_BOX_BIN";
@@ -138,22 +143,44 @@ impl LazySingBoxControl {
         Self::new(CoreSettings::from_env(), health_address, health_timeout)
     }
 
-    fn resolve_control(&mut self) -> Result<(), LazySingBoxError> {
-        if self.control.is_some() {
-            return Ok(());
-        }
+    /// The health port and deadline the plain control was built with, so a
+    /// TUN start waits on the same readiness signal.
+    #[cfg(target_os = "macos")]
+    pub(crate) const fn health_address(&self) -> SocketAddr {
+        self.health_address
+    }
 
+    #[cfg(target_os = "macos")]
+    pub(crate) const fn health_timeout(&self) -> Duration {
+        self.health_timeout
+    }
+
+    /// Locates and verifies the pinned sing-box binary.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when the pin is unconfigured, the target is
+    /// unsupported, or the binary does not match its digest.
+    pub(crate) fn resolve_binary(&self) -> Result<ValidatedCoreBinary, LazySingBoxError> {
         let settings = self
             .settings
             .as_ref()
             .map_err(|source| LazySingBoxError::Settings(source.clone()))?;
         let target = TargetPlatform::parse(std::env::consts::OS, std::env::consts::ARCH)
             .map_err(LazySingBoxError::Target)?;
-        let binary = locate_core_binary(
+        locate_core_binary(
             &settings.binary,
             CoreBinaryRequirement::new(target.architecture(), settings.sha256),
         )
-        .map_err(|source| LazySingBoxError::Binary(Box::new(source)))?;
+        .map_err(|source| LazySingBoxError::Binary(Box::new(source)))
+    }
+
+    fn resolve_control(&mut self) -> Result<(), LazySingBoxError> {
+        if self.control.is_some() {
+            return Ok(());
+        }
+
+        let binary = self.resolve_binary()?;
         self.control = Some(SingBoxCoreControl::new(
             SingBoxAdapter::new(binary),
             self.health_address,
@@ -205,6 +232,15 @@ pub struct HostCoreControl {
     sing_box: LazySingBoxControl,
     xray: LazyXrayControl,
     current: CoreType,
+    /// Whether the next start needs a TUN device. Only macOS acts on it: there
+    /// the device belongs to root, so that start is a different one.
+    #[cfg(target_os = "macos")]
+    tun: bool,
+    #[cfg(target_os = "macos")]
+    elevated: Option<ElevatedSingBoxControl<OsascriptLauncher>>,
+    /// Where the elevated Core leaves its PID and log files.
+    #[cfg(target_os = "macos")]
+    runtime_directory: PathBuf,
 }
 
 impl HostCoreControl {
@@ -214,6 +250,12 @@ impl HostCoreControl {
             sing_box: LazySingBoxControl::from_env(health_address, health_timeout),
             xray: LazyXrayControl::from_env(health_address, health_timeout),
             current: CoreType::SingBox,
+            #[cfg(target_os = "macos")]
+            tun: false,
+            #[cfg(target_os = "macos")]
+            elevated: None,
+            #[cfg(target_os = "macos")]
+            runtime_directory: std::env::temp_dir(),
         }
     }
 
@@ -236,7 +278,26 @@ impl HostCoreControl {
                 health_timeout,
             ),
             current: CoreType::SingBox,
+            #[cfg(target_os = "macos")]
+            tun: false,
+            #[cfg(target_os = "macos")]
+            elevated: None,
+            #[cfg(target_os = "macos")]
+            runtime_directory: std::env::temp_dir(),
         }
+    }
+
+    /// Points the elevated Core's PID and log files at the session runtime
+    /// directory, where the app already writes the generated config.
+    #[must_use]
+    pub fn with_runtime_directory(mut self, directory: impl Into<PathBuf>) -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            self.runtime_directory = directory.into();
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = directory.into();
+        self
     }
 
     /// Reloads Core paths after a user-triggered install.
@@ -247,6 +308,42 @@ impl HostCoreControl {
             )));
         self.xray
             .replace_settings(crate::core_install::xray_settings_with_store(Some(install)));
+    }
+
+    /// Whether the next start needs the authorization prompt.
+    ///
+    /// Only a sing-box TUN session on macOS does: that is where the device
+    /// belongs to root. Xray has no TUN inbound to open.
+    #[cfg(target_os = "macos")]
+    #[must_use]
+    pub const fn selects_elevated_start(&self) -> bool {
+        self.tun && matches!(self.current, CoreType::SingBox)
+    }
+
+    /// Starts sing-box behind the authorization prompt a `utun` needs.
+    ///
+    /// The binary is resolved and pinned exactly as the plain path resolves it
+    /// — running an unverified Core would be worse as root, not better.
+    #[cfg(target_os = "macos")]
+    fn start_elevated(&mut self, config_path: &Path) -> Result<CoreOutput, HostCoreError> {
+        // The child-process control cannot own this session; stopping it here
+        // keeps a Core from an earlier non-TUN session from lingering.
+        self.sing_box.stop().map_err(HostCoreError::SingBox)?;
+        let binary = self
+            .sing_box
+            .resolve_binary()
+            .map_err(HostCoreError::SingBox)?;
+        let control = self.elevated.insert(ElevatedSingBoxControl::new(
+            binary,
+            ElevatedCore::new(
+                OsascriptLauncher,
+                self.runtime_directory.join("elevated-core.pid"),
+                self.runtime_directory.join("elevated-core.log"),
+            ),
+            self.sing_box.health_address(),
+            self.sing_box.health_timeout(),
+        ));
+        control.start(config_path).map_err(HostCoreError::Elevated)
     }
 
     /// Points Xray at the desktop Geo assets directory.
@@ -265,7 +362,25 @@ impl CoreSessionControl for HostCoreControl {
         self.current = core;
     }
 
+    #[cfg_attr(
+        not(target_os = "macos"),
+        expect(
+            unused_variables,
+            reason = "only macOS starts a TUN Core differently from a plain one"
+        )
+    )]
+    fn select_network_mode(&mut self, tun: bool) {
+        #[cfg(target_os = "macos")]
+        {
+            self.tun = tun;
+        }
+    }
+
     fn start(&mut self, config_path: &Path) -> Result<Self::Output, Self::Error> {
+        #[cfg(target_os = "macos")]
+        if self.selects_elevated_start() {
+            return self.start_elevated(config_path);
+        }
         match self.current {
             CoreType::SingBox => self
                 .sing_box
@@ -276,11 +391,19 @@ impl CoreSessionControl for HostCoreControl {
     }
 
     fn stop(&mut self) -> Result<(), Self::Error> {
-        // Both are stopped: a Core switched away from mid-session would
-        // otherwise be left running.
+        // All of them are stopped: a Core switched away from mid-session — or a
+        // TUN toggled off — would otherwise be left running.
+        #[cfg(target_os = "macos")]
+        let elevated = match self.elevated.as_mut() {
+            Some(control) => control.stop().map_err(HostCoreError::Elevated),
+            None => Ok(()),
+        };
         let sing_box = self.sing_box.stop().map_err(HostCoreError::SingBox);
         let xray = self.xray.stop().map_err(HostCoreError::Xray);
-        sing_box.and(xray)
+        #[cfg(target_os = "macos")]
+        return elevated.and(sing_box).and(xray);
+        #[cfg(not(target_os = "macos"))]
+        return sing_box.and(xray);
     }
 }
 
@@ -290,6 +413,9 @@ pub enum HostCoreError {
     SingBox(LazySingBoxError),
     #[error(transparent)]
     Xray(LazyXrayError),
+    #[cfg(target_os = "macos")]
+    #[error(transparent)]
+    Elevated(ElevatedSingBoxSessionError),
 }
 
 impl HostCoreError {
@@ -297,6 +423,8 @@ impl HostCoreError {
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
+            #[cfg(target_os = "macos")]
+            Self::Elevated(error) => error.code(),
             Self::SingBox(error) => error.code(),
             Self::Xray(error) => error.code(),
         }

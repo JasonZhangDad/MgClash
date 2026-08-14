@@ -16,10 +16,12 @@ use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[cfg(unix)]
+use magies_core_runtime::elevated::{ElevatedCore, ElevatedCoreError, ElevationLauncher};
 use magies_core_runtime::{
     AtomicRuntimeConfig, CoreHealthError, CoreOutput, CoreRuntime, CoreRuntimeError, CoreState,
-    RuntimeConfigFile, RuntimeConfigFileError, SingBoxAdapter, SingBoxAdapterError, XrayAdapter,
-    XrayAdapterError,
+    RuntimeConfigFile, RuntimeConfigFileError, SingBoxAdapter, SingBoxAdapterError,
+    ValidatedCoreBinary, XrayAdapter, XrayAdapterError,
 };
 use magies_domain::{CoreType, ProxyNode};
 use magies_platform::system_proxy::{
@@ -232,6 +234,14 @@ pub trait CoreSessionControl {
     /// Defaults to doing nothing: an implementation that drives one Core has
     /// nothing to choose. A host that can run either overrides this.
     fn select_core(&mut self, _core: CoreType) {}
+
+    /// Tells the control whether the next start needs a TUN device.
+    ///
+    /// Defaults to doing nothing. A host overrides it where a TUN device costs
+    /// more than a plain start: macOS opens a `utun` only for root, so that
+    /// session runs the Core behind an authorization prompt instead of as a
+    /// child process.
+    fn select_network_mode(&mut self, _tun: bool) {}
 
     /// Starts a validated Core with the generated configuration.
     ///
@@ -633,8 +643,10 @@ where
         let runtime_config = AtomicRuntimeConfig::write(path, &bytes)
             .map_err(|source| DesktopSessionError::RuntimeConfig { source })?;
         // Announced before the start so a host driving both Cores can pick the
-        // right binary; the start order itself is unchanged.
+        // right binary, and so it knows whether this start needs a TUN device;
+        // the start order itself is unchanged.
         self.core.select_core(profile.core);
+        self.core.select_network_mode(profile.tun.is_some());
         let output = self
             .core
             .start(runtime_config.path())
@@ -885,6 +897,114 @@ impl CoreSessionControl for SingBoxCoreControl {
     fn stop(&mut self) -> Result<(), Self::Error> {
         self.stop_running_core()
             .map_err(SingBoxCoreSessionError::Stop)
+    }
+}
+
+/// Drives a sing-box process for a session that needs a TUN device.
+///
+/// Same order as [`SingBoxCoreControl`] — validate the config, start, wait for
+/// the local port — but the start goes through an authorization prompt, because
+/// macOS opens a `utun` only for root. Validation stays unprivileged and
+/// happens first: a config sing-box already rejected must never cost the user a
+/// password prompt.
+#[cfg(unix)]
+pub struct ElevatedSingBoxControl<L: ElevationLauncher> {
+    adapter: SingBoxAdapter,
+    binary: ValidatedCoreBinary,
+    core: ElevatedCore<L>,
+    health_address: SocketAddr,
+    health_timeout: Duration,
+}
+
+#[cfg(unix)]
+impl<L: ElevationLauncher> ElevatedSingBoxControl<L> {
+    #[must_use]
+    pub fn new(
+        binary: ValidatedCoreBinary,
+        core: ElevatedCore<L>,
+        health_address: SocketAddr,
+        health_timeout: Duration,
+    ) -> Self {
+        Self {
+            adapter: SingBoxAdapter::new(binary.clone()),
+            binary,
+            core,
+            health_address,
+            health_timeout,
+        }
+    }
+
+    /// Whether an elevated Core is still running.
+    #[must_use]
+    pub fn is_running(&self) -> bool {
+        self.core.is_running()
+    }
+}
+
+#[cfg(unix)]
+impl<L: ElevationLauncher> CoreSessionControl for ElevatedSingBoxControl<L> {
+    type Error = ElevatedSingBoxSessionError;
+    type Output = CoreOutput;
+
+    fn start(&mut self, config_path: &Path) -> Result<Self::Output, Self::Error> {
+        let config = self
+            .adapter
+            .validate_config(config_path)
+            .map_err(ElevatedSingBoxSessionError::Validate)?;
+        let (_pid, output) = self
+            .core
+            .start(self.binary.path(), config.path())
+            .map_err(ElevatedSingBoxSessionError::Start)?;
+        if let Err(health) = self
+            .core
+            .wait_for_tcp_health(self.health_address, self.health_timeout)
+        {
+            // Left running, this one is a root process the app no longer tracks.
+            return match self.core.stop() {
+                Ok(()) => Err(ElevatedSingBoxSessionError::Health(health)),
+                Err(rollback) => {
+                    Err(ElevatedSingBoxSessionError::HealthAndRollback { health, rollback })
+                }
+            };
+        }
+        Ok(output)
+    }
+
+    fn stop(&mut self) -> Result<(), Self::Error> {
+        self.core.stop().map_err(ElevatedSingBoxSessionError::Stop)
+    }
+}
+
+#[cfg(unix)]
+#[derive(Debug, Error)]
+pub enum ElevatedSingBoxSessionError {
+    #[error("sing-box rejected the generated configuration")]
+    Validate(#[source] SingBoxAdapterError),
+    #[error("the Core could not be started with the privileges a TUN device needs")]
+    Start(#[source] ElevatedCoreError),
+    #[error("the elevated Core did not become healthy")]
+    Health(#[source] ElevatedCoreError),
+    #[error("the elevated Core did not become healthy and could not be stopped")]
+    HealthAndRollback {
+        health: ElevatedCoreError,
+        rollback: ElevatedCoreError,
+    },
+    #[error("the elevated Core could not be stopped")]
+    Stop(#[source] ElevatedCoreError),
+}
+
+#[cfg(unix)]
+impl ElevatedSingBoxSessionError {
+    /// The stable machine-readable code the UI branches on.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::Validate(_) => "sing_box_config_invalid",
+            Self::Start(source) | Self::Health(source) | Self::Stop(source) => source.code(),
+            // The Core may still be running as root, which is worth its own
+            // code: the user has to be told, not just shown a failed connect.
+            Self::HealthAndRollback { .. } => "tun_core_stop_failed",
+        }
     }
 }
 

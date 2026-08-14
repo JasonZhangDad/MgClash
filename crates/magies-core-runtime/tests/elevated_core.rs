@@ -7,6 +7,7 @@
 //! it leaves, liveness, and stopping.
 
 use std::fs;
+use std::net::SocketAddr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -283,4 +284,65 @@ fn restarting_the_same_core_gets_a_working_output_again() {
 
     core.stop().unwrap();
     fs::remove_dir_all(&directory).unwrap();
+}
+
+#[test]
+fn health_waits_for_the_port_the_elevated_core_opens() {
+    let directory = scratch("health");
+    let mut core = ElevatedCore::new(
+        ShellLauncher,
+        directory.join("core.pid"),
+        directory.join("core.log"),
+    );
+    let port = free_port();
+
+    // An elevated Core is not a child process, so readiness can only be the
+    // same thing the user cares about: the local port answering.
+    let binary = fake_core(
+        &directory,
+        &format!("sleep 0.3; nc -l {port} > /dev/null 2>&1 || sleep 5"),
+    );
+    core.start(&binary, Path::new("session.json")).unwrap();
+
+    let health = core
+        .wait_for_tcp_health(
+            SocketAddr::from(([127, 0, 0, 1], port)),
+            Duration::from_secs(5),
+        )
+        .unwrap_or_else(|error| panic!("health failed: {error}"));
+
+    assert!(health.ready_after <= Duration::from_secs(5));
+    core.stop().unwrap();
+    fs::remove_dir_all(&directory).unwrap();
+}
+
+#[test]
+fn health_gives_up_typed_when_the_elevated_core_dies() {
+    let directory = scratch("health-dead");
+    let mut core = ElevatedCore::new(
+        ShellLauncher,
+        directory.join("core.pid"),
+        directory.join("core.log"),
+    );
+
+    // A Core that exits — a bad config under root, say — must not keep the
+    // caller waiting for the full timeout.
+    let binary = fake_core(&directory, "exit 1");
+    core.start(&binary, Path::new("session.json")).unwrap();
+
+    let error = core
+        .wait_for_tcp_health(
+            SocketAddr::from(([127, 0, 0, 1], free_port())),
+            Duration::from_secs(30),
+        )
+        .unwrap_err();
+
+    assert_eq!(error.code(), "tun_core_did_not_start");
+    fs::remove_dir_all(&directory).unwrap();
+}
+
+/// A port nothing is listening on, released before the Core claims it.
+fn free_port() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.local_addr().unwrap().port()
 }
