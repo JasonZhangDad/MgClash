@@ -665,6 +665,16 @@ export interface CoreUpdateCheck {
 }
 
 /** Asks GitHub whether newer sing-box / Xray releases exist. Menu-only. */
+/** Whether each Core can run right now, without downloading anything. */
+export interface CoreReadiness {
+  singBox: boolean;
+  xray: boolean;
+}
+
+export function loadCoreReadiness(): Promise<CoreReadiness> {
+  return invoke<CoreReadiness>("core_readiness");
+}
+
 export function checkCoreUpdate(): Promise<CoreUpdateCheck> {
   return invoke<CoreUpdateCheck>("core_check_update");
 }

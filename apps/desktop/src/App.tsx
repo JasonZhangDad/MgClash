@@ -44,6 +44,7 @@ import {
   loadRuleSets,
   updateRuleSet,
   updateRuleSets,
+  loadCoreReadiness,
   importNode,
   importNodes,
   loadAppSettings,
@@ -109,6 +110,7 @@ import {
   type TrafficSnapshot,
   type ConnectionSnapshot,
   type RuleSetCacheEntry,
+  type CoreReadiness,
 } from "./session";
 import {
   createSubscription,
@@ -304,6 +306,9 @@ export default function App() {
   const [testingSpeed, setTestingSpeed] = useState(false);
   const cancelNodeTests = useRef(false);
   const [noticeDismissed, setNoticeDismissed] = useState(noticeWasDismissed);
+  const [coreReadiness, setCoreReadiness] = useState<CoreReadiness | null>(
+    null,
+  );
 
   const nodeTestInProgress =
     testingSpeed ||
@@ -1050,6 +1055,19 @@ export default function App() {
     }
   }, [t]);
 
+  const refreshCoreReadiness = useCallback(async () => {
+    try {
+      setCoreReadiness(await loadCoreReadiness());
+    } catch (failure: unknown) {
+      console.warn("core readiness check failed", failure);
+    }
+  }, []);
+
+  // Checked once at startup, the way v2rayN notices it has no Core to run.
+  useEffect(() => {
+    void refreshCoreReadiness();
+  }, [refreshCoreReadiness]);
+
   const onDownloadCore = useCallback(
     async (core: "sing-box" | "xray") => {
       setBusy(true);
@@ -1059,13 +1077,14 @@ export default function App() {
         await downloadCoreUpdate(core);
         setCoreUpdate(await checkCoreUpdate());
         setExportedTo(t("Core 已下载并安装，下次连接时生效"));
+        await refreshCoreReadiness();
       } catch (failure: unknown) {
         setError(describeFailure(failure));
       } finally {
         setBusy(false);
       }
     },
-    [t],
+    [refreshCoreReadiness, t],
   );
 
   const onOpenRouting = useCallback(async () => {
@@ -2018,6 +2037,31 @@ export default function App() {
             {error}
           </p>
         )}
+
+        {coreReadiness?.singBox === false &&
+          coreReadiness.xray === false && (
+            <div className="notice" role="note" aria-label={t("缺少 Core")}>
+              <p>
+                {t("还没有可用的 Core。MgClash 不捆绑 Core，请下载一个官方版本；下载后会按官方发布的摘要校验。")}
+              </p>
+              <div className="actions">
+                <button
+                  type="button"
+                  disabled={busy || connected}
+                  onClick={() => void onDownloadCore("sing-box")}
+                >
+                  {t("下载 sing-box")}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || connected}
+                  onClick={() => void onDownloadCore("xray")}
+                >
+                  {t("下载 Xray")}
+                </button>
+              </div>
+            </div>
+          )}
 
         {!noticeDismissed && (
           <div className="notice" role="note">
