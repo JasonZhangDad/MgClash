@@ -308,12 +308,13 @@ fn address() -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], 59_999))
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 #[test]
-fn only_a_macos_sing_box_tun_start_is_elevated() {
+fn only_a_sing_box_tun_start_is_elevated() {
     let mut control = HostCoreControl::from_env(address(), Duration::from_millis(10));
 
-    // macOS opens a `utun` only for root, so that start goes behind an
+    // A TUN device needs privileges the app does not have — root for a macOS
+    // `utun`, `CAP_NET_ADMIN` on Linux — so that start goes behind an
     // authorization prompt. Nothing else does: a plain session needs no
     // password, and Xray has no TUN inbound for root to open.
     assert!(!control.selects_elevated_start());
@@ -329,7 +330,7 @@ fn only_a_macos_sing_box_tun_start_is_elevated() {
     assert!(!control.selects_elevated_start());
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 #[test]
 fn an_unconfigured_core_fails_the_same_way_on_the_elevated_path() {
     let mut control = HostCoreControl::from_env(address(), Duration::from_millis(10));
@@ -342,7 +343,7 @@ fn an_unconfigured_core_fails_the_same_way_on_the_elevated_path() {
     assert_eq!(error.code(), "core_not_configured");
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 #[test]
 fn nothing_is_reclaimed_when_no_elevated_core_was_left_behind() {
     let mut control = HostCoreControl::from_env(address(), Duration::from_millis(10))

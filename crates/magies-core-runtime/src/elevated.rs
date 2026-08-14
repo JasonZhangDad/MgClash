@@ -89,6 +89,51 @@ impl ElevationLauncher for OsascriptLauncher {
     }
 }
 
+/// The polkit prompt, which is how a Linux desktop asks.
+///
+/// The password is typed into the desktop's own authentication agent, never
+/// into this app — the same reason macOS goes through `osascript` rather than
+/// collecting a password and piping it to `sudo`.
+pub struct PkexecLauncher;
+
+/// What `pkexec` is asked to run.
+///
+/// It takes a program and arguments rather than a shell line, so the shell is
+/// named explicitly and by absolute path: `pkexec` will not resolve a program
+/// against a `PATH` it does not trust.
+#[must_use]
+pub fn pkexec_arguments(script: &str) -> Vec<String> {
+    vec!["/bin/sh".to_owned(), "-c".to_owned(), script.to_owned()]
+}
+
+/// Maps a `pkexec` exit into the same refusals every platform reports.
+#[must_use]
+pub fn pkexec_error(code: Option<i32>, message: &str) -> ElevatedCoreError {
+    match code {
+        // The user dismissed the authentication dialog.
+        Some(126) => ElevatedCoreError::AuthorizationDeclined,
+        _ => ElevatedCoreError::LaunchRejected {
+            message: message.trim().to_owned(),
+        },
+    }
+}
+
+impl ElevationLauncher for PkexecLauncher {
+    fn launch(&self, script: &str) -> Result<(), ElevatedCoreError> {
+        let output = Command::new("pkexec")
+            .args(pkexec_arguments(script))
+            .output()
+            .map_err(|source| ElevatedCoreError::LaunchFailed { source })?;
+        if output.status.success() {
+            return Ok(());
+        }
+        Err(pkexec_error(
+            output.status.code(),
+            &String::from_utf8_lossy(&output.stderr),
+        ))
+    }
+}
+
 /// A Core running under privileges the app itself does not have.
 pub struct ElevatedCore<L: ElevationLauncher> {
     launcher: L,
