@@ -138,6 +138,9 @@ impl<L: ElevationLauncher> ElevatedCore<L> {
         binary: &Path,
         config: &Path,
     ) -> Result<(u32, CoreOutput), ElevatedCoreError> {
+        // Whatever is running now is about to become untrackable: the PID file
+        // is the only record, and this start overwrites it.
+        self.stop()?;
         // A PID left by an earlier run would otherwise be read back as this one.
         let _ = fs::remove_file(&self.pid_file);
         // A restart gets its own flag: raising the old one ends the previous
@@ -167,6 +170,24 @@ impl<L: ElevationLauncher> ElevatedCore<L> {
             )?,
         );
         Ok((pid, output))
+    }
+
+    /// Adopts a Core left behind by an app that did not stop it.
+    ///
+    /// The PID file is the only record of a Core the app does not own, so a
+    /// crash leaves a root process still holding the TUN device. Returns the
+    /// PID it adopted, or `None` — a file naming a process that is gone, or
+    /// naming no process at all, is removed rather than trusted.
+    pub fn reclaim(&mut self) -> Option<u32> {
+        let pid = self
+            .read_pid()
+            .ok()
+            .filter(|pid| process_is_alive(*pid))
+            .inspect(|pid| self.pid = Some(*pid));
+        if pid.is_none() {
+            let _ = fs::remove_file(&self.pid_file);
+        }
+        pid
     }
 
     /// Whether the Core is still running.

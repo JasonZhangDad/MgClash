@@ -2148,6 +2148,23 @@ fn handle_run_event(app: &AppHandle, event: tauri::RunEvent) {
     }
 }
 
+/// Adopts an elevated Core a previous run left behind, so it can be stopped.
+///
+/// Only macOS starts a Core it does not own; everywhere else this is the
+/// control unchanged.
+fn reclaimed_core_control(control: HostCoreControl) -> HostCoreControl {
+    #[cfg(target_os = "macos")]
+    {
+        let mut control = control;
+        if let Some(pid) = control.reclaim_elevated_core() {
+            tracing::warn!(pid, "adopted an elevated Core left by an earlier run");
+        }
+        control
+    }
+    #[cfg(not(target_os = "macos"))]
+    control
+}
+
 /// Opens the on-disk stores, wires the session service into Tauri state, and
 /// starts the background loops.
 #[expect(
@@ -2169,9 +2186,11 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let rule_sets = Arc::new(RuleProviderCache::open(data_directory.join("rule-sets"))?);
     let session = DesktopSession::new(
         PlatformSecretStore,
-        HostCoreControl::from_install(Some(&core_install), health_address, HEALTH_TIMEOUT)
-            .with_xray_asset_directory(geo_assets.directory())
-            .with_runtime_directory(&runtime_directory),
+        reclaimed_core_control(
+            HostCoreControl::from_install(Some(&core_install), health_address, HEALTH_TIMEOUT)
+                .with_xray_asset_directory(geo_assets.directory())
+                .with_runtime_directory(&runtime_directory),
+        ),
         system_proxy.clone(),
         runtime_directory,
     );
