@@ -17,6 +17,7 @@ export type ProxyProtocol =
 export interface NodeSummary {
   deletable: boolean;
   enabled: boolean;
+  frontNodeId: string | null;
   groupId: string | null;
   /// The stream transport; Hysteria2/TUIC report their own QUIC transport,
   /// WireGuard its own tunnel, AnyTLS its TLS session, and Naive its HTTP/2 or
@@ -591,6 +592,13 @@ export function moveNode(
 
 export function reorderNodes(ids: string[]): Promise<NodeSummary[]> {
   return invoke<NodeSummary[]>("session_reorder_nodes", { ids });
+}
+
+export function setNodeFront(
+  id: string,
+  frontId: string | null,
+): Promise<NodeSummary[]> {
+  return invoke<NodeSummary[]>("session_set_node_front", { frontId, id });
 }
 
 export function setNodeGroup(

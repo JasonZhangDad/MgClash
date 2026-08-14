@@ -1262,6 +1262,24 @@ fn session_reorder_nodes(
     clippy::needless_pass_by_value,
     reason = "Tauri commands receive State and deserialized arguments by value"
 )]
+fn session_set_node_front(
+    id: String,
+    front_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::session::NodeSummary>, CommandError> {
+    let id = parse_node_id(&id)?;
+    let front_id = front_id.as_deref().map(parse_node_id).transpose()?;
+    state
+        .service()
+        .set_node_front(id, front_id)
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
 fn session_set_node_group(
     id: String,
     group_name: Option<String>,
@@ -2349,6 +2367,7 @@ pub fn run() {
             session_move_node,
             session_reorder_nodes,
             session_set_node_group,
+            session_set_node_front,
             session_set_node_group_strategy,
             session_delete_node,
             session_export_node_link,

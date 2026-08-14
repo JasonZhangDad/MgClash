@@ -34,6 +34,7 @@ const updateNodeMock = vi.hoisted(() => vi.fn());
 const moveNodeMock = vi.hoisted(() => vi.fn());
 const reorderNodesMock = vi.hoisted(() => vi.fn());
 const setNodeGroupMock = vi.hoisted(() => vi.fn());
+const setNodeFrontMock = vi.hoisted(() => vi.fn());
 const setNodeGroupStrategyMock = vi.hoisted(() => vi.fn());
 const testNodeMock = vi.hoisted(() => vi.fn());
 const testAllNodesMock = vi.hoisted(() => vi.fn());
@@ -136,6 +137,7 @@ vi.mock("./session", async () => {
     setNodeEnabled: setNodeEnabledMock,
     setRoutingMode: setRoutingModeMock,
     setNodeGroup: setNodeGroupMock,
+    setNodeFront: setNodeFrontMock,
     setNodeGroupStrategy: setNodeGroupStrategyMock,
     setDnsSettings: setDnsSettingsMock,
     setRouteSettings: setRouteSettingsMock,
@@ -195,6 +197,7 @@ const SELECTED: SessionStatus = {
   node: {
     deletable: true,
     enabled: true,
+    frontNodeId: null,
     groupId: null,
     id: "00000000-0000-0000-0000-000000000001",
     lastTestedAt: null,
@@ -285,6 +288,7 @@ describe("App", () => {
     moveNodeMock.mockReset();
     reorderNodesMock.mockReset();
     setNodeGroupMock.mockReset();
+    setNodeFrontMock.mockReset();
     setNodeGroupStrategyMock.mockReset();
     testNodeMock.mockReset();
     testAllNodesMock.mockReset();
@@ -4311,6 +4315,38 @@ describe("App", () => {
     expect(rows[0]?.textContent).toContain("Safari");
     // Two connections of the same program add up.
     expect(rows[0]?.textContent).toContain("4.0 KB");
+  });
+
+  it("chains a node through a front proxy from the context menu", async () => {
+    const osaka = {
+      ...SELECTED.node!,
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Osaka",
+    };
+    loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
+    setNodeFrontMock.mockResolvedValue([
+      { ...SELECTED.node!, frontNodeId: osaka.id },
+      osaka,
+    ]);
+    await render();
+
+    await nodeMenuAction("Tokyo Edge", "前置代理");
+    const picker = container.querySelector<HTMLSelectElement>(
+      "[aria-label='前置代理节点']",
+    );
+    if (!picker) {
+      throw new Error("the front proxy picker is missing");
+    }
+    // A node cannot front itself, so it is not on offer.
+    expect([...picker.options].map((option) => option.value)).toEqual([
+      "",
+      osaka.id,
+    ]);
+
+    await act(async () => selectValue(osaka.id, picker));
+    await act(async () => button("保存前置代理").click());
+
+    expect(setNodeFrontMock).toHaveBeenCalledWith(SELECTED.node!.id, osaka.id);
   });
 
   it("changes the main window layout from the menu", async () => {

@@ -2263,3 +2263,74 @@ fn a_downloaded_rule_set_is_read_from_disk_by_the_next_connection() {
     assert_eq!(config["route"]["rule_set"][0]["type"], "local");
     assert_eq!(config["route"]["rule_set"][0]["path"], "/cache/ads.srs");
 }
+
+#[test]
+fn a_front_proxy_chains_the_two_outbounds_for_the_next_connection() {
+    let (mut service, _runtime, _fail_start) = service();
+    let tokyo = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
+    let front = service
+        .import_node("ss://aes-128-gcm:front-secret@front.example.com:9000#Front")
+        .unwrap()
+        .node
+        .unwrap();
+    service.select_node(tokyo.id).unwrap();
+
+    service.set_node_front(tokyo.id, Some(front.id)).unwrap();
+    service.connect().unwrap();
+
+    let config: serde_json::Value =
+        serde_json::from_slice(&fs::read(service.runtime_config_path().unwrap()).unwrap()).unwrap();
+    let outbounds = config["outbounds"].as_array().unwrap();
+    let front_tag = format!("front-{}", front.id);
+    let front_outbound = outbounds
+        .iter()
+        .find(|outbound| outbound["tag"] == front_tag)
+        .expect("the front node has its own outbound");
+    assert_eq!(front_outbound["server"], "front.example.com");
+    let proxy = outbounds
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert_eq!(proxy["detour"], front_tag);
+}
+
+#[test]
+fn a_front_proxy_that_cannot_be_dialled_is_refused_before_it_is_stored() {
+    let (mut service, _runtime, _fail_start) = service();
+    let tokyo = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
+    let front = service
+        .import_node("ss://aes-128-gcm:front-secret@front.example.com:9000#Front")
+        .unwrap()
+        .node
+        .unwrap();
+
+    assert_eq!(
+        service
+            .set_node_front(tokyo.id, Some(tokyo.id))
+            .unwrap_err()
+            .code(),
+        "invalid_front_node"
+    );
+    assert_eq!(
+        service
+            .set_node_front(tokyo.id, Some(Uuid::nil()))
+            .unwrap_err()
+            .code(),
+        "invalid_front_node"
+    );
+
+    // A chain of chains is refused at the second hop.
+    let third = service
+        .import_node("ss://aes-128-gcm:third-secret@third.example.com:9100#Third")
+        .unwrap()
+        .node
+        .unwrap();
+    service.set_node_front(front.id, Some(third.id)).unwrap();
+    assert_eq!(
+        service
+            .set_node_front(tokyo.id, Some(front.id))
+            .unwrap_err()
+            .code(),
+        "invalid_front_node"
+    );
+}

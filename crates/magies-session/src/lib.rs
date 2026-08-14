@@ -115,6 +115,16 @@ fn apply_xray_group_outbound<'a>(
 }
 
 /// Builds the sing-box document for one profile.
+/// The front node and its credential, when the profile chains one.
+fn front_node<'a>(
+    profile: &'a DesktopSessionProfile,
+    member_credentials: &'a HashMap<Uuid, StoredNodeCredential>,
+) -> Option<(&'a ProxyNode, NodeCredential<'a>)> {
+    let front = profile.front.as_ref()?;
+    let credential = member_credentials.get(&front.id)?;
+    Some((front, credential.as_node_credential()))
+}
+
 fn generate_sing_box<C, P>(
     profile: &DesktopSessionProfile,
     credential: &StoredNodeCredential,
@@ -148,6 +158,9 @@ where
     }
     if let Some(tun) = profile.tun.as_ref() {
         runtime_profile = runtime_profile.with_tun(tun, profile.dns_hijack);
+    }
+    if let Some((front, front_credential)) = front_node(profile, member_credentials) {
+        runtime_profile = runtime_profile.with_front_node(front, front_credential);
     }
     runtime_profile =
         apply_group_outbound(runtime_profile, profile, credential, member_credentials);
@@ -198,6 +211,9 @@ where
     }
     if profile.udp_noise_enabled {
         runtime_profile = runtime_profile.with_udp_noise(true);
+    }
+    if let Some((front, front_credential)) = front_node(profile, member_credentials) {
+        runtime_profile = runtime_profile.with_front_node(front, front_credential);
     }
     runtime_profile =
         apply_xray_group_outbound(runtime_profile, profile, credential, member_credentials);
@@ -291,6 +307,8 @@ pub struct DesktopSessionProfile {
     group_strategy: Option<NodeGroupStrategy>,
     group_members: Vec<ProxyNode>,
     probe: GroupProbe,
+    /// The node every proxy outbound dials through first, if any.
+    front: Option<ProxyNode>,
 }
 
 impl DesktopSessionProfile {
@@ -316,6 +334,7 @@ impl DesktopSessionProfile {
             group_strategy: None,
             group_members: Vec::new(),
             probe: GroupProbe::default(),
+            front: None,
         }
     }
 
@@ -384,6 +403,13 @@ impl DesktopSessionProfile {
         self.group_strategy = Some(strategy);
         self.group_members = members;
         self.probe = probe;
+        self
+    }
+
+    /// Dials every proxy outbound through `front` first (v2rayN's front proxy).
+    #[must_use]
+    pub fn with_front_node(mut self, front: ProxyNode) -> Self {
+        self.front = Some(front);
         self
     }
 
@@ -520,6 +546,39 @@ where
         self.active.as_ref().map(|active| &active.profile)
     }
 
+    /// Loads the credentials for every node the profile dials besides the
+    /// selected one: its group members and its front proxy.
+    fn extra_credentials(
+        &self,
+        profile: &DesktopSessionProfile,
+        credential: &StoredNodeCredential,
+    ) -> Result<HashMap<Uuid, StoredNodeCredential>, DesktopSessionError<C::Error, P::Error>> {
+        let mut credentials = HashMap::new();
+        // A custom document is the whole config; nothing else is dialled.
+        if matches!(credential, StoredNodeCredential::Custom(_)) {
+            return Ok(credentials);
+        }
+        let front = profile
+            .front
+            .as_ref()
+            .filter(|front| front.id != profile.node.id);
+        for node in profile.group_members.iter().chain(front) {
+            if node.id == profile.node.id || credentials.contains_key(&node.id) {
+                continue;
+            }
+            let payload = self
+                .secret_store
+                .get(&node.credential_ref)
+                .map_err(|source| DesktopSessionError::Secret { source })?;
+            credentials.insert(
+                node.id,
+                CredentialCodec::decode(&payload)
+                    .map_err(|source| DesktopSessionError::Credential { source })?,
+            );
+        }
+        Ok(credentials)
+    }
+
     /// Loads the node secret, generates and writes the configuration, starts
     /// the Core, and only then enables System Proxy.
     ///
@@ -550,23 +609,7 @@ where
             .map_err(|source| DesktopSessionError::Secret { source })?;
         let credential = CredentialCodec::decode(&payload)
             .map_err(|source| DesktopSessionError::Credential { source })?;
-        let mut member_credentials = HashMap::new();
-        if !matches!(credential, StoredNodeCredential::Custom(_)) {
-            for member in &profile.group_members {
-                if member.id == profile.node.id {
-                    continue;
-                }
-                let payload = self
-                    .secret_store
-                    .get(&member.credential_ref)
-                    .map_err(|source| DesktopSessionError::Secret { source })?;
-                member_credentials.insert(
-                    member.id,
-                    CredentialCodec::decode(&payload)
-                        .map_err(|source| DesktopSessionError::Credential { source })?,
-                );
-            }
-        }
+        let member_credentials = self.extra_credentials(profile, &credential)?;
         let generated = match &credential {
             StoredNodeCredential::Custom(custom) => {
                 if profile.core != custom.core() {
