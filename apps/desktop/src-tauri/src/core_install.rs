@@ -824,7 +824,7 @@ fn read_validated_binary(
     )
     .map_err(|source| CoreInstallError::ValidateBinary {
         path: path.to_path_buf(),
-        source,
+        source: Box::new(source),
     })
 }
 
@@ -1005,7 +1005,10 @@ pub enum CoreInstallError {
     #[error("failed to validate Core binary {}: {source}", path.display())]
     ValidateBinary {
         path: PathBuf,
-        source: magies_core_runtime::CoreBinaryError,
+        // Boxed because this variant otherwise makes every `Result` in the
+        // module 128 bytes wide, which `clippy::result_large_err` rejects on
+        // Windows where the inner error is largest.
+        source: Box<magies_core_runtime::CoreBinaryError>,
     },
     #[error("sing-box reported version {actual}, expected {expected}")]
     VersionMismatch { expected: String, actual: String },
