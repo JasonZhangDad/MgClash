@@ -88,6 +88,9 @@ export interface AppSettings {
   muxEnabled: boolean;
   fragmentEnabled: boolean;
   finalFragmentEnabled: boolean;
+  /// A JSON Merge Patch applied to the generated Core config, or empty for
+  /// none. Parsed and validated by the settings command (ADR 0005).
+  configTemplate: string;
   udpNoiseEnabled: boolean;
   autoSelectLowestLatency: boolean;
   urlTestAddress: string;

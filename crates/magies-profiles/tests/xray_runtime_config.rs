@@ -580,3 +580,22 @@ fn a_front_node_becomes_the_xray_proxy_settings_tag() {
         .unwrap();
     assert_eq!(proxy["proxySettings"]["tag"], front_tag);
 }
+
+#[test]
+fn a_template_is_applied_to_the_generated_xray_document() {
+    let (node, credential) = node();
+    let dns = dns(false);
+    let route = global_route();
+    let template = json!({ "log": { "loglevel": "debug" }, "stats": {} });
+
+    let config = generate(
+        &XrayRuntimeProfile::new(&node, credential.as_node_credential(), &dns, &route)
+            .with_template(&template),
+    );
+
+    // The template wins where it overlaps and adds what it does not, but the
+    // outbound the session needs is still the generator's.
+    assert_eq!(config["log"]["loglevel"], "debug");
+    assert_eq!(config["stats"], json!({}));
+    assert_eq!(config["outbounds"][0]["tag"], "proxy");
+}

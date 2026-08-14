@@ -94,6 +94,8 @@ pub struct SessionDefaults {
     /// When true the next connect applies Final (tail) TLS fragmentation
     /// (v2rayN's `EnableFinalFragment`).
     pub final_fragment_enabled: bool,
+    /// A user-supplied Core config template, already parsed. See ADR 0005.
+    pub config_template: Option<serde_json::Value>,
     /// When true the next connect sends v2rayN-style UDP noise via Xray freedom
     /// `noises` (Xray only).
     pub udp_noise_enabled: bool,
@@ -124,6 +126,7 @@ impl SessionDefaults {
             mux_enabled: false,
             fragment_enabled: false,
             final_fragment_enabled: false,
+            config_template: None,
             udp_noise_enabled: false,
             url_test_address: DEFAULT_URL_TEST_ADDRESS.to_owned(),
             url_test_interval_seconds: 180,
@@ -1766,6 +1769,9 @@ where
         .with_fragment(self.defaults.fragment_enabled)
         .with_final_fragment(self.defaults.final_fragment_enabled)
         .with_udp_noise(self.defaults.udp_noise_enabled);
+        if let Some(template) = self.defaults.config_template.clone() {
+            profile = profile.with_config_template(template);
+        }
         if let Some(front) = self.front_node_for(&node)? {
             profile = profile.with_front_node(front);
         }
@@ -2136,6 +2142,11 @@ where
     /// Turns Final (tail) TLS fragmentation on or off for the next session.
     pub fn set_final_fragment_enabled(&mut self, enabled: bool) {
         self.defaults.final_fragment_enabled = enabled;
+    }
+
+    /// Sets the Core config template applied to the next session's document.
+    pub fn set_config_template(&mut self, template: Option<serde_json::Value>) {
+        self.defaults.config_template = template;
     }
 
     /// Turns Xray UDP noise on or off for the next session.

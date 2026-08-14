@@ -109,6 +109,10 @@ const DICTIONARY: Dictionary = {
   "缺少 Core": "Nessun Core",
   "网络": "Rete",
   "入站": "Ingresso",
+  "Core 配置模板": "Modello di configurazione del Core",
+  "保存配置模板": "Salva modello",
+  "以 JSON Merge Patch 的形式叠加在生成的配置之上：可以新增本应用不涉及的字段、改写已生成的字段，或用 null 删除它。留空表示不使用模板。保存时校验，连接时由 Core 再次校验。":
+    "Applicato alla configurazione generata come JSON Merge Patch: aggiungere un campo che l'app non modella, modificarne uno generato o rimuoverlo con null. Vuoto significa nessun modello. Verificato al salvataggio e di nuovo dal Core alla connessione.",
   "域名": "Dominio",
   "域名后缀": "Suffisso dominio",
   "域名关键字": "Parola chiave dominio",

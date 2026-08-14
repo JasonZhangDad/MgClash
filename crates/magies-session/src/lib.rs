@@ -166,6 +166,9 @@ where
     }
     runtime_profile =
         apply_group_outbound(runtime_profile, profile, credential, member_credentials);
+    if let Some(template) = profile.config_template.as_ref() {
+        runtime_profile = runtime_profile.with_template(template);
+    }
     Ok(SingBoxRuntimeConfigGenerator::generate(&runtime_profile)
         .map_err(|source| DesktopSessionError::Config { source })?
         .json()
@@ -219,6 +222,9 @@ where
     }
     runtime_profile =
         apply_xray_group_outbound(runtime_profile, profile, credential, member_credentials);
+    if let Some(template) = profile.config_template.as_ref() {
+        runtime_profile = runtime_profile.with_template(template);
+    }
     Ok(XrayRuntimeConfigGenerator::generate(&runtime_profile)
         .map_err(|source| DesktopSessionError::XrayConfig { source })?
         .json()
@@ -308,6 +314,9 @@ pub struct DesktopSessionProfile {
     http: LocalHttpProfile,
     clash_api_port: Option<NonZeroU16>,
     tun: Option<TunProfile>,
+    /// A user-supplied Core config template, applied to whatever the generator
+    /// produced. See ADR 0005.
+    config_template: Option<serde_json::Value>,
     dns_hijack: bool,
     system_proxy: SystemProxyMode,
     mux_enabled: bool,
@@ -335,6 +344,7 @@ impl DesktopSessionProfile {
             http: LocalHttpProfile::default(),
             clash_api_port: None,
             tun: None,
+            config_template: None,
             dns_hijack: false,
             system_proxy: SystemProxyMode::Unchanged,
             mux_enabled: false,
@@ -356,6 +366,13 @@ impl DesktopSessionProfile {
     ) -> Self {
         self.socks = socks;
         self.http = http;
+        self
+    }
+
+    /// Carries a user-supplied Core config template into generation.
+    #[must_use]
+    pub fn with_config_template(mut self, template: serde_json::Value) -> Self {
+        self.config_template = Some(template);
         self
     }
 

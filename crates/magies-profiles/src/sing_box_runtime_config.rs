@@ -7,6 +7,7 @@ use magies_routing::{RouteProfile, SingBoxRouteConfigGenerator};
 use serde_json::{Value, json};
 use url::Url;
 
+use crate::apply_config_template;
 use crate::{
     DnsProfile, GeneratedCoreConfig, LocalHttpConfigGenerator, LocalHttpProfile,
     LocalSocksConfigGenerator, LocalSocksProfile, NodeCredential, OutboundConfigError,
@@ -137,6 +138,7 @@ pub struct SingBoxRuntimeProfile<'a> {
     mux_enabled: bool,
     fragment_enabled: bool,
     final_fragment_enabled: bool,
+    template: Option<&'a Value>,
 }
 
 struct GroupOutbound<'a> {
@@ -173,6 +175,7 @@ impl<'a> SingBoxRuntimeProfile<'a> {
             mux_enabled: false,
             fragment_enabled: false,
             final_fragment_enabled: false,
+            template: None,
         }
     }
 
@@ -192,6 +195,7 @@ impl<'a> SingBoxRuntimeProfile<'a> {
             mux_enabled: false,
             fragment_enabled: false,
             final_fragment_enabled: false,
+            template: None,
         }
     }
 
@@ -219,6 +223,18 @@ impl<'a> SingBoxRuntimeProfile<'a> {
         self.socks = socks;
         self.http = http;
         Ok(self)
+    }
+
+    /// Applies a user-supplied template to the generated document.
+    ///
+    /// A JSON Merge Patch, not a replacement: see [`apply_config_template`]
+    /// and ADR 0005. Applied last, so what it produces is what gets validated
+    /// and written — a template cannot smuggle a document past `sing-box
+    /// check`.
+    #[must_use]
+    pub const fn with_template(mut self, template: &'a Value) -> Self {
+        self.template = Some(template);
+        self
     }
 
     /// Enables the loopback-only Clash API used for live traffic samples.
@@ -368,6 +384,11 @@ impl SingBoxRuntimeConfigGenerator {
                     "external_controller": format!("127.0.0.1:{}", port.get())
                 }
             });
+        }
+
+        if let Some(template) = profile.template {
+            // Last, so the Core validates what the user will actually run.
+            apply_config_template(&mut config, template);
         }
 
         Ok(GeneratedCoreConfig::from_json(CoreType::SingBox, config))

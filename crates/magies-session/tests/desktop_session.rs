@@ -739,3 +739,31 @@ fn an_empty_pac_url_is_refused_before_the_host_is_touched() {
     // rather than the session pretending nothing happened.
     assert!(events.lock().unwrap().contains(&"core_start"));
 }
+
+#[test]
+fn a_config_template_reaches_the_document_the_core_is_given() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let store = MemorySecretStore::default();
+    let profile = profile_with_stored_credential(&store).with_config_template(serde_json::json!({
+        "log": { "level": "debug" },
+        "experimental": { "cache_file": { "enabled": true } },
+    }));
+    let runtime = RuntimeDirectory::new("config-template");
+    let mut session = DesktopSession::new(
+        store,
+        FakeCore::new(events.clone()),
+        FakeProxy::new(events.clone()),
+        runtime.path(),
+    );
+
+    session.start(&profile).unwrap();
+
+    // Written to disk, not merged somewhere the Core never reads: the template
+    // has to survive the same path as everything else the generator produced.
+    let config: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(session.config_path().unwrap()).unwrap()).unwrap();
+    assert_eq!(config["log"]["level"], "debug");
+    assert_eq!(config["experimental"]["cache_file"]["enabled"], true);
+    assert!(config["outbounds"].is_array());
+    session.stop().unwrap();
+}

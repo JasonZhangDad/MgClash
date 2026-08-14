@@ -110,6 +110,10 @@ const DICTIONARY: Dictionary = {
   "缺少 Core": "No Core",
   "网络": "Network",
   "入站": "Inbound",
+  "Core 配置模板": "Core config template",
+  "保存配置模板": "Save template",
+  "以 JSON Merge Patch 的形式叠加在生成的配置之上：可以新增本应用不涉及的字段、改写已生成的字段，或用 null 删除它。留空表示不使用模板。保存时校验，连接时由 Core 再次校验。":
+    "Applied to the generated config as a JSON Merge Patch: add a field this app does not model, change one it generated, or remove it with null. Empty means no template. Checked on save, and again by the Core on connect.",
   "域名": "Domain",
   "域名后缀": "Domain suffix",
   "域名关键字": "Domain keyword",

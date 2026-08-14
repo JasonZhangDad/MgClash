@@ -2,6 +2,7 @@
 
 mod anytls;
 mod bulk_import;
+mod config_template;
 mod core_capability;
 mod credential_codec;
 mod custom;
@@ -44,6 +45,7 @@ pub use bulk_import::{
     BulkImportError, BulkImportFailure, BulkImportLineError, BulkImportOutcome,
     BulkNodeImportParser, ParsedBulkNode, node_fingerprint,
 };
+pub use config_template::apply_config_template;
 pub use core_capability::{
     CoreCapability, CoreCapabilityMatrix, CorePreference, CoreRejection, CoreRequirements,
     CoreSelectionError, architecture_name, core_name, parse_core_name, protocol_name,
