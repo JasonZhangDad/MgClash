@@ -13,6 +13,7 @@ interface ConnectionsViewProps {
   onRefresh: () => void;
   onClose: (id: string) => void;
   onCloseAll: () => void;
+  onAddRule: (host: string) => void;
 }
 
 /** How long a connection has been open, as the table shows it. */
@@ -42,6 +43,7 @@ export function ConnectionsView({
   onRefresh,
   onClose,
   onCloseAll,
+  onAddRule,
 }: ConnectionsViewProps) {
   const needle = query.trim().toLowerCase();
   const connections = (snapshot?.connections ?? []).filter(
@@ -123,7 +125,15 @@ export function ConnectionsView({
                 <td>{formatBytes(entry.uploadBytes)}</td>
                 <td>{formatBytes(entry.downloadBytes)}</td>
                 <td>{age(entry.start, now)}</td>
-                <td>
+                <td className="node-actions">
+                  <button
+                    type="button"
+                    aria-label={`为 ${entry.host} 添加规则`}
+                    disabled={busy}
+                    onClick={() => onAddRule(entry.host)}
+                  >
+                    {t("加规则")}
+                  </button>
                   <button
                     type="button"
                     aria-label={`${t("关闭连接")} ${entry.host}`}

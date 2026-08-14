@@ -26,6 +26,29 @@ export type DialogId =
   | "about"
   | null;
 
+/** The rule a connection suggests, or null when it names no host. */
+export function ruleDraftFromConnection(
+  host: string,
+): { kind: RouteRuleKind; value: string } | null {
+  const trimmed = host.trim();
+  if (trimmed === "") {
+    return null;
+  }
+  // The table renders `address:port`; the port belongs to the connection, not
+  // to the rule. A bracketed IPv6 literal keeps its colons.
+  const bracketed = /^\[(?<address>.+)\](?::\d+)?$/u.exec(trimmed);
+  const withoutPort =
+    bracketed?.groups?.address ??
+    (trimmed.split(":").length === 2 ? trimmed.split(":")[0] : trimmed);
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/u.test(withoutPort)) {
+    return { kind: "ipCidr", value: `${withoutPort}/32` };
+  }
+  if (withoutPort.includes(":")) {
+    return { kind: "ipCidr6", value: `${withoutPort}/128` };
+  }
+  return { kind: "domainSuffix", value: withoutPort };
+}
+
 /** How each route outbound reads in the rule tables. */
 export const ROUTE_OUTBOUND_LABEL: Record<RouteOutbound, string> = {
   block: "拦截",

@@ -65,6 +65,7 @@ const DICTIONARY: Dictionary = {
   "全部测速": "Prova tutti",
   "关闭连接": "Chiudi connessione",
   "删除规则集": "Elimina set",
+  "加规则": "Aggiungi regola",
   "启用规则集": "Abilita set",
   "尚未创建代理组": "Nessun gruppo proxy ancora",
   "尚未添加规则集": "Nessun set ancora",
