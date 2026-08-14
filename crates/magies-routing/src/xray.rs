@@ -16,7 +16,10 @@
 
 use serde_json::{Value, json};
 
-use crate::{GeneratedRouteConfig, GeoKind, RouteProfile, RoutingMode, RoutingRule, RuleMatcher};
+use crate::{
+    GeneratedRouteConfig, GeoKind, LocalInbound, RouteProfile, RoutingMode, RoutingRule,
+    RuleMatcher,
+};
 
 /// Xray's own name for the private-address database.
 const PRIVATE_GEOIP: &str = "geoip:private";
@@ -90,7 +93,9 @@ fn enabled_rules(profile: &RouteProfile, geo: bool) -> Vec<&RoutingRule> {
                 && rule.matcher.is_geo() == geo
                 && !matches!(
                     &rule.matcher,
-                    RuleMatcher::ProcessPath(_) | RuleMatcher::RuleProvider { .. }
+                    RuleMatcher::ProcessPath(_)
+                        | RuleMatcher::RuleProvider { .. }
+                        | RuleMatcher::Inbound(LocalInbound::Tun)
                 )
         })
         .collect()
@@ -115,6 +120,7 @@ fn xray_rule(rule: &RoutingRule) -> Value {
         // for every local inbound; Xray has no per-rule equivalent of
         // sing-box's `sniff` action.
         RuleMatcher::Protocol(protocol) => json!({ "protocol": [protocol.as_str()] }),
+        RuleMatcher::Inbound(inbound) => json!({ "inboundTag": [inbound.tag()] }),
         RuleMatcher::ProcessName(name) => json!({ "process": [name] }),
         RuleMatcher::ProcessPath(_) => unreachable!("process_path rules are omitted for Xray"),
         RuleMatcher::RuleProvider { .. } => {

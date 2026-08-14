@@ -3332,6 +3332,51 @@ describe("App", () => {
     });
   });
 
+  it("adds a rule that routes by the inbound the traffic arrived on", async () => {
+    const rules = [
+      {
+        enabled: true,
+        kind: "inbound" as const,
+        outbound: "direct" as const,
+        value: "socks",
+      },
+    ];
+    setRouteSettingsMock.mockResolvedValue({
+      ...IDLE,
+      route: { finalOutbound: "proxy", providers: [], rules },
+    });
+    await render();
+
+    const kind = container.querySelector<HTMLSelectElement>(
+      "select[aria-label='规则类型']",
+    );
+    const value = container.querySelector<HTMLInputElement>(
+      "input[aria-label='规则值']",
+    );
+    const outbound = container.querySelector<HTMLSelectElement>(
+      "select[aria-label='规则出口']",
+    );
+    // The machine's own apps through the local SOCKS go direct while the TUN
+    // device's traffic is proxied — v2rayN's inbound-tag column.
+    await act(async () => {
+      selectValue("inbound", kind!);
+      selectValue("direct", outbound!);
+      typeInput("socks", value!);
+    });
+    await act(async () => button("添加规则").click());
+
+    const rows = container.querySelectorAll("[aria-label='路由规则列表'] tbody tr");
+    expect(rows[0]?.textContent).toContain("入站");
+
+    await act(async () => button("保存路由").click());
+
+    expect(setRouteSettingsMock).toHaveBeenCalledWith({
+      finalOutbound: "proxy",
+      providers: [],
+      rules,
+    });
+  });
+
   it("keeps a visible error when a background refresh fails", async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

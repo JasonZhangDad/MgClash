@@ -3,7 +3,7 @@
 //! sing-box's `final`.
 
 use magies_routing::{
-    Network, RouteOutbound, RouteProfile, RoutingMode, RoutingRule, SniffedProtocol,
+    LocalInbound, Network, RouteOutbound, RouteProfile, RoutingMode, RoutingRule, SniffedProtocol,
     XrayRouteConfigGenerator,
 };
 use serde_json::{Value, json};
@@ -204,5 +204,27 @@ fn translates_a_protocol_rule_to_the_xray_sniffer_field() {
             "protocol": ["bittorrent"],
             "outboundTag": "direct",
         })
+    );
+}
+
+#[test]
+fn omits_a_tun_inbound_rule_xray_has_no_inbound_for() {
+    let rules = vec![
+        RoutingRule::inbound(LocalInbound::Socks, RouteOutbound::Direct, 10, true),
+        RoutingRule::inbound(LocalInbound::Tun, RouteOutbound::Proxy, 20, true),
+    ];
+    let profile = RouteProfile::new(RoutingMode::Rule, rules, RouteOutbound::Proxy).unwrap();
+
+    let route = XrayRouteConfigGenerator::generate(&profile);
+
+    // Xray builds no TUN inbound, so a rule naming one would sit in the config
+    // matching nothing. Dropped, the way process-path rules already are.
+    assert_eq!(route.json()["rules"][1]["inboundTag"], json!(["socks-in"]));
+    let rules = route.json()["rules"].as_array().unwrap().clone();
+    assert!(
+        !rules
+            .iter()
+            .any(|rule| rule["inboundTag"] == json!(["tun-in"])),
+        "{rules:?}"
     );
 }

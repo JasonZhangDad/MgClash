@@ -271,6 +271,7 @@ export const ROUTE_KIND_LABEL: Record<RouteRuleKind, string> = {
   port: "端口",
   network: "网络",
   protocol: "协议",
+  inbound: "入站",
   processName: "进程名",
   processPath: "进程路径",
 };

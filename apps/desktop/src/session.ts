@@ -325,6 +325,7 @@ export type RouteRuleKind =
   | "port"
   | "network"
   | "protocol"
+  | "inbound"
   | "processName"
   | "processPath";
 
