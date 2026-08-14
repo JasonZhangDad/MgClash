@@ -4243,6 +4243,76 @@ describe("App", () => {
     );
   });
 
+
+  it("adds up traffic per policy group and per live program", async () => {
+    const work = {
+      id: "00000000-0000-0000-0000-000000000020",
+      name: "Work",
+      strategy: "select" as const,
+    };
+    const osaka = {
+      ...SELECTED.node!,
+      groupId: work.id,
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Osaka",
+    };
+    loadSessionStatusMock.mockResolvedValue(CONNECTED);
+    loadNodeGroupsMock.mockResolvedValue([work]);
+    loadNodesMock.mockResolvedValue([CONNECTED.node, osaka]);
+    loadNodeTrafficMock.mockResolvedValue({
+      [osaka.id]: {
+        todayUploadBytes: 1_024,
+        todayDownloadBytes: 2_048,
+        totalUploadBytes: 4_096,
+        totalDownloadBytes: 8_192,
+      },
+    });
+    loadConnectionsMock.mockResolvedValue({
+      uploadTotalBytes: 0,
+      downloadTotalBytes: 0,
+      connections: [
+        {
+          id: "c1",
+          host: "a.example.com",
+          destination: "1.1.1.1:443",
+          network: "tcp",
+          process: "Safari",
+          rule: "final",
+          chain: "proxy",
+          uploadBytes: 1_024,
+          downloadBytes: 2_048,
+          start: "2026-08-13T00:00:00Z",
+        },
+        {
+          id: "c2",
+          host: "b.example.com",
+          destination: "1.1.1.1:443",
+          network: "tcp",
+          process: "Safari",
+          rule: "final",
+          chain: "proxy",
+          uploadBytes: 1_024,
+          downloadBytes: 2_048,
+          start: "2026-08-13T00:00:00Z",
+        },
+      ],
+    });
+    await render();
+
+    await act(async () => button("代理组").click());
+    const groupTotals = container.querySelector("[aria-label='代理组流量']");
+    expect(groupTotals?.textContent).toContain("2.0 KB");
+    expect(groupTotals?.textContent).toContain("8.0 KB");
+
+    await act(async () => button("连接列表").click());
+    const rows = [
+      ...container.querySelectorAll("[aria-label='进程流量'] tbody tr"),
+    ];
+    expect(rows[0]?.textContent).toContain("Safari");
+    // Two connections of the same program add up.
+    expect(rows[0]?.textContent).toContain("4.0 KB");
+  });
+
   it("changes the main window layout from the menu", async () => {
     await render();
 
