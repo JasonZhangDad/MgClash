@@ -326,6 +326,13 @@ impl CoreInstallStore {
             CoreKind::SingBox => manifest.sing_box.take(),
             CoreKind::Xray => manifest.xray.take(),
         };
+        // Checked before anything is moved, so a refusal leaves the working
+        // install exactly as it was.
+        if let Err(error) = ensure_recorded_digest(previous.as_ref(), version, &sha256.to_string())
+        {
+            let _ = fs::remove_file(&temporary);
+            return Err(error);
+        }
         let previous_backup = previous
             .as_ref()
             .map(|entry| archive_previous(&self.directory, entry))
@@ -592,6 +599,30 @@ fn verify_archive_checksum(
         });
     }
     Ok(())
+}
+
+/// Refuses a re-install of a version whose bytes changed.
+///
+/// Neither vendor publishes a digest for every release, so the first install of
+/// a version is trusted and recorded. From then on the recorded digest is what
+/// a re-download of that same version has to match: a fixed tag whose artifact
+/// changed is the case worth stopping.
+fn ensure_recorded_digest(
+    previous: Option<&InstalledCoreEntry>,
+    version: &str,
+    sha256: &str,
+) -> Result<(), CoreInstallError> {
+    let Some(previous) = previous.filter(|entry| entry.version == version) else {
+        return Ok(());
+    };
+    if previous.sha256 == sha256 {
+        return Ok(());
+    }
+    Err(CoreInstallError::RecordedDigestMismatch {
+        version: version.to_owned(),
+        expected: previous.sha256.clone(),
+        actual: sha256.to_owned(),
+    })
 }
 
 /// Verifies an Xray archive against the `.dgst` published beside it.
@@ -1069,6 +1100,14 @@ pub enum CoreInstallError {
     VersionMismatch { expected: String, actual: String },
     #[error("GitHub release tag is empty")]
     EmptyVersionTag,
+    #[error(
+        "{version} was installed as {expected} but downloaded as {actual}; refusing to replace it"
+    )]
+    RecordedDigestMismatch {
+        version: String,
+        expected: String,
+        actual: String,
+    },
     #[error(transparent)]
     SingBoxVersion(#[from] SingBoxAdapterError),
     #[error(transparent)]
@@ -1100,6 +1139,7 @@ impl CoreInstallError {
             | Self::InvalidChecksumFile { .. }
             | Self::ChecksumEntryMissing { .. }
             | Self::ArchiveChecksumMismatch { .. }
+            | Self::RecordedDigestMismatch { .. }
             | Self::Extract { .. }
             | Self::ExtractZip { .. }
             | Self::BinaryMissing { .. }
@@ -1159,6 +1199,43 @@ mod tests {
             builder.append_data(&mut header, name, *body).unwrap();
         }
         builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn a_first_install_records_the_digest_without_comparing() {
+        ensure_recorded_digest(None, "1.13.18", "abc").unwrap();
+    }
+
+    #[test]
+    fn a_new_version_may_bring_a_new_digest() {
+        let previous = InstalledCoreEntry {
+            version: "1.13.18".to_owned(),
+            sha256: "abc".to_owned(),
+            binary: "/cores/sing-box".to_owned(),
+            previous_version: None,
+        };
+
+        ensure_recorded_digest(Some(&previous), "1.14.0", "def").unwrap();
+        // The same build downloaded again is the same bytes.
+        ensure_recorded_digest(Some(&previous), "1.13.18", "abc").unwrap();
+    }
+
+    #[test]
+    fn the_same_version_with_different_bytes_is_refused() {
+        // A fixed version tag whose artifact changed is the case trust-on-first
+        // -use exists to catch; the vendor publishes no digest to check against.
+        let previous = InstalledCoreEntry {
+            version: "1.13.18".to_owned(),
+            sha256: "abc".to_owned(),
+            binary: "/cores/sing-box".to_owned(),
+            previous_version: None,
+        };
+
+        assert!(matches!(
+            ensure_recorded_digest(Some(&previous), "1.13.18", "def"),
+            Err(CoreInstallError::RecordedDigestMismatch { version, expected, actual })
+                if version == "1.13.18" && expected == "abc" && actual == "def"
+        ));
     }
 
     #[test]

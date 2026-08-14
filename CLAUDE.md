@@ -203,5 +203,8 @@ artifacts are currently unsigned; see ADR 0001/0002 for the consequences.
   habit; an unverified claim is worse than an acknowledged gap.
 - **Release artifacts are unsigned** and named `mgclash-<version>-<os>-<cpu>-unsigned.<ext>` with a
   `.sha256` sidecar (ADR 0003). The artifact bundles no Core, which is also what v2rayN ships: the
-  app downloads one from the upstream GitHub release and verifies it against the digest the vendor
-  publishes beside the archive (`checksums.txt` for sing-box, `.dgst` for Xray).
+  app downloads one from the upstream GitHub release. Xray is verified against the `.dgst` XTLS
+  publishes per asset; **sing-box publishes no digest for its releases at all**, so its first
+  download is trusted and recorded, and a later download of that same version has to match what was
+  recorded (`ensure_recorded_digest`). Do not claim a checksum file exists without checking the
+  release: v1.13.18 ships 154 assets and none of them is one.
