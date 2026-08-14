@@ -29,10 +29,10 @@ use magies_platform::system_proxy_recovery::{
     RecoveryStore, SystemProxyControl, SystemProxyRecoveryError, SystemProxyRecoveryManager,
 };
 use magies_profiles::{
-    CredentialCodec, CredentialCodecError, DnsProfile, LocalHttpProfile, LocalSocksProfile,
-    NodeCredential, NodeGroupStrategy, RuntimeConfigError, SingBoxRuntimeConfigGenerator,
-    SingBoxRuntimeProfile, StoredNodeCredential, TunProfile, XrayRuntimeConfigError,
-    XrayRuntimeConfigGenerator, XrayRuntimeProfile,
+    CredentialCodec, CredentialCodecError, DnsProfile, GroupProbe, LocalHttpProfile,
+    LocalSocksProfile, NodeCredential, NodeGroupStrategy, RuntimeConfigError,
+    SingBoxRuntimeConfigGenerator, SingBoxRuntimeProfile, StoredNodeCredential, TunProfile,
+    XrayRuntimeConfigError, XrayRuntimeConfigGenerator, XrayRuntimeProfile,
 };
 use magies_routing::RouteProfile;
 use magies_storage::{SecretStore, SecretStoreError};
@@ -90,7 +90,7 @@ fn apply_group_outbound<'a>(
     if members.len() < 2 {
         runtime_profile
     } else {
-        runtime_profile.with_group_outbound(strategy, members, &profile.probe_url)
+        runtime_profile.with_group_outbound(strategy, members, &profile.probe)
     }
 }
 
@@ -110,7 +110,7 @@ fn apply_xray_group_outbound<'a>(
     if members.len() < 2 {
         runtime_profile
     } else {
-        runtime_profile.with_group_outbound(strategy, members, &profile.probe_url)
+        runtime_profile.with_group_outbound(strategy, members, &profile.probe)
     }
 }
 
@@ -290,7 +290,7 @@ pub struct DesktopSessionProfile {
     udp_noise_enabled: bool,
     group_strategy: Option<NodeGroupStrategy>,
     group_members: Vec<ProxyNode>,
-    probe_url: String,
+    probe: GroupProbe,
 }
 
 impl DesktopSessionProfile {
@@ -315,7 +315,7 @@ impl DesktopSessionProfile {
             udp_noise_enabled: false,
             group_strategy: None,
             group_members: Vec::new(),
-            probe_url: String::new(),
+            probe: GroupProbe::default(),
         }
     }
 
@@ -379,18 +379,18 @@ impl DesktopSessionProfile {
         mut self,
         strategy: NodeGroupStrategy,
         members: Vec<ProxyNode>,
-        probe_url: impl Into<String>,
+        probe: GroupProbe,
     ) -> Self {
         self.group_strategy = Some(strategy);
         self.group_members = members;
-        self.probe_url = probe_url.into();
+        self.probe = probe;
         self
     }
 
     /// Runs the selected node's group as a Core URL-TEST / leastPing balancer.
     #[must_use]
-    pub fn with_urltest(self, members: Vec<ProxyNode>, probe_url: impl Into<String>) -> Self {
-        self.with_group_outbound(NodeGroupStrategy::UrlTest, members, probe_url)
+    pub fn with_urltest(self, members: Vec<ProxyNode>, probe: GroupProbe) -> Self {
+        self.with_group_outbound(NodeGroupStrategy::UrlTest, members, probe)
     }
 
     /// Chooses the Core this session runs.

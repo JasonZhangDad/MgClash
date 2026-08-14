@@ -6,9 +6,9 @@ use std::num::NonZeroU16;
 
 use magies_domain::{CoreType, CredentialRef, ProxyNode};
 use magies_profiles::{
-    DnsProfile, DnsServer, DnsStrategy, LocalHttpProfile, LocalSocksProfile, ManualCredentialDraft,
-    ManualNodeDraft, PlainDnsTransport, StoredNodeCredential, XrayRuntimeConfigError,
-    XrayRuntimeConfigGenerator, XrayRuntimeProfile,
+    DnsProfile, DnsServer, DnsStrategy, GroupProbe, LocalHttpProfile, LocalSocksProfile,
+    ManualCredentialDraft, ManualNodeDraft, PlainDnsTransport, StoredNodeCredential,
+    XrayRuntimeConfigError, XrayRuntimeConfigGenerator, XrayRuntimeProfile,
 };
 use magies_routing::{RouteOutbound, RouteProfile, RoutingMode, RoutingRule};
 use serde_json::{Value, json};
@@ -489,13 +489,14 @@ fn urltest_group_uses_a_leastping_balancer_instead_of_a_proxy_outbound() {
     .unwrap();
     let dns = dns(false);
     let route = global_route();
+    let probe = GroupProbe::default();
     let profile = XrayRuntimeProfile::new(&node, credential.as_node_credential(), &dns, &route)
         .with_urltest(
             vec![
                 (&node, credential.as_node_credential()),
                 (&other, other_credential.as_node_credential()),
             ],
-            "https://www.gstatic.com/generate_204",
+            &probe,
         );
 
     let config = generate(&profile);

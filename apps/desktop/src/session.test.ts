@@ -503,6 +503,8 @@ describe("the remaining command wrappers", () => {
       tunEnabled: false,
       udpNoiseEnabled: false,
       urlTestAddress: "https://www.gstatic.com/generate_204",
+      urlTestIntervalSeconds: 180,
+      urlTestToleranceMs: 50,
     };
     invokeMock.mockResolvedValue(settings);
 

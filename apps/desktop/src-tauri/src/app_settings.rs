@@ -68,6 +68,14 @@ const ADD_URL_TEST_ADDRESS: &str = "
     ALTER TABLE app_settings ADD COLUMN url_test_address TEXT NOT NULL DEFAULT 'https://www.gstatic.com/generate_204';
 ";
 
+const ADD_URL_TEST_INTERVAL_SECONDS: &str = "
+    ALTER TABLE app_settings ADD COLUMN url_test_interval_seconds INTEGER NOT NULL DEFAULT 180;
+";
+
+const ADD_URL_TEST_TOLERANCE_MS: &str = "
+    ALTER TABLE app_settings ADD COLUMN url_test_tolerance_ms INTEGER NOT NULL DEFAULT 50;
+";
+
 const ADD_ALLOW_LAN: &str = "
     ALTER TABLE app_settings ADD COLUMN allow_lan INTEGER NOT NULL DEFAULT 0;
 ";
@@ -162,6 +170,10 @@ pub struct AppSettings {
     pub auto_select_lowest_latency: bool,
     /// HTTP(S) address used by the connected-node URL test.
     pub url_test_address: String,
+    /// How often a policy group re-measures its members.
+    pub url_test_interval_seconds: u32,
+    /// How much better a member must be before the group switches to it.
+    pub url_test_tolerance_ms: u32,
     /// Bind local SOCKS/HTTP inbounds on all interfaces for LAN clients.
     pub allow_lan: bool,
     /// HTTP(S) address used by the connected-node download speed test.
@@ -209,6 +221,8 @@ impl Default for AppSettings {
             mux_enabled: false,
             auto_select_lowest_latency: false,
             url_test_address: DEFAULT_URL_TEST_ADDRESS.to_owned(),
+            url_test_interval_seconds: 180,
+            url_test_tolerance_ms: 50,
             allow_lan: false,
             speed_test_url: DEFAULT_SPEED_TEST_URL.to_owned(),
             inbound_udp_enabled: true,
@@ -267,6 +281,8 @@ impl SqliteAppSettingsStore {
             ADD_MUX_ENABLED,
             ADD_AUTO_SELECT_LOWEST_LATENCY,
             ADD_URL_TEST_ADDRESS,
+            ADD_URL_TEST_INTERVAL_SECONDS,
+            ADD_URL_TEST_TOLERANCE_MS,
             ADD_ALLOW_LAN,
             ADD_SPEED_TEST_URL,
             ADD_INBOUND_UDP_ENABLED,
@@ -301,7 +317,7 @@ impl SqliteAppSettingsStore {
         let row = self
             .connection
             .query_row(
-                "SELECT connect_on_launch, close_to_tray, launch_at_login, core_preference, tun_enabled, log_level, system_proxy_mode, locale, socks_port, http_port, clash_api_port, mux_enabled, auto_select_lowest_latency, url_test_address, allow_lan, speed_test_url, inbound_udp_enabled, def_allow_insecure, def_fingerprint, hotkey_connect, hotkey_previous, hotkey_next, fragment_enabled, udp_noise_enabled, final_fragment_enabled
+                "SELECT connect_on_launch, close_to_tray, launch_at_login, core_preference, tun_enabled, log_level, system_proxy_mode, locale, socks_port, http_port, clash_api_port, mux_enabled, auto_select_lowest_latency, url_test_address, url_test_interval_seconds, url_test_tolerance_ms, allow_lan, speed_test_url, inbound_udp_enabled, def_allow_insecure, def_fingerprint, hotkey_connect, hotkey_previous, hotkey_next, fragment_enabled, udp_noise_enabled, final_fragment_enabled
                  FROM app_settings WHERE id = 1",
                 [],
                 |row| {
@@ -321,16 +337,18 @@ impl SqliteAppSettingsStore {
                         row.get::<_, i64>(12)?,
                         row.get::<_, String>(13)?,
                         row.get::<_, i64>(14)?,
-                        row.get::<_, String>(15)?,
+                        row.get::<_, i64>(15)?,
                         row.get::<_, i64>(16)?,
-                        row.get::<_, i64>(17)?,
-                        row.get::<_, String>(18)?,
-                        row.get::<_, String>(19)?,
+                        row.get::<_, String>(17)?,
+                        row.get::<_, i64>(18)?,
+                        row.get::<_, i64>(19)?,
                         row.get::<_, String>(20)?,
                         row.get::<_, String>(21)?,
-                        row.get::<_, i64>(22)?,
-                        row.get::<_, i64>(23)?,
+                        row.get::<_, String>(22)?,
+                        row.get::<_, String>(23)?,
                         row.get::<_, i64>(24)?,
+                        row.get::<_, i64>(25)?,
+                        row.get::<_, i64>(26)?,
                     ))
                 },
             )
@@ -350,6 +368,8 @@ impl SqliteAppSettingsStore {
             mux_enabled,
             auto_select_lowest_latency,
             url_test_address,
+            url_test_interval_seconds,
+            url_test_tolerance_ms,
             allow_lan,
             speed_test_url,
             inbound_udp_enabled,
@@ -392,6 +412,8 @@ impl SqliteAppSettingsStore {
             auto_select_lowest_latency: auto_select_lowest_latency != 0,
             url_test_address: normalize_url_test_address(url_test_address),
             allow_lan: allow_lan != 0,
+            url_test_interval_seconds: parse_stored_probe_number(url_test_interval_seconds)?,
+            url_test_tolerance_ms: parse_stored_probe_number(url_test_tolerance_ms)?,
             speed_test_url: normalize_speed_test_url(speed_test_url),
             inbound_udp_enabled: inbound_udp_enabled != 0,
             def_allow_insecure: def_allow_insecure != 0,
@@ -412,8 +434,8 @@ impl SqliteAppSettingsStore {
     /// Returns a typed database error when `SQLite` cannot update the row.
     pub fn save(&self, settings: &AppSettings) -> Result<(), AppSettingsStoreError> {
         self.connection.execute(
-            "INSERT INTO app_settings (id, connect_on_launch, close_to_tray, launch_at_login, core_preference, tun_enabled, log_level, system_proxy_mode, locale, socks_port, http_port, clash_api_port, mux_enabled, auto_select_lowest_latency, url_test_address, allow_lan, speed_test_url, inbound_udp_enabled, def_allow_insecure, def_fingerprint, hotkey_connect, hotkey_previous, hotkey_next, fragment_enabled, udp_noise_enabled, final_fragment_enabled)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
+            "INSERT INTO app_settings (id, connect_on_launch, close_to_tray, launch_at_login, core_preference, tun_enabled, log_level, system_proxy_mode, locale, socks_port, http_port, clash_api_port, mux_enabled, auto_select_lowest_latency, url_test_address, url_test_interval_seconds, url_test_tolerance_ms, allow_lan, speed_test_url, inbound_udp_enabled, def_allow_insecure, def_fingerprint, hotkey_connect, hotkey_previous, hotkey_next, fragment_enabled, udp_noise_enabled, final_fragment_enabled)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)
              ON CONFLICT(id) DO UPDATE SET
                  connect_on_launch = excluded.connect_on_launch,
                  close_to_tray = excluded.close_to_tray,
@@ -430,6 +452,8 @@ impl SqliteAppSettingsStore {
                  auto_select_lowest_latency = excluded.auto_select_lowest_latency,
                  url_test_address = excluded.url_test_address,
                  allow_lan = excluded.allow_lan,
+                 url_test_interval_seconds = excluded.url_test_interval_seconds,
+                 url_test_tolerance_ms = excluded.url_test_tolerance_ms,
                  speed_test_url = excluded.speed_test_url,
                  inbound_udp_enabled = excluded.inbound_udp_enabled,
                  def_allow_insecure = excluded.def_allow_insecure,
@@ -455,6 +479,8 @@ impl SqliteAppSettingsStore {
                 i64::from(settings.mux_enabled),
                 i64::from(settings.auto_select_lowest_latency),
                 normalize_url_test_address(&settings.url_test_address),
+                i64::from(settings.url_test_interval_seconds),
+                i64::from(settings.url_test_tolerance_ms),
                 i64::from(settings.allow_lan),
                 normalize_speed_test_url(&settings.speed_test_url),
                 i64::from(settings.inbound_udp_enabled),
@@ -724,6 +750,14 @@ pub fn normalize_hotkey(value: impl AsRef<str>) -> String {
 }
 
 /// Reads a stored inbound port, rejecting zero and out-of-range values.
+/// The probe numbers are validated again by `GroupProbe`; this only rejects a
+/// stored value that is not a number at all.
+fn parse_stored_probe_number(value: i64) -> Result<u32, AppSettingsStoreError> {
+    u32::try_from(value).map_err(|_| AppSettingsStoreError::InvalidStoredValue {
+        value: value.to_string(),
+    })
+}
+
 fn parse_stored_port(value: i64) -> Result<u16, AppSettingsStoreError> {
     u16::try_from(value).ok().filter(|port| *port != 0).ok_or(
         AppSettingsStoreError::InvalidStoredValue {

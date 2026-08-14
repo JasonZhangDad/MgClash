@@ -90,6 +90,8 @@ export interface AppSettings {
   udpNoiseEnabled: boolean;
   autoSelectLowestLatency: boolean;
   urlTestAddress: string;
+  urlTestIntervalSeconds: number;
+  urlTestToleranceMs: number;
   allowLan: boolean;
   speedTestUrl: string;
   inboundUdpEnabled: boolean;

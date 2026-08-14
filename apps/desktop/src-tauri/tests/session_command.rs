@@ -2195,3 +2195,26 @@ fn the_startup_only_switches_reach_the_generated_config() {
         .unwrap();
     assert_eq!(proxy["multiplex"]["enabled"], true);
 }
+
+#[test]
+fn the_group_probe_is_configurable_and_validated() {
+    let (mut service, _runtime, _fail_start) = service();
+
+    service
+        .set_group_probe("https://probe.example.com", 600, 150)
+        .unwrap();
+    let probe = service.group_probe().unwrap();
+    assert_eq!(probe.url(), "https://probe.example.com");
+    assert_eq!(probe.interval(), "10m");
+    assert_eq!(probe.tolerance_ms(), 150);
+
+    // A rejected probe leaves the stored one alone.
+    assert_eq!(
+        service
+            .set_group_probe("https://probe.example.com", 1, 150)
+            .unwrap_err()
+            .code(),
+        "invalid_group_probe"
+    );
+    assert_eq!(service.group_probe().unwrap().interval(), "10m");
+}

@@ -5127,6 +5127,53 @@ export default function App() {
               />
             </label>
             <label>
+              {t("自动测速间隔（秒）")}
+              <input
+                aria-label={t("自动测速间隔（秒）")}
+                type="number"
+                min={10}
+                max={86400}
+                value={settings.urlTestIntervalSeconds}
+                disabled={busy}
+                onChange={(event) =>
+                  setSettings({
+                    ...settings,
+                    urlTestIntervalSeconds: Number(event.target.value),
+                  })
+                }
+                onBlur={() => {
+                  void onChangeSettings({
+                    urlTestIntervalSeconds: settings.urlTestIntervalSeconds,
+                  });
+                }}
+              />
+            </label>
+            <label>
+              {t("切换容差（毫秒）")}
+              <input
+                aria-label={t("切换容差（毫秒）")}
+                type="number"
+                min={0}
+                max={5000}
+                value={settings.urlTestToleranceMs}
+                disabled={busy}
+                onChange={(event) =>
+                  setSettings({
+                    ...settings,
+                    urlTestToleranceMs: Number(event.target.value),
+                  })
+                }
+                onBlur={() => {
+                  void onChangeSettings({
+                    urlTestToleranceMs: settings.urlTestToleranceMs,
+                  });
+                }}
+              />
+            </label>
+            <p className="hint">
+              {t("策略组每隔这么久重测一次成员；只有比当前成员快出容差值，才会切换。")}
+            </p>
+            <label>
               {t("下载测速地址")}
               <input
                 aria-label={t("下载测速地址")}

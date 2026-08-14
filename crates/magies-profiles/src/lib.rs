@@ -92,7 +92,8 @@ pub use sing_box_outbound::{
     apply_sing_box_fragment, apply_sing_box_multiplex, node_outbound_tag,
 };
 pub use sing_box_runtime_config::{
-    RuntimeConfigError, SingBoxRuntimeConfigGenerator, SingBoxRuntimeProfile,
+    GroupProbe, GroupProbeError, RuntimeConfigError, SingBoxRuntimeConfigGenerator,
+    SingBoxRuntimeProfile,
 };
 pub use socks::{ParsedSocksNode, SocksCredential, SocksParseError, SocksParser};
 pub use subscription::{

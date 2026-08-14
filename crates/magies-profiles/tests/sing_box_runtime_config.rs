@@ -5,8 +5,8 @@ use magies_domain::{
 };
 use magies_platform::OperatingSystem;
 use magies_profiles::{
-    DnsProfile, DnsServer, DnsStrategy, LocalHttpProfile, LocalSocksProfile, NodeCredential,
-    NodeGroupStrategy, OutboundConfigError, RuntimeConfigError, ShadowsocksParser,
+    DnsProfile, DnsServer, DnsStrategy, GroupProbe, LocalHttpProfile, LocalSocksProfile,
+    NodeCredential, NodeGroupStrategy, OutboundConfigError, RuntimeConfigError, ShadowsocksParser,
     SingBoxRuntimeConfigGenerator, SingBoxRuntimeProfile, TunProfile, VlessParser,
 };
 use magies_routing::{RouteOutbound, RouteProfile, RoutingMode, RoutingRule};
@@ -364,6 +364,7 @@ fn urltest_group_emits_member_outbounds_and_a_proxy_urltest() {
     other.server = ServerAddress::new("other.example.com").unwrap();
     let dns = system_dns();
     let route = RouteProfile::new(RoutingMode::Global, Vec::new(), RouteOutbound::Proxy).unwrap();
+    let probe = GroupProbe::default();
     let profile = SingBoxRuntimeProfile::new(
         &node,
         NodeCredential::from(parsed.credential()),
@@ -375,7 +376,7 @@ fn urltest_group_emits_member_outbounds_and_a_proxy_urltest() {
             (&node, NodeCredential::from(parsed.credential())),
             (&other, NodeCredential::from(second.credential())),
         ],
-        "https://www.gstatic.com/generate_204",
+        &probe,
     );
 
     let generated = SingBoxRuntimeConfigGenerator::generate(&profile).unwrap();
@@ -405,6 +406,7 @@ fn fallback_group_emits_member_outbounds_and_a_proxy_fallback() {
     other.server = ServerAddress::new("other.example.com").unwrap();
     let dns = system_dns();
     let route = RouteProfile::new(RoutingMode::Global, Vec::new(), RouteOutbound::Proxy).unwrap();
+    let probe = GroupProbe::default();
     let profile = SingBoxRuntimeProfile::new(
         &node,
         NodeCredential::from(parsed.credential()),
@@ -417,7 +419,7 @@ fn fallback_group_emits_member_outbounds_and_a_proxy_fallback() {
             (&node, NodeCredential::from(parsed.credential())),
             (&other, NodeCredential::from(second.credential())),
         ],
-        "https://www.gstatic.com/generate_204",
+        &probe,
     );
 
     let generated = SingBoxRuntimeConfigGenerator::generate(&profile).unwrap();
@@ -440,6 +442,7 @@ fn loadbalance_group_emits_member_outbounds_and_a_proxy_loadbalance() {
     other.server = ServerAddress::new("other.example.com").unwrap();
     let dns = system_dns();
     let route = RouteProfile::new(RoutingMode::Global, Vec::new(), RouteOutbound::Proxy).unwrap();
+    let probe = GroupProbe::default();
     let profile = SingBoxRuntimeProfile::new(
         &node,
         NodeCredential::from(parsed.credential()),
@@ -452,7 +455,7 @@ fn loadbalance_group_emits_member_outbounds_and_a_proxy_loadbalance() {
             (&node, NodeCredential::from(parsed.credential())),
             (&other, NodeCredential::from(second.credential())),
         ],
-        "https://www.gstatic.com/generate_204",
+        &probe,
     );
 
     let generated = SingBoxRuntimeConfigGenerator::generate(&profile).unwrap();
@@ -508,4 +511,54 @@ fn shadowsocks_node(enabled: bool) -> ProxyNode {
     node.transport = Some(TransportConfig::Tcp);
     node.enabled = enabled;
     node
+}
+
+#[test]
+fn the_urltest_group_uses_the_configured_interval_and_tolerance() {
+    let parsed = ShadowsocksParser
+        .parse("ss://aes-256-gcm:proxy-secret@edge.example.com:8388")
+        .unwrap();
+    let second = ShadowsocksParser
+        .parse("ss://aes-256-gcm:other-secret@other.example.com:8388")
+        .unwrap();
+    let node = shadowsocks_node(true);
+    let mut other = shadowsocks_node(true);
+    other.id = Uuid::parse_str("018f78b5-08ee-7caa-94f3-1d5d781aba23").unwrap();
+    other.server = ServerAddress::new("other.example.com").unwrap();
+    let dns = system_dns();
+    let route = RouteProfile::new(RoutingMode::Global, Vec::new(), RouteOutbound::Proxy).unwrap();
+    let probe = GroupProbe::new("https://probe.example.com", 600, 150).unwrap();
+    let profile = SingBoxRuntimeProfile::new(
+        &node,
+        NodeCredential::from(parsed.credential()),
+        &dns,
+        &route,
+    )
+    .with_urltest(
+        vec![
+            (&node, NodeCredential::from(parsed.credential())),
+            (&other, NodeCredential::from(second.credential())),
+        ],
+        &probe,
+    );
+
+    let generated = SingBoxRuntimeConfigGenerator::generate(&profile).unwrap();
+    let group = &generated.json()["outbounds"][2];
+    assert_eq!(group["url"], "https://probe.example.com");
+    assert_eq!(group["interval"], "10m");
+    assert_eq!(group["tolerance"], 150);
+}
+
+#[test]
+fn a_probe_the_core_would_reject_is_refused() {
+    // sing-box polls on this interval and compares against this tolerance; the
+    // window must not be able to ask for a value the Core will not accept.
+    assert!(GroupProbe::new("https://probe.example.com", 0, 50).is_err());
+    assert!(GroupProbe::new("https://probe.example.com", 600, 60_000).is_err());
+    assert!(GroupProbe::new("not-a-url", 600, 50).is_err());
+    // An empty URL keeps the built-in probe rather than failing.
+    assert_eq!(
+        GroupProbe::new("", 180, 50).unwrap().url(),
+        "https://www.gstatic.com/generate_204"
+    );
 }

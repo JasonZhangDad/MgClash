@@ -222,6 +222,8 @@ const DEFAULT_SETTINGS = {
   udpNoiseEnabled: false,
   autoSelectLowestLatency: false,
   urlTestAddress: "https://www.gstatic.com/generate_204",
+  urlTestIntervalSeconds: 180,
+  urlTestToleranceMs: 50,
   allowLan: false,
   speedTestUrl: "https://speed.cloudflare.com/__down?bytes=10000000",
   inboundUdpEnabled: true,
@@ -4049,6 +4051,35 @@ describe("App", () => {
       container.querySelector<HTMLInputElement>("input[aria-label='规则值']")
         ?.value,
     ).toBe("cdn.example.com");
+  });
+
+  it("saves the policy group probe interval and tolerance", async () => {
+    await render();
+
+    const interval = container.querySelector<HTMLInputElement>(
+      "input[aria-label='自动测速间隔（秒）']",
+    );
+    const tolerance = container.querySelector<HTMLInputElement>(
+      "input[aria-label='切换容差（毫秒）']",
+    );
+    if (!interval || !tolerance) {
+      throw new Error("the probe fields are missing");
+    }
+    await act(async () => typeInput("600", interval));
+    await act(async () =>
+      interval.dispatchEvent(new FocusEvent("focusout", { bubbles: true })),
+    );
+    expect(saveAppSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ urlTestIntervalSeconds: 600 }),
+    );
+
+    await act(async () => typeInput("150", tolerance));
+    await act(async () =>
+      tolerance.dispatchEvent(new FocusEvent("focusout", { bubbles: true })),
+    );
+    expect(saveAppSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ urlTestToleranceMs: 150 }),
+    );
   });
 
   it("changes the main window layout from the menu", async () => {
