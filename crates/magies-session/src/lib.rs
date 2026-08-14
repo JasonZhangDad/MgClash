@@ -17,11 +17,13 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[cfg(unix)]
+use magies_core_runtime::ValidatedCoreBinary;
+#[cfg(unix)]
 use magies_core_runtime::elevated::{ElevatedCore, ElevatedCoreError, ElevationLauncher};
 use magies_core_runtime::{
     AtomicRuntimeConfig, CoreHealthError, CoreOutput, CoreRuntime, CoreRuntimeError, CoreState,
-    RuntimeConfigFile, RuntimeConfigFileError, SingBoxAdapter, SingBoxAdapterError,
-    ValidatedCoreBinary, XrayAdapter, XrayAdapterError,
+    RuntimeConfigFile, RuntimeConfigFileError, SingBoxAdapter, SingBoxAdapterError, XrayAdapter,
+    XrayAdapterError,
 };
 use magies_domain::{CoreType, ProxyNode};
 use magies_platform::system_proxy::{
