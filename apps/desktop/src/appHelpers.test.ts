@@ -1,7 +1,14 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
+  clampColumnWidth,
   groupTraffic,
+  loadColumnWidths,
+  saveColumnWidths,
+  nextNodeSort,
+  sortNodes,
   processTraffic,
   ruleDraftFromConnection,
 } from "./appHelpers";
@@ -100,5 +107,128 @@ describe("processTraffic", () => {
 
   it("has nothing to show without connections", () => {
     expect(processTraffic([])).toEqual([]);
+  });
+});
+
+describe("sortNodes", () => {
+  const nodes = [
+    {
+      frontNodeId: null,
+      groupId: null,
+      id: "n1",
+      latencyMs: 120,
+      name: "Bravo",
+      port: 443,
+      protocol: "vless" as const,
+      server: "b.example.com",
+    },
+    {
+      frontNodeId: null,
+      groupId: null,
+      id: "n2",
+      latencyMs: null,
+      name: "alpha",
+      port: 443,
+      protocol: "trojan" as const,
+      server: "a.example.com",
+    },
+    {
+      frontNodeId: null,
+      groupId: null,
+      id: "n3",
+      latencyMs: 30,
+      name: "Charlie",
+      port: 443,
+      protocol: "vmess" as const,
+      server: "c.example.com",
+    },
+  ];
+
+  it("keeps the manual order when nothing is sorted", () => {
+    expect(sortNodes(nodes, null).map((node) => node.id)).toEqual([
+      "n1",
+      "n2",
+      "n3",
+    ]);
+  });
+
+  it("sorts names without minding case", () => {
+    expect(
+      sortNodes(nodes, { column: "name", direction: "asc" }).map(
+        (node) => node.name,
+      ),
+    ).toEqual(["alpha", "Bravo", "Charlie"]);
+    expect(
+      sortNodes(nodes, { column: "name", direction: "desc" }).map(
+        (node) => node.name,
+      ),
+    ).toEqual(["Charlie", "Bravo", "alpha"]);
+  });
+
+  it("puts untested nodes last whichever way latency is sorted", () => {
+    // An untested node has no latency to compare; burying it keeps the fastest
+    // and the slowest both reachable from the top.
+    expect(
+      sortNodes(nodes, { column: "latency", direction: "asc" }).map(
+        (node) => node.id,
+      ),
+    ).toEqual(["n3", "n1", "n2"]);
+    expect(
+      sortNodes(nodes, { column: "latency", direction: "desc" }).map(
+        (node) => node.id,
+      ),
+    ).toEqual(["n1", "n3", "n2"]);
+  });
+
+  it("leaves the input untouched", () => {
+    const order = nodes.map((node) => node.id);
+    sortNodes(nodes, { column: "name", direction: "desc" });
+    expect(nodes.map((node) => node.id)).toEqual(order);
+  });
+});
+
+describe("nextNodeSort", () => {
+  it("cycles a column through ascending, descending and back to manual", () => {
+    expect(nextNodeSort(null, "name")).toEqual({
+      column: "name",
+      direction: "asc",
+    });
+    expect(nextNodeSort({ column: "name", direction: "asc" }, "name")).toEqual({
+      column: "name",
+      direction: "desc",
+    });
+    expect(nextNodeSort({ column: "name", direction: "desc" }, "name")).toBeNull();
+  });
+
+  it("starts a different column ascending", () => {
+    expect(nextNodeSort({ column: "name", direction: "desc" }, "latency")).toEqual({
+      column: "latency",
+      direction: "asc",
+    });
+  });
+});
+
+describe("column widths", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("keeps a dragged width between launches", () => {
+    saveColumnWidths({ name: 220 });
+
+    expect(loadColumnWidths()).toEqual({ name: 220 });
+  });
+
+  it("ignores a stored value that is not a width table", () => {
+    localStorage.setItem("mgclash.columnWidths", "not json");
+    expect(loadColumnWidths()).toEqual({});
+
+    localStorage.setItem("mgclash.columnWidths", '{"name":"wide"}');
+    expect(loadColumnWidths()).toEqual({});
+  });
+
+  it("refuses to shrink a column into nothing", () => {
+    // A column dragged to zero cannot be grabbed again.
+    expect(clampColumnWidth(10)).toBe(48);
+    expect(clampColumnWidth(3_000)).toBe(1_200);
+    expect(clampColumnWidth(220)).toBe(220);
   });
 });

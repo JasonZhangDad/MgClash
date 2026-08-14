@@ -135,6 +135,13 @@ import {
   regionFlag,
   ROUTE_KIND_LABEL,
   ROUTE_OUTBOUND_LABEL,
+  clampColumnWidth,
+  loadColumnWidths,
+  nextNodeSort,
+  saveColumnWidths,
+  sortNodes,
+  type NodeSort,
+  type NodeSortColumn,
   ruleDraftFromConnection,
   describeRuleSetCache,
   groupTraffic,
@@ -169,6 +176,7 @@ import { StatusBar } from "./components/StatusBar";
 import { MsgView } from "./components/MsgView";
 import { CameraScanner } from "./components/CameraScanner";
 import { ConnectionsView } from "./components/ConnectionsView";
+import { SortableHeader } from "./components/SortableHeader";
 import { ProxiesView } from "./components/ProxiesView";
 import { Dialog } from "./components/Dialog";
 
@@ -224,6 +232,8 @@ export default function App() {
     useState<RouteOutbound>("proxy");
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
   const [nodeGroups, setNodeGroups] = useState<NodeGroupSummary[]>([]);
+  const [nodeSort, setNodeSort] = useState<NodeSort | null>(null);
+  const [columnWidths, setColumnWidths] = useState(loadColumnWidths);
   const [nodeGroupFilter, setNodeGroupFilter] = useState("all");
   const [groupingNodeId, setGroupingNodeId] = useState<string | null>(null);
   const [frontingNodeId, setFrontingNodeId] = useState<string | null>(null);
@@ -1929,7 +1939,18 @@ export default function App() {
   const nodeGroupNames = new Map(
     nodeGroups.map((group) => [group.id, group.name]),
   );
-  const visibleNodes = nodes.filter((candidate) => {
+  const onSortColumn = (column: NodeSortColumn) => {
+    setNodeSort((current) => nextNodeSort(current, column));
+  };
+  const onResizeColumn = useCallback((label: string, width: number) => {
+    setColumnWidths((current) => {
+      const next = { ...current, [label]: width };
+      saveColumnWidths(next);
+      return next;
+    });
+  }, []);
+  const visibleNodes = sortNodes(
+    nodes.filter((candidate) => {
     if (nodeGroupFilter === "ungrouped" && candidate.groupId !== null) {
       return false;
     }
@@ -1951,7 +1972,9 @@ export default function App() {
     return `${candidate.name} ${candidate.server} ${candidate.protocol} ${groupName}`
       .toLowerCase()
       .includes(query);
-  });
+    }),
+    nodeSort,
+  );
   const inspected =
     nodes.find((candidate) => candidate.id === inspectedId) ??
     node ??
@@ -2230,13 +2253,28 @@ export default function App() {
                           />
                         </th>
                         <th className="node-index">{t("序号")}</th>
-                        <th>{t("名称")}</th>
-                        <th>{t("协议")}</th>
-                        <th>{t("传输")}</th>
-                        <th>TLS</th>
-                        <th>{t("分组")}</th>
-                        <th>{t("服务器")}</th>
-                        <th>{t("延迟")}</th>
+                        {(
+                          [
+                            ["名称", "name"],
+                            ["协议", "protocol"],
+                            ["传输", undefined],
+                            ["TLS", undefined],
+                            ["分组", undefined],
+                            ["服务器", "server"],
+                            ["延迟", "latency"],
+                          ] as [string, NodeSortColumn | undefined][]
+                        ).map(([label, column]) => (
+                          <SortableHeader
+                            key={label}
+                            column={column}
+                            label={label}
+                            sort={nodeSort}
+                            width={columnWidths[label]}
+                            t={t}
+                            onSort={onSortColumn}
+                            onResize={onResizeColumn}
+                          />
+                        ))}
                         <th>{t("速度")}</th>
                         <th>{t("今日上传")}</th>
                         <th>{t("今日下载")}</th>
@@ -2411,7 +2449,9 @@ export default function App() {
                     const index = nodes.findIndex((item) => item.id === target.id);
                     const selected = target.id === node?.id;
                     // Reordering acts on the whole list, so it cannot follow a filtered view.
-                    const reorderable = nodeGroupFilter === "all";
+                    // Moving a row means nothing while the view is not in the
+                    // stored order.
+                    const reorderable = nodeGroupFilter === "all" && nodeSort === null;
                     const act = (run_: () => void) => () => {
                       setNodeMenu(null);
                       run_();

@@ -4510,6 +4510,103 @@ describe("App", () => {
     }
   });
 
+
+  it("sorts the server table by a header and back to manual order", async () => {
+    const osaka = {
+      ...SELECTED.node!,
+      id: "00000000-0000-0000-0000-000000000002",
+      latencyMs: 20,
+      name: "Osaka",
+    };
+    const tokyo = { ...SELECTED.node!, latencyMs: 200 };
+    loadNodesMock.mockResolvedValue([tokyo, osaka]);
+    await render();
+
+    const names = () =>
+      [...container.querySelectorAll("[aria-label='节点列表'] tbody tr")].map(
+        (row) => row.querySelectorAll("td")[2]?.textContent,
+      );
+    expect(names()).toEqual([
+      expect.stringContaining("Tokyo Edge"),
+      expect.stringContaining("Osaka"),
+    ]);
+
+    const header = container.querySelector<HTMLButtonElement>(
+      "[aria-label='按延迟排序表头']",
+    );
+    if (!header) {
+      throw new Error("the latency header is not sortable");
+    }
+    await act(async () => header.click());
+    expect(names()).toEqual([
+      expect.stringContaining("Osaka"),
+      expect.stringContaining("Tokyo Edge"),
+    ]);
+    expect(header.closest("th")?.getAttribute("aria-sort")).toBe("ascending");
+
+    await act(async () => header.click());
+    expect(header.closest("th")?.getAttribute("aria-sort")).toBe("descending");
+
+    // A third click returns to the order the move actions maintain.
+    await act(async () => header.click());
+    expect(header.closest("th")?.getAttribute("aria-sort")).toBe("none");
+    expect(names()).toEqual([
+      expect.stringContaining("Tokyo Edge"),
+      expect.stringContaining("Osaka"),
+    ]);
+  });
+
+  it("will not reorder rows by hand while a sort is applied", async () => {
+    const osaka = {
+      ...SELECTED.node!,
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Osaka",
+    };
+    loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
+    await render();
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>("[aria-label='按名称排序表头']")
+        ?.click(),
+    );
+
+    // Moving a row means nothing when the view is not in the stored order.
+    expect(await nodeMenuItemDisabled("Osaka", "上移")).toBe(true);
+  });
+
+  it("widens a column by dragging its grip and remembers it", async () => {
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    await render();
+
+    const grip = container.querySelector<HTMLElement>(
+      "[aria-label='调整名称列宽']",
+    );
+    if (!grip) {
+      throw new Error("the name column has no resize grip");
+    }
+    const header = grip.closest("th");
+
+    // Separate ticks: the drag listeners only exist once the mousedown has
+    // committed, which is also how a real pointer behaves.
+    await act(async () => {
+      grip.dispatchEvent(
+        new MouseEvent("mousedown", { bubbles: true, clientX: 100 }),
+      );
+    });
+    await act(async () => {
+      window.dispatchEvent(new MouseEvent("mousemove", { clientX: 180 }));
+      window.dispatchEvent(new MouseEvent("mouseup", {}));
+    });
+
+    // The header started at the browser default width; the drag adds its delta.
+    expect(header?.style.width).not.toBe("");
+    const stored = JSON.parse(
+      localStorage.getItem("mgclash.columnWidths") ?? "{}",
+    ) as Record<string, number>;
+    expect(stored["名称"]).toBeGreaterThan(48);
+  });
+
   it("changes the main window layout from the menu", async () => {
     await render();
 

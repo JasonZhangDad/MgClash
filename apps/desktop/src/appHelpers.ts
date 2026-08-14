@@ -142,6 +142,102 @@ export function processTraffic(
     );
 }
 
+export const COLUMN_WIDTHS_KEY = "mgclash.columnWidths";
+const MIN_COLUMN_WIDTH = 48;
+const MAX_COLUMN_WIDTH = 1_200;
+
+/** Keeps a dragged column usable: a zero-width column cannot be grabbed back. */
+export function clampColumnWidth(width: number): number {
+  return Math.min(MAX_COLUMN_WIDTH, Math.max(MIN_COLUMN_WIDTH, Math.round(width)));
+}
+
+/** The stored column widths, or an empty table when nothing usable is stored. */
+export function loadColumnWidths(): Record<string, number> {
+  try {
+    const stored: unknown = JSON.parse(
+      localStorage.getItem(COLUMN_WIDTHS_KEY) ?? "{}",
+    );
+    if (stored === null || typeof stored !== "object" || Array.isArray(stored)) {
+      return {};
+    }
+    return Object.fromEntries(
+      Object.entries(stored as Record<string, unknown>).filter(
+        (entry): entry is [string, number] => typeof entry[1] === "number",
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
+export function saveColumnWidths(widths: Record<string, number>): void {
+  try {
+    localStorage.setItem(COLUMN_WIDTHS_KEY, JSON.stringify(widths));
+  } catch {
+    // A width that cannot be stored still applies to this launch.
+  }
+}
+
+/** Which column the server table is ordered by, and which way. */
+export type NodeSortColumn =
+  | "name"
+  | "protocol"
+  | "server"
+  | "latency";
+
+export interface NodeSort {
+  column: NodeSortColumn;
+  direction: "asc" | "desc";
+}
+
+/**
+ * The next state of the header the user just clicked.
+ *
+ * A third click drops back to the manual order the move-up/down actions
+ * maintain, so sorting never permanently hides it.
+ */
+export function nextNodeSort(
+  current: NodeSort | null,
+  column: NodeSortColumn,
+): NodeSort | null {
+  if (current === null || current.column !== column) {
+    return { column, direction: "asc" };
+  }
+  return current.direction === "asc" ? { column, direction: "desc" } : null;
+}
+
+/** Orders a copy of the rows; `null` keeps the stored order. */
+export function sortNodes<
+  T extends {
+    latencyMs: number | null;
+    name: string;
+    protocol: string;
+    server: string;
+  },
+>(nodes: T[], sort: NodeSort | null): T[] {
+  if (sort === null) {
+    return [...nodes];
+  }
+  const factor = sort.direction === "asc" ? 1 : -1;
+  return [...nodes].sort((left, right) => {
+    if (sort.column === "latency") {
+      // A node nobody has measured sorts last either way: it is not fast, and
+      // calling it the slowest would be a claim the app cannot make.
+      if (left.latencyMs === null || right.latencyMs === null) {
+        return (left.latencyMs === null ? 1 : 0) - (right.latencyMs === null ? 1 : 0);
+      }
+      return factor * (left.latencyMs - right.latencyMs);
+    }
+    const value = (node: T) =>
+      sort.column === "name"
+        ? node.name
+        : sort.column === "protocol"
+          ? node.protocol
+          : node.server;
+    return factor * value(left).localeCompare(value(right), undefined, { sensitivity: "base" });
+  });
+}
+
 /** How each route outbound reads in the rule tables. */
 export const ROUTE_OUTBOUND_LABEL: Record<RouteOutbound, string> = {
   block: "拦截",

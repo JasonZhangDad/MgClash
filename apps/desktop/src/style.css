@@ -410,6 +410,48 @@ button {
   padding: 6px 8px;
   text-align: left;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Drag the right edge of a header to widen or narrow its column, the way a
+   desktop grid does. The table keeps its own widths so a dragged column stays
+   where the user put it. */
+.node-list {
+  table-layout: auto;
+}
+
+.node-list th {
+  position: relative;
+  min-width: 48px;
+}
+
+.column-grip {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  user-select: none;
+}
+
+.column-grip:hover {
+  background: var(--accent);
+  opacity: 0.4;
+}
+
+.node-list th .column-sort {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.node-list th .column-sort:hover {
+  color: var(--accent);
 }
 
 .node-list thead th {
