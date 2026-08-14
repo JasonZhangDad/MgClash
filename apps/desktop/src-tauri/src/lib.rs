@@ -669,6 +669,19 @@ fn session_status(state: State<'_, AppState>) -> SessionStatus {
     state.service().status()
 }
 
+/// The Core configuration the next connect would write, as text.
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State by value"
+)]
+fn session_preview_config(state: State<'_, AppState>) -> Result<String, CommandError> {
+    state
+        .service()
+        .preview_config()
+        .map_err(|error| command_error(&error))
+}
+
 #[tauri::command]
 #[expect(
     clippy::needless_pass_by_value,
@@ -1687,6 +1700,10 @@ fn set_app_settings(
                     crate::app_settings::parse_config_template(&settings.config_template)
                         .unwrap_or_default(),
                 );
+                service.set_config_override(
+                    crate::app_settings::parse_config_override(&settings.config_override)
+                        .unwrap_or_default(),
+                );
                 service.set_udp_noise_enabled(settings.udp_noise_enabled);
                 service.set_group_probe(
                     &settings.url_test_address,
@@ -2231,6 +2248,10 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             crate::app_settings::parse_config_template(&settings.config_template)
                 .unwrap_or_default(),
         );
+        service.set_config_override(
+            crate::app_settings::parse_config_override(&settings.config_override)
+                .unwrap_or_default(),
+        );
         service.set_udp_noise_enabled(settings.udp_noise_enabled);
         // A probe stored by an older build could be out of range; the startup
         // path keeps the defaults rather than refusing to launch.
@@ -2391,6 +2412,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            session_preview_config,
             platform_summary,
             session_status,
             session_set_routing_mode,

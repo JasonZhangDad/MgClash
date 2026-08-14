@@ -110,6 +110,14 @@ const DICTIONARY: Dictionary = {
   "缺少 Core": "No Core",
   "网络": "Network",
   "入站": "Inbound",
+  "查看配置": "View config",
+  "生成的 Core 配置": "Generated Core config",
+  "保存为覆盖配置": "Save as override",
+  "清除覆盖配置": "Clear override",
+  "这是下次连接将写给 Core 的完整配置，包含已生效的模板。编辑后保存为覆盖配置，连接时会原样使用它，不再重新生成——节点或路由改变时它不会跟着变。":
+    "The complete config the next connect will write to the Core, including any template in force. Edit it and save it as an override and the connect uses it verbatim instead of generating — it will not follow a change of node or route.",
+  "覆盖配置已生效：连接使用的是这份文档，而不是生成的配置。":
+    "An override is in force: the connect uses this document, not the generated one.",
   "Core 配置模板": "Core config template",
   "保存配置模板": "Save template",
   "以 JSON Merge Patch 的形式叠加在生成的配置之上：可以新增本应用不涉及的字段、改写已生成的字段，或用 null 删除它。留空表示不使用模板。保存时校验，连接时由 Core 再次校验。":

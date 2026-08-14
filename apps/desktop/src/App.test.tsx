@@ -23,6 +23,7 @@ const createNodeMock = vi.hoisted(() => vi.fn());
 const importNodesMock = vi.hoisted(() => vi.fn());
 const loadLogsMock = vi.hoisted(() => vi.fn());
 const loadAppSettingsMock = vi.hoisted(() => vi.fn());
+const previewCoreConfigMock = vi.hoisted(() => vi.fn());
 const saveAppSettingsMock = vi.hoisted(() => vi.fn());
 const clearLogsMock = vi.hoisted(() => vi.fn());
 const clearTrafficMock = vi.hoisted(() => vi.fn());
@@ -103,6 +104,7 @@ vi.mock("./session", async () => {
     connectSession: connectSessionMock,
     createNode: createNodeMock,
     loadAppSettings: loadAppSettingsMock,
+    previewCoreConfig: previewCoreConfigMock,
     loadLogs: loadLogsMock,
     saveAppSettings: saveAppSettingsMock,
     disconnectSession: disconnectSessionMock,
@@ -244,6 +246,7 @@ const DEFAULT_SETTINGS = {
   hotkeyPrevious: "Ctrl+[",
   hotkeyNext: "Ctrl+]",
   configTemplate: "",
+  configOverride: "",
 };
 
 const SUBSCRIPTION = {
@@ -3376,6 +3379,32 @@ describe("App", () => {
       providers: [],
       rules,
     });
+  });
+
+  it("previews the generated config and saves an edited one as an override", async () => {
+    previewCoreConfigMock.mockResolvedValue('{\n  "log": {\n    "level": "warn"\n  }\n}');
+    saveAppSettingsMock.mockResolvedValue({
+      ...DEFAULT_SETTINGS,
+      configOverride: '{"log":{"level":"trace"}}',
+    });
+    await render();
+    await act(async () => button("查看配置").click());
+    await act(async () => {});
+
+    const editor = container.querySelector<HTMLTextAreaElement>(
+      "textarea[aria-label='生成的 Core 配置']",
+    );
+    // What it would run, not a separately assembled guess.
+    expect(editor?.value).toContain('"level": "warn"');
+
+    await act(async () => {
+      type('{"log":{"level":"trace"}}', editor!);
+    });
+    await act(async () => button("保存为覆盖配置").click());
+
+    expect(saveAppSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ configOverride: '{"log":{"level":"trace"}}' }),
+    );
   });
 
   it("shows the Core config template that is already saved", async () => {

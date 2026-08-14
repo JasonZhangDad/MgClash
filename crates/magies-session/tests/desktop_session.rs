@@ -767,3 +767,66 @@ fn a_config_template_reaches_the_document_the_core_is_given() {
     assert!(config["outbounds"].is_array());
     session.stop().unwrap();
 }
+
+#[test]
+fn the_document_can_be_previewed_without_starting_anything() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let store = MemorySecretStore::default();
+    let profile = profile_with_stored_credential(&store);
+    let runtime = RuntimeDirectory::new("preview");
+    let session = DesktopSession::new(
+        store,
+        FakeCore::new(events.clone()),
+        FakeProxy::new(events.clone()),
+        runtime.path(),
+    );
+
+    let document = session.preview_config(&profile).unwrap();
+
+    // Exactly what a connect would hand the Core, and nothing else happened:
+    // no Core started, no System Proxy touched, no file written.
+    assert!(document["outbounds"].is_array());
+    assert_eq!(document["inbounds"].as_array().unwrap().len(), 2);
+    assert!(events.lock().unwrap().is_empty());
+    assert!(session.config_path().is_none());
+}
+
+#[test]
+fn an_override_replaces_the_generated_document_verbatim() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let store = MemorySecretStore::default();
+    // What an override actually is: the generated document with an edit in it,
+    // credential and all.
+    let overridden = serde_json::json!({
+        "log": { "level": "trace" },
+        "inbounds": [],
+        "outbounds": [
+            {
+                "type": "shadowsocks",
+                "tag": "proxy",
+                "server": "edge.example.com",
+                "server_port": 8388,
+                "method": "aes-256-gcm",
+                "password": "runtime-secret",
+            },
+            { "type": "direct", "tag": "direct" },
+        ],
+    });
+    let profile = profile_with_stored_credential(&store).with_config_override(overridden.clone());
+    let runtime = RuntimeDirectory::new("override");
+    let mut session = DesktopSession::new(
+        store,
+        FakeCore::new(events.clone()),
+        FakeProxy::new(events.clone()),
+        runtime.path(),
+    );
+
+    session.start(&profile).unwrap();
+
+    // Verbatim: an override that is edited from the generated text would be a
+    // lie if the app then regenerated parts of it.
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(session.config_path().unwrap()).unwrap()).unwrap();
+    assert_eq!(written, overridden);
+    session.stop().unwrap();
+}

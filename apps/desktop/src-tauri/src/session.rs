@@ -96,6 +96,8 @@ pub struct SessionDefaults {
     pub final_fragment_enabled: bool,
     /// A user-supplied Core config template, already parsed. See ADR 0005.
     pub config_template: Option<serde_json::Value>,
+    /// A user-edited document that replaces generation. See ADR 0005.
+    pub config_override: Option<serde_json::Value>,
     /// When true the next connect sends v2rayN-style UDP noise via Xray freedom
     /// `noises` (Xray only).
     pub udp_noise_enabled: bool,
@@ -127,6 +129,7 @@ impl SessionDefaults {
             fragment_enabled: false,
             final_fragment_enabled: false,
             config_template: None,
+            config_override: None,
             udp_noise_enabled: false,
             url_test_address: DEFAULT_URL_TEST_ADDRESS.to_owned(),
             url_test_interval_seconds: 180,
@@ -1732,22 +1735,17 @@ where
         Ok(self.status())
     }
 
-    /// Starts the Core and System Proxy for the selected node.
+    /// The profile a connect would run, without running it.
+    ///
+    /// Shared with `connect` so a preview cannot describe a session the app
+    /// would not actually start.
     ///
     /// # Errors
     ///
-    /// Returns [`SessionCommandError::NoSelectedNode`] before any node is
-    /// imported, otherwise the orchestrator's typed error.
-    pub fn connect(&mut self) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
-        // Checked before anything is generated or spawned: another proxy client
-        // holding a loopback port makes the Core exit on its own, and its exit
-        // code names nothing the user can act on.
-        LocalProxyPortChecker::check_with_allow_lan(
-            self.defaults.socks.port().get(),
-            self.defaults.http.port().get(),
-            self.defaults.socks.allow_lan(),
-        )
-        .map_err(SessionCommandError::LocalProxyPort)?;
+    /// Returns the same typed errors a connect would fail assembly with.
+    pub fn session_profile(
+        &self,
+    ) -> Result<DesktopSessionProfile, SessionCommandError<C::Error, P::Error>> {
         let node = self
             .node
             .clone()
@@ -1772,6 +1770,9 @@ where
         if let Some(template) = self.defaults.config_template.clone() {
             profile = profile.with_config_template(template);
         }
+        if let Some(document) = self.defaults.config_override.clone() {
+            profile = profile.with_config_override(document);
+        }
         if let Some(front) = self.front_node_for(&node)? {
             profile = profile.with_front_node(front);
         }
@@ -1786,6 +1787,27 @@ where
             Some(tun) => profile.with_system_proxy(false).with_tun(tun, true),
             None => profile.with_system_proxy_mode(self.defaults.system_proxy.clone()),
         };
+
+        Ok(profile)
+    }
+
+    /// Starts the Core and System Proxy for the selected node.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionCommandError::NoSelectedNode`] before any node is
+    /// imported, otherwise the orchestrator's typed error.
+    pub fn connect(&mut self) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
+        // Checked before anything is generated or spawned: another proxy client
+        // holding a loopback port makes the Core exit on its own, and its exit
+        // code names nothing the user can act on.
+        LocalProxyPortChecker::check_with_allow_lan(
+            self.defaults.socks.port().get(),
+            self.defaults.http.port().get(),
+            self.defaults.socks.allow_lan(),
+        )
+        .map_err(SessionCommandError::LocalProxyPort)?;
+        let profile = self.session_profile()?;
 
         let output = self
             .session
@@ -1815,6 +1837,24 @@ where
     pub fn disconnect(&mut self) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
         self.session.stop().map_err(SessionCommandError::Session)?;
         Ok(self.status())
+    }
+
+    /// The document a connect would hand the Core, pretty-printed.
+    ///
+    /// Generated through the same path a connect takes, including any template
+    /// or override in force — what the user reads is what would run.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same typed errors a connect would fail generation with.
+    pub fn preview_config(&self) -> Result<String, SessionCommandError<C::Error, P::Error>> {
+        let profile = self.session_profile()?;
+        let document = self
+            .session
+            .preview_config(&profile)
+            .map_err(SessionCommandError::Session)?;
+        serde_json::to_string_pretty(&document)
+            .map_err(|source| SessionCommandError::PreviewSerialize { source })
     }
 
     /// The running session's on-disk config, for the diagnostic bundle.
@@ -2149,6 +2189,11 @@ where
         self.defaults.config_template = template;
     }
 
+    /// Sets the document that replaces generation for the next session.
+    pub fn set_config_override(&mut self, document: Option<serde_json::Value>) {
+        self.defaults.config_override = document;
+    }
+
     /// Turns Xray UDP noise on or off for the next session.
     pub fn set_udp_noise_enabled(&mut self, enabled: bool) {
         self.defaults.udp_noise_enabled = enabled;
@@ -2317,6 +2362,11 @@ where
 {
     #[error("no node has been imported yet")]
     NoSelectedNode,
+    #[error("failed to render the generated Core configuration")]
+    PreviewSerialize {
+        #[source]
+        source: serde_json::Error,
+    },
     #[error("failed to build the credential reference for the imported node")]
     CredentialRef(#[source] NodeModelError),
     #[error("invalid node settings")]
@@ -2404,6 +2454,7 @@ where
     pub const fn code(&self) -> &'static str {
         match self {
             Self::NoSelectedNode => "no_selected_node",
+            Self::PreviewSerialize { .. } => "config_preview_failed",
             Self::CredentialRef(_) => "invalid_credential_reference",
             Self::InvalidNode(_) => "invalid_node",
             Self::ShareLink(_) => "invalid_share_link",
