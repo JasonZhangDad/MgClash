@@ -5,7 +5,7 @@ use std::hash::BuildHasher;
 use std::path::Path;
 
 use magies_routing::{
-    Network, RouteConfigError, RouteOutbound, RouteProfile, RoutingMode, RoutingRule,
+    LocalInbound, Network, RouteConfigError, RouteOutbound, RouteProfile, RoutingMode, RoutingRule,
     RuleProviderFormat, SniffedProtocol,
 };
 use rusqlite::{Connection, OptionalExtension, params};
@@ -186,6 +186,7 @@ pub enum RouteRuleKind {
     Port,
     Network,
     Protocol,
+    Inbound,
     ProcessName,
     ProcessPath,
 }
@@ -263,6 +264,19 @@ impl RouteRuleSetting {
                     }
                 };
                 RoutingRule::network(network, outbound, priority, self.enabled)
+            }
+            RouteRuleKind::Inbound => {
+                let inbound = match self.value.trim().to_ascii_lowercase().as_str() {
+                    "socks" | "socks-in" => LocalInbound::Socks,
+                    "http" | "http-in" => LocalInbound::Http,
+                    "tun" | "tun-in" => LocalInbound::Tun,
+                    _ => {
+                        return Err(RouteSettingsError::InvalidInbound {
+                            value: self.value.clone(),
+                        });
+                    }
+                };
+                RoutingRule::inbound(inbound, outbound, priority, self.enabled)
             }
             RouteRuleKind::Protocol => {
                 let protocol = match self.value.trim().to_ascii_lowercase().as_str() {
@@ -403,6 +417,8 @@ impl RouteSettings {
 pub enum RouteSettingsError {
     #[error("route port is not an integer: {value}")]
     InvalidPortValue { value: String },
+    #[error("route inbound must be socks, http or tun, got {value}")]
+    InvalidInbound { value: String },
     #[error("route protocol must be http, tls or bittorrent, got {value}")]
     InvalidProtocol { value: String },
     #[error("route network must be tcp or udp, got {value}")]

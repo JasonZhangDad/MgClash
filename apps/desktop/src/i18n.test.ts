@@ -15,6 +15,7 @@ import menuBarSource from "./components/MenuBar.tsx?raw";
 import msgViewSource from "./components/MsgView.tsx?raw";
 import statusBarSource from "./components/StatusBar.tsx?raw";
 
+import { ROUTE_KIND_LABEL } from "./appHelpers";
 import {
   DEFAULT_LOCALE,
   LOCALES,
@@ -44,9 +45,15 @@ function usedKeys(): string[] {
     msgViewSource,
     dialogSource,
   ].join("\n");
-  return [...source.matchAll(/\bt\("((?:[^"\\]|\\.)*)"\)/g)].map(
-    (match) => match[1],
-  );
+  return [
+    ...[...source.matchAll(/\bt\("((?:[^"\\]|\\.)*)"\)/g)].map(
+      (match) => match[1],
+    ),
+    // Reached as `t(label)` with the label held in a record, which the regex
+    // above cannot see. The other entries happen to appear literally elsewhere
+    // too; relying on that coincidence is how one of them ends up untranslated.
+    ...Object.values(ROUTE_KIND_LABEL),
+  ];
 }
 
 /** Simplified Chinese is the source, so it is translated by definition. */

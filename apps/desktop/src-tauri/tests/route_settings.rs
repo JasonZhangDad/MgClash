@@ -385,3 +385,46 @@ fn builds_a_protocol_rule_and_rejects_a_protocol_the_cores_cannot_sniff() {
         Err(RouteSettingsError::InvalidProtocol { .. })
     ));
 }
+
+#[test]
+fn builds_an_inbound_rule_and_rejects_an_inbound_the_app_never_creates() {
+    let settings = RouteSettings {
+        rules: vec![
+            rule(
+                RouteRuleKind::Inbound,
+                "socks",
+                DesktopRouteOutbound::Direct,
+            ),
+            rule(
+                RouteRuleKind::Inbound,
+                "tun-in",
+                DesktopRouteOutbound::Proxy,
+            ),
+        ],
+        providers: Vec::new(),
+        final_outbound: DesktopRouteOutbound::Proxy,
+    };
+
+    let config =
+        SingBoxRouteConfigGenerator::generate(&settings.profile(RoutingMode::Rule).unwrap());
+
+    // Written either way the user might type it: the short name or the tag the
+    // config actually carries.
+    assert_eq!(config.json()["rules"][1]["inbound"][0], "socks-in");
+    assert_eq!(config.json()["rules"][2]["inbound"][0], "tun-in");
+
+    let unknown = RouteSettings {
+        rules: vec![rule(
+            RouteRuleKind::Inbound,
+            "wireguard",
+            DesktopRouteOutbound::Direct,
+        )],
+        providers: Vec::new(),
+        final_outbound: DesktopRouteOutbound::Proxy,
+    };
+
+    assert!(matches!(
+        unknown.profile(RoutingMode::Rule),
+        Err(RouteSettingsError::InvalidInbound { .. })
+    ));
+}

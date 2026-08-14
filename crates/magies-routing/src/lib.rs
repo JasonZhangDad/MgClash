@@ -55,6 +55,30 @@ impl Network {
     }
 }
 
+/// Which local inbound a connection arrived on.
+///
+/// The tags are the ones the config generators emit, so a rule and the inbound
+/// it names cannot drift apart. Xray builds no TUN inbound, so a `Tun` rule is
+/// dropped from an Xray route rather than translated into one that matches
+/// nothing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LocalInbound {
+    Socks,
+    Http,
+    Tun,
+}
+
+impl LocalInbound {
+    #[must_use]
+    pub const fn tag(self) -> &'static str {
+        match self {
+            Self::Socks => "socks-in",
+            Self::Http => "http-in",
+            Self::Tun => "tun-in",
+        }
+    }
+}
+
 /// What the Core decided a connection carries, once it has looked.
 ///
 /// The three both Cores can sniff and v2rayN offers. Matching on any of them
@@ -108,6 +132,7 @@ enum RuleMatcher {
     Port(NonZeroU16),
     Network(Network),
     Protocol(SniffedProtocol),
+    Inbound(LocalInbound),
     ProcessName(String),
     ProcessPath(String),
     Geo {
@@ -308,6 +333,18 @@ impl RoutingRule {
         Self::new(RuleMatcher::Network(network), outbound, priority, enabled)
     }
 
+    /// Creates a rule matching the local inbound the traffic arrived on, the
+    /// way v2rayN's inbound-tag column does.
+    #[must_use]
+    pub const fn inbound(
+        inbound: LocalInbound,
+        outbound: RouteOutbound,
+        priority: i32,
+        enabled: bool,
+    ) -> Self {
+        Self::new(RuleMatcher::Inbound(inbound), outbound, priority, enabled)
+    }
+
     /// Creates a rule matching the sniffed protocol, the way v2rayN's protocol
     /// column does.
     #[must_use]
@@ -498,6 +535,7 @@ impl RoutingRule {
             RuleMatcher::Port(port) => json!({ "port": [port.get()] }),
             RuleMatcher::Network(network) => json!({ "network": network.as_str() }),
             RuleMatcher::Protocol(protocol) => json!({ "protocol": [protocol.as_str()] }),
+            RuleMatcher::Inbound(inbound) => json!({ "inbound": [inbound.tag()] }),
             RuleMatcher::ProcessName(name) => json!({ "process_name": [name] }),
             RuleMatcher::ProcessPath(path) => json!({ "process_path": [path] }),
             RuleMatcher::Geo { kind, code } => {

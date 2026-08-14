@@ -1,5 +1,5 @@
 use magies_routing::{
-    Network, RouteConfigError, RouteOutbound, RouteProfile, RoutingMode, RoutingRule,
+    LocalInbound, Network, RouteConfigError, RouteOutbound, RouteProfile, RoutingMode, RoutingRule,
     RuleProviderFormat, SingBoxRouteConfigGenerator, SniffedProtocol,
 };
 use serde_json::json;
@@ -392,4 +392,25 @@ fn a_disabled_protocol_rule_does_not_turn_sniffing_on() {
     let profile = RouteProfile::new(RoutingMode::Rule, rules, RouteOutbound::Proxy).unwrap();
 
     assert!(!profile.requires_sniffing());
+}
+
+#[test]
+fn routes_by_the_inbound_the_traffic_arrived_on() {
+    // v2rayN's inboundTag column: the machine's own apps through the local
+    // SOCKS go direct, while everything the TUN device catches is proxied.
+    let rules = vec![
+        RoutingRule::inbound(LocalInbound::Socks, RouteOutbound::Direct, 10, true),
+        RoutingRule::inbound(LocalInbound::Http, RouteOutbound::Direct, 20, true),
+        RoutingRule::inbound(LocalInbound::Tun, RouteOutbound::Proxy, 30, true),
+    ];
+    let profile = RouteProfile::new(RoutingMode::Rule, rules, RouteOutbound::Proxy).unwrap();
+
+    let route = SingBoxRouteConfigGenerator::generate(&profile);
+
+    assert_eq!(
+        route.json()["rules"][1],
+        json!({ "inbound": ["socks-in"], "action": "route", "outbound": "direct" })
+    );
+    assert_eq!(route.json()["rules"][2]["inbound"], json!(["http-in"]));
+    assert_eq!(route.json()["rules"][3]["inbound"], json!(["tun-in"]));
 }

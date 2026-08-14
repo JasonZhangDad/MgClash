@@ -4407,13 +4407,15 @@ export default function App() {
                   placeholder={
                     routeRuleKind === "network"
                       ? "tcp 或 udp"
-                      : routeRuleKind === "protocol"
-                        ? "http、tls 或 bittorrent"
-                        : routeRuleKind === "processName"
-                          ? "chrome"
-                          : routeRuleKind === "processPath"
-                            ? "/Applications/Safari.app"
-                            : undefined
+                      : routeRuleKind === "inbound"
+                        ? "socks、http 或 tun"
+                        : routeRuleKind === "protocol"
+                          ? "http、tls 或 bittorrent"
+                          : routeRuleKind === "processName"
+                            ? "chrome"
+                            : routeRuleKind === "processPath"
+                              ? "/Applications/Safari.app"
+                              : undefined
                   }
                   value={routeRuleValue}
                   onChange={(event) => setRouteRuleValue(event.target.value)}
