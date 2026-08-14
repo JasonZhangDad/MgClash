@@ -14,6 +14,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
+use std::sync::mpsc::RecvTimeoutError;
+
+use magies_core_runtime::CoreOutputEvent;
 use magies_core_runtime::elevated::{
     ElevatedCore, ElevatedCoreError, ElevationLauncher, elevation_script,
 };
@@ -109,7 +112,7 @@ fn starting_records_the_pid_and_stopping_ends_the_process() {
     let mut core = ElevatedCore::new(ShellLauncher, &pid_file, &log_file);
 
     let binary = fake_core(&directory, "sleep 30");
-    let pid = core
+    let (pid, _output) = core
         .start(&binary, Path::new("session.json"))
         .unwrap_or_else(|error| panic!("start failed: {error}"));
 
@@ -187,5 +190,97 @@ fn the_core_log_is_where_the_script_pointed_it() {
     assert!(wait_until(
         || fs::read_to_string(&log_file).is_ok_and(|text| text.contains("started"))
     ));
+    fs::remove_dir_all(&directory).unwrap();
+}
+
+#[test]
+fn the_log_reaches_the_output_channel_and_ends_with_the_core() {
+    let directory = scratch("output");
+    let log_file = directory.join("core.log");
+    let mut core = ElevatedCore::new(ShellLauncher, directory.join("core.pid"), &log_file);
+
+    // A Core that keeps writing: the log panel has to show lines as they
+    // arrive, not only once the process is gone.
+    let binary = fake_core(
+        &directory,
+        "for i in 1 2 3; do echo line$i; sleep 0.2; done",
+    );
+    let (_pid, output) = core.start(&binary, Path::new("session.json")).unwrap();
+
+    let mut text = String::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !text.contains("line3") && Instant::now() < deadline {
+        if let Ok(CoreOutputEvent::Chunk { bytes, .. }) =
+            output.recv_timeout(Duration::from_millis(500))
+        {
+            text.push_str(&String::from_utf8_lossy(&bytes));
+        }
+    }
+    assert!(text.contains("line1"), "{text}");
+    assert!(text.contains("line3"), "{text}");
+
+    core.stop().unwrap();
+
+    // Stopping the Core has to end the stream too, or the panel keeps a reader
+    // alive against a log nothing writes to.
+    assert!(matches!(
+        output.recv_timeout(Duration::from_secs(2)),
+        Err(RecvTimeoutError::Disconnected)
+    ));
+    fs::remove_dir_all(&directory).unwrap();
+}
+
+#[test]
+fn a_stale_log_from_the_last_session_is_not_replayed() {
+    let directory = scratch("stale");
+    let log_file = directory.join("core.log");
+    fs::write(&log_file, "from an earlier session\n").unwrap();
+    let mut core = ElevatedCore::new(ShellLauncher, directory.join("core.pid"), &log_file);
+
+    let binary = fake_core(&directory, "echo fresh; sleep 5");
+    let (_pid, output) = core.start(&binary, Path::new("session.json")).unwrap();
+
+    let mut text = String::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !text.contains("fresh") && Instant::now() < deadline {
+        if let Ok(CoreOutputEvent::Chunk { bytes, .. }) =
+            output.recv_timeout(Duration::from_millis(500))
+        {
+            text.push_str(&String::from_utf8_lossy(&bytes));
+        }
+    }
+    assert!(!text.contains("earlier session"), "{text}");
+
+    core.stop().unwrap();
+    fs::remove_dir_all(&directory).unwrap();
+}
+
+#[test]
+fn restarting_the_same_core_gets_a_working_output_again() {
+    let directory = scratch("restart");
+    let log_file = directory.join("core.log");
+    let mut core = ElevatedCore::new(ShellLauncher, directory.join("core.pid"), &log_file);
+    let binary = fake_core(&directory, "echo running; sleep 5");
+
+    // Reconnecting after a routing change stops and starts the same control,
+    // so the second run must stream its log like the first.
+    let (_pid, first) = core.start(&binary, Path::new("session.json")).unwrap();
+    drop(first);
+    core.stop().unwrap();
+
+    let (_pid, output) = core.start(&binary, Path::new("session.json")).unwrap();
+
+    let mut text = String::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !text.contains("running") && Instant::now() < deadline {
+        if let Ok(CoreOutputEvent::Chunk { bytes, .. }) =
+            output.recv_timeout(Duration::from_millis(500))
+        {
+            text.push_str(&String::from_utf8_lossy(&bytes));
+        }
+    }
+    assert!(text.contains("running"), "{text}");
+
+    core.stop().unwrap();
     fs::remove_dir_all(&directory).unwrap();
 }
