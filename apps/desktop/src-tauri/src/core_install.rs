@@ -267,6 +267,14 @@ impl CoreInstallStore {
         let version = normalize_tag(&release.tag_name)?;
         let asset = xray_asset(*target);
         let archive_bytes = download_named_asset(&release, &asset.archive_name).await?;
+        // Refused rather than trusted: the digest is published beside the
+        // archive, so a download that cannot be checked is not one to install.
+        let dgst = download_named_asset(&release, &asset.dgst_name).await?;
+        verify_dgst_checksum(
+            &String::from_utf8_lossy(&dgst),
+            &asset.archive_name,
+            &archive_bytes,
+        )?;
         let staging = self.directory.join(format!("staging-xray-{version}"));
         if staging.exists() {
             fs::remove_dir_all(&staging).map_err(|source| CoreInstallError::Write {
@@ -369,8 +377,14 @@ struct SingBoxAsset {
     binary_name: String,
 }
 
+#[expect(
+    clippy::struct_field_names,
+    reason = "every field names a release asset; dropping the suffix reads worse"
+)]
 struct XrayAsset {
     archive_name: String,
+    /// Xray publishes one digest file per asset, named after it.
+    dgst_name: String,
     binary_name: String,
 }
 
@@ -412,18 +426,22 @@ fn xray_asset(target: TargetPlatform) -> XrayAsset {
     match (target.os(), target.architecture()) {
         (OperatingSystem::MacOs, CpuArchitecture::X86_64) => XrayAsset {
             archive_name: "Xray-macos-64.zip".to_owned(),
+            dgst_name: "Xray-macos-64.zip.dgst".to_owned(),
             binary_name: format!("xray{suffix}"),
         },
         (OperatingSystem::MacOs, CpuArchitecture::Aarch64) => XrayAsset {
             archive_name: "Xray-macos-arm64-v8a.zip".to_owned(),
+            dgst_name: "Xray-macos-arm64-v8a.zip.dgst".to_owned(),
             binary_name: format!("xray{suffix}"),
         },
         (OperatingSystem::Windows, CpuArchitecture::X86_64) => XrayAsset {
             archive_name: "Xray-windows-64.zip".to_owned(),
+            dgst_name: "Xray-windows-64.zip.dgst".to_owned(),
             binary_name: format!("xray{suffix}"),
         },
         (OperatingSystem::Linux, CpuArchitecture::X86_64) => XrayAsset {
             archive_name: "Xray-linux-64.zip".to_owned(),
+            dgst_name: "Xray-linux-64.zip.dgst".to_owned(),
             binary_name: format!("xray{suffix}"),
         },
         (OperatingSystem::Windows | OperatingSystem::Linux, CpuArchitecture::Aarch64) => {
@@ -574,6 +592,38 @@ fn verify_archive_checksum(
         });
     }
     Ok(())
+}
+
+/// Verifies an Xray archive against the `.dgst` published beside it.
+///
+/// Xray does not publish one checksum list; it publishes a digest file per
+/// asset, so the file name only names the error.
+fn verify_dgst_checksum(
+    dgst: &str,
+    archive_name: &str,
+    archive_bytes: &[u8],
+) -> Result<(), CoreInstallError> {
+    let expected =
+        parse_dgst_sha256(dgst).ok_or_else(|| CoreInstallError::ChecksumEntryMissing {
+            archive: archive_name.to_owned(),
+        })?;
+    let actual = Sha256Hash::digest(archive_bytes).to_string();
+    if actual != expected {
+        return Err(CoreInstallError::ArchiveChecksumMismatch {
+            archive: archive_name.to_owned(),
+            expected,
+            actual,
+        });
+    }
+    Ok(())
+}
+
+/// The `SHA2-256=` line of a `.dgst` file, lowercased.
+fn parse_dgst_sha256(dgst: &str) -> Option<String> {
+    dgst.lines()
+        .filter_map(|line| line.trim().strip_prefix("SHA2-256="))
+        .map(|value| value.trim().to_ascii_lowercase())
+        .find(|value| !value.is_empty())
 }
 
 fn parse_checksum_entry(checksums: &str, file_name: &str) -> Option<String> {
@@ -1112,6 +1162,40 @@ mod tests {
     }
 
     #[test]
+    fn reads_the_sha256_out_of_an_xray_dgst_file() {
+        // Xray publishes one `.dgst` per asset, listing several algorithms.
+        let body = "MD5= df09356e698bb1370a3661a0a11c910f\n\
+                    SHA1= 0d48993d60d212213f5ecf748d2ac5865d9ef69b\n\
+                    SHA2-256= F5B0471D3459EFF1B82E48AF0AEAC186ABCC3298210070AFBBBD8437A4E8B203\n\
+                    SHA2-512= ba77b6b2\n";
+
+        assert_eq!(
+            parse_dgst_sha256(body).as_deref(),
+            Some("f5b0471d3459eff1b82e48af0aeac186abcc3298210070afbbbd8437a4e8b203")
+        );
+        assert_eq!(parse_dgst_sha256("MD5= abc\n"), None);
+        assert_eq!(parse_dgst_sha256(""), None);
+    }
+
+    #[test]
+    fn verifies_an_xray_archive_against_its_dgst() {
+        let archive = b"xray-archive";
+        let digest = Sha256Hash::digest(archive).to_string();
+        let body = format!("SHA2-256= {digest}\n");
+
+        verify_dgst_checksum(&body, "Xray-macos-64.zip", archive).unwrap();
+
+        assert!(matches!(
+            verify_dgst_checksum(&body, "Xray-macos-64.zip", b"tampered"),
+            Err(CoreInstallError::ArchiveChecksumMismatch { .. })
+        ));
+        assert!(matches!(
+            verify_dgst_checksum("MD5= abc\n", "Xray-macos-64.zip", archive),
+            Err(CoreInstallError::ChecksumEntryMissing { .. })
+        ));
+    }
+
+    #[test]
     fn skips_blank_lines_and_lowercases_a_checksum_entry() {
         let body = "\n  \nAABBCC  *sing-box-1.14.0-windows-amd64.zip\nddee  other.zip\n";
 
@@ -1173,7 +1257,11 @@ mod tests {
             assert_eq!(sing_box.archive_name, sing_box_archive);
             assert_eq!(sing_box.checksums_name, "sing-box-1.14.0-checksums.txt");
             assert!(sing_box.extract_dir.starts_with("sing-box-1.14.0-"));
-            assert_eq!(xray_asset(target).archive_name, xray_archive);
+            let xray = xray_asset(target);
+            assert_eq!(xray.archive_name, xray_archive);
+            // The digest file is the archive name plus a suffix, which is how
+            // Xray publishes it.
+            assert_eq!(xray.dgst_name, format!("{xray_archive}.dgst"));
         }
         assert_eq!(
             binary_file_name("xray"),

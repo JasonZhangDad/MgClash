@@ -52,7 +52,7 @@ pinned binaries:
 | `MAGIES_SING_BOX_BIN` / `MAGIES_XRAY_BIN` | macOS Intel core smokes, `local_proxy_core_smoke`, the Xray smokes below; `MAGIES_XRAY_BIN` is also how the app locates Xray at runtime |
 | `MAGIES_MACOS_NETWORK_SERVICE` | macOS System Proxy real test; also the app's macOS proxy adapter |
 | `MAGIES_SING_BOX_SHA256` | the app's pinned Core digest (also compiled in at build time) |
-| `MAGIES_XRAY_SHA256` | the app's pinned Xray digest. Unlike sing-box there is **no** build-time fallback: ADR 0003 records that no verified official Xray digest exists in this repo, so choosing Xray without this fails with `xray_unavailable` rather than running something unverified |
+| `MAGIES_XRAY_SHA256` | the app's pinned Xray digest for a binary you point at yourself. There is no build-time fallback, so choosing Xray without it fails with `xray_unavailable` rather than running something unverified. A Core the app downloads needs no pin: `core_install` verifies the archive against the `SHA2-256=` line of the `.dgst` XTLS publishes beside it |
 | `MAGIES_SOAK_CORE_BIN` / `MAGIES_SOAK_DURATION_SECS` | `magies-session --test soak` |
 
 ```sh
@@ -202,5 +202,6 @@ artifacts are currently unsigned; see ADR 0001/0002 for the consequences.
   Every spike ends with a **Remaining work** section naming what was *not* verified — keep that
   habit; an unverified claim is worse than an acknowledged gap.
 - **Release artifacts are unsigned** and named `mgclash-<version>-<os>-<cpu>-unsigned.<ext>` with a
-  `.sha256` sidecar (ADR 0003). The artifact does not bundle sing-box yet: verified official macOS
-  digests do not exist in this repo, and inventing one would defeat the pin.
+  `.sha256` sidecar (ADR 0003). The artifact bundles no Core, which is also what v2rayN ships: the
+  app downloads one from the upstream GitHub release and verifies it against the digest the vendor
+  publishes beside the archive (`checksums.txt` for sing-box, `.dgst` for Xray).
