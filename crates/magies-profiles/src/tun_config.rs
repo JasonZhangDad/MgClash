@@ -26,8 +26,8 @@ impl TunProfile {
     ///
     /// # Errors
     ///
-    /// Returns a typed error for unsigned macOS, MTU outside `1280..=9000`,
-    /// or strict routing without automatic routes.
+    /// Returns a typed error for an MTU outside `1280..=9000`, or strict
+    /// routing without automatic routes.
     pub fn new(
         platform: OperatingSystem,
         ipv6_enabled: bool,
@@ -35,9 +35,6 @@ impl TunProfile {
         auto_route: bool,
         strict_route: bool,
     ) -> Result<Self, TunProfileError> {
-        if platform == OperatingSystem::MacOs {
-            return Err(TunProfileError::UnsupportedPlatform(platform));
-        }
         if !(1280..=9000).contains(&mtu) {
             return Err(TunProfileError::InvalidMtu { mtu });
         }
@@ -145,21 +142,24 @@ impl SingBoxTunConfigGenerator {
         } else {
             vec![IPV4_ADDRESS]
         };
-        let interface_name = match profile.platform {
-            OperatingSystem::Windows => "MgClash",
-            OperatingSystem::Linux => "mgclash0",
-            OperatingSystem::MacOs => unreachable!("TunProfile rejects unsigned macOS"),
-        };
         let mut inbound = json!({
             "type": "tun",
             "tag": "tun-in",
-            "interface_name": interface_name,
             "address": addresses,
             "mtu": profile.mtu,
             "auto_route": profile.auto_route,
             "strict_route": profile.strict_route,
             "stack": "gvisor"
         });
+        // macOS only accepts `utunN` and hands out the next free one itself, so
+        // naming the device is left to it rather than guessing a number.
+        if let Some(name) = match profile.platform {
+            OperatingSystem::Windows => Some("MgClash"),
+            OperatingSystem::Linux => Some("mgclash0"),
+            OperatingSystem::MacOs => None,
+        } {
+            inbound["interface_name"] = Value::String(name.to_owned());
+        }
         if profile.platform == OperatingSystem::Linux && profile.auto_route {
             inbound["auto_redirect"] = Value::Bool(true);
         }
