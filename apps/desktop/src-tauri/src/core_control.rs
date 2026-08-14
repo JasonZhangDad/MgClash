@@ -289,14 +289,18 @@ impl HostCoreControl {
 
     /// Points the elevated Core's PID and log files at the session runtime
     /// directory, where the app already writes the generated config.
+    #[cfg(target_os = "macos")]
     #[must_use]
     pub fn with_runtime_directory(mut self, directory: impl Into<PathBuf>) -> Self {
-        #[cfg(target_os = "macos")]
-        {
-            self.runtime_directory = directory.into();
-        }
-        #[cfg(not(target_os = "macos"))]
-        let _ = directory.into();
+        self.runtime_directory = directory.into();
+        self
+    }
+
+    /// Accepted and ignored: only macOS starts a Core it does not own, so
+    /// nowhere else is there a PID or log file to place.
+    #[cfg(not(target_os = "macos"))]
+    #[must_use]
+    pub fn with_runtime_directory(self, _directory: impl Into<PathBuf>) -> Self {
         self
     }
 
