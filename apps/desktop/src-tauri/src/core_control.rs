@@ -401,17 +401,8 @@ impl CoreSessionControl for HostCoreControl {
         self.current = core;
     }
 
-    #[cfg_attr(
-        not(unix),
-        expect(
-            unused_variables,
-            reason = "only Unix starts a TUN Core differently from a plain one"
-        )
-    )]
     fn select_network_mode(&mut self, tun: bool) {
-        {
-            self.tun = tun;
-        }
+        self.tun = tun;
     }
 
     fn start(&mut self, config_path: &Path) -> Result<Self::Output, Self::Error> {
