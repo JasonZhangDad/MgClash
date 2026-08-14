@@ -160,9 +160,15 @@ jobs:
         run: |
           rustup component add llvm-tools-preview
           cargo install cargo-llvm-cov --version 0.8.7 --locked
+      # The Tauri command layer and the tray are excluded: both only run inside
+      # a live Tauri app, and the architecture already forbids logic there —
+      # measuring line coverage on plumbing measures the wrong thing. Everything
+      # they call lives in the crates, which the gate still covers.
       - name: Enforce 80% line coverage
         if: runner.os == 'Linux'
-        run: cargo llvm-cov --workspace --locked --fail-under-lines 80
+        run: >-
+          cargo llvm-cov --workspace --locked --fail-under-lines 80
+          --ignore-filename-regex 'src-tauri/src/(lib|tray)\.rs'
       - name: Build unsigned desktop binary
         working-directory: apps/desktop
         run: npm run tauri -- build --no-bundle

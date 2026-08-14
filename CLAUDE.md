@@ -22,7 +22,9 @@ cargo test -p magies-profiles --test sing_box_runtime_config          # one test
 cargo test -p magies-session --test desktop_session starts_core_before_system_proxy # one test
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings                 # pedantic lints are CI errors
-cargo llvm-cov --workspace --fail-under-lines 80                      # coverage gate
+# Coverage gate. It skips the two files that only run inside a live Tauri app.
+cargo llvm-cov --workspace --fail-under-lines 80 \
+    --ignore-filename-regex 'src-tauri/src/(lib|tray)\.rs'
 
 # Frontend / desktop shell (apps/desktop)
 npm ci
@@ -95,6 +97,10 @@ Dependencies flow strictly downward. **The Rust layers must not depend on Tauri*
 `apps/desktop/src-tauri` depends on every crate above but stays a thin command layer: DTO
 conversion, Tauri state, and the two per-OS wiring modules (`core_control`, `platform_proxy`).
 Logic belongs in the crates — if a command body grows past plumbing, it is in the wrong place.
+This is also why the Rust coverage gate skips `src-tauri/src/lib.rs` and `src-tauri/src/tray.rs`:
+both only run inside a live Tauri app, and a line-coverage number over plumbing measures the wrong
+thing. Anything they call must live in a crate, where the gate does apply — a command body that
+needs its own tests is a command body that should have been a crate function.
 The UI never reads or writes Core JSON (constraint 4); it goes through Tauri commands.
 
 ### Config generation pipeline
