@@ -3999,12 +3999,7 @@ export default function App() {
         <div className="actions">
           <button
             type="button"
-            disabled={
-              busy ||
-              connected ||
-              nodeTestInProgress ||
-              subscriptions.length === 0
-            }
+            disabled={busy || nodeTestInProgress || subscriptions.length === 0}
             onClick={() => void onRefreshAllSubscriptions()}
           >
             {t("全部更新")}
@@ -4044,9 +4039,7 @@ export default function App() {
                     <button
                       type="button"
                       aria-label={`刷新 ${item.name}`}
-                      disabled={
-                        busy || connected || nodeTestInProgress || !item.enabled
-                      }
+                      disabled={busy || nodeTestInProgress || !item.enabled}
                       onClick={() => void onRefreshSubscription(item.id)}
                     >
                       {t("刷新")}

@@ -2942,17 +2942,23 @@ describe("App", () => {
     expect(container.querySelector("[aria-label='订阅列表']")).toBeNull();
   });
 
-  it("waits for disconnect before mutating a subscription", async () => {
+  it("waits for disconnect before editing or deleting a subscription", async () => {
     loadSessionStatusMock.mockResolvedValue(CONNECTED);
     loadSubscriptionsMock.mockResolvedValue([SUBSCRIPTION]);
     await render();
 
-    for (const label of ["编辑 Airport", "刷新 Airport", "删除订阅 Airport"]) {
+    // Editing or removing a subscription can pull the running node out from
+    // under the session; pulling fresh nodes into the list cannot.
+    for (const label of ["编辑 Airport", "删除订阅 Airport"]) {
       const action = container.querySelector<HTMLButtonElement>(
         `[aria-label='${label}']`,
       );
       expect(action?.disabled).toBe(true);
     }
+    expect(
+      container.querySelector<HTMLButtonElement>("[aria-label='刷新 Airport']")
+        ?.disabled,
+    ).toBe(false);
   });
 
   it("refreshes all subscriptions and shows individual failures", async () => {
@@ -4080,6 +4086,37 @@ describe("App", () => {
     expect(saveAppSettingsMock).toHaveBeenCalledWith(
       expect.objectContaining({ urlTestToleranceMs: 150 }),
     );
+  });
+
+  it("refreshes subscriptions while connected", async () => {
+    const subscription = {
+      id: "00000000-0000-0000-0000-0000000000a1",
+      name: "Vendor",
+      url: "https://example.com/sub",
+      enabled: true,
+      autoUpdate: true,
+      updateIntervalMinutes: 1_440,
+      lastUpdatedAt: null,
+      nodeCount: 3,
+      userAgent: null,
+    };
+    loadSessionStatusMock.mockResolvedValue(CONNECTED);
+    loadNodesMock.mockResolvedValue([CONNECTED.node]);
+    loadSubscriptionsMock.mockResolvedValue([subscription]);
+    refreshSubscriptionMock.mockResolvedValue(subscription);
+    refreshAllSubscriptionsMock.mockResolvedValue([subscription]);
+    await render();
+
+    // A vendor list changing is unrelated to the server the Core is running.
+    await act(async () => button("全部更新").click());
+    expect(refreshAllSubscriptionsMock).toHaveBeenCalledTimes(1);
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>("[aria-label='刷新 Vendor']")
+        ?.click(),
+    );
+    expect(refreshSubscriptionMock).toHaveBeenCalledWith(subscription.id);
   });
 
   it("changes the main window layout from the menu", async () => {

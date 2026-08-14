@@ -1659,7 +1659,7 @@ where
     }
 
     /// Reloads the persisted selection after subscription metadata or nodes
-    /// change while the session is disconnected.
+    /// changed. While connected this is a no-op that reports the running node.
     ///
     /// # Errors
     ///
@@ -1667,8 +1667,11 @@ where
     pub fn sync_selected_node(
         &mut self,
     ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
+        // A running session keeps the node it started with: a subscription that
+        // refreshed underneath it must not swap the server mid-connection, and
+        // refusing here would make the refresh itself fail.
         if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
+            return Ok(self.status());
         }
         self.node = self
             .subscription_nodes

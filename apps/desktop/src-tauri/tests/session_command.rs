@@ -2218,3 +2218,17 @@ fn the_group_probe_is_configurable_and_validated() {
     );
     assert_eq!(service.group_probe().unwrap().interval(), "10m");
 }
+
+#[test]
+fn syncing_the_selection_while_connected_keeps_the_running_node() {
+    // A subscription refresh calls this; while connected the running node must
+    // survive it rather than the refresh failing.
+    let (mut service, _runtime, _fail_start) = service();
+    let tokyo = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
+    service.connect().unwrap();
+
+    let status = service.sync_selected_node().unwrap();
+
+    assert!(status.connected);
+    assert_eq!(status.node.as_ref().unwrap().id, tokyo.id);
+}

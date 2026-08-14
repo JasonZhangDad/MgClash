@@ -147,7 +147,7 @@ export function MenuBar({
             <button type="button" role="menuitem" disabled={busy} onClick={onOpenSubscriptions}>
               {t("订阅设置")}
             </button>
-            <button type="button" role="menuitem" disabled={busy || connected} onClick={onRefreshSubscriptions}>
+            <button type="button" role="menuitem" disabled={busy} onClick={onRefreshSubscriptions}>
               {t("全部更新")}
             </button>
           </div>

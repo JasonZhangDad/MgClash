@@ -404,10 +404,6 @@ fn spawn_subscription_update_loop(
     thread::spawn(move || {
         loop {
             thread::sleep(SUBSCRIPTION_UPDATE_TICK);
-            if lock(&service).status().connected {
-                continue;
-            }
-
             let now = current_timestamp();
             let due_ids = match subscriptions.due_auto_update_ids(now) {
                 Ok(ids) => ids,
@@ -422,9 +418,6 @@ fn spawn_subscription_update_loop(
 
             let mut refreshed = false;
             for id in due_ids {
-                if lock(&service).status().connected {
-                    break;
-                }
                 match subscriptions.refresh(id, now) {
                     Ok(_) => refreshed = true,
                     Err(error) => tracing::warn!(
@@ -1947,7 +1940,6 @@ async fn subscription_refresh(
     id: String,
     state: State<'_, AppState>,
 ) -> Result<DesktopSubscriptionSummary, CommandError> {
-    ensure_subscription_mutation_ready(state.service().status().connected)?;
     let id = parse_subscription_id(&id)?;
     let subscriptions = Arc::clone(&state.subscriptions);
     let summary = tauri::async_runtime::spawn_blocking(move || {
@@ -1970,7 +1962,6 @@ async fn subscription_refresh(
 async fn subscription_refresh_all(
     state: State<'_, AppState>,
 ) -> Result<Vec<DesktopSubscriptionSummary>, CommandError> {
-    ensure_subscription_mutation_ready(state.service().status().connected)?;
     let subscriptions = Arc::clone(&state.subscriptions);
     let summaries = tauri::async_runtime::spawn_blocking(move || {
         subscriptions.refresh_all(current_timestamp())
