@@ -96,11 +96,18 @@ impl TargetPlatform {
         }
     }
 
+    /// What an unsigned build can offer for TUN.
+    ///
+    /// Every supported platform can, given privileges: macOS opens a `utun`
+    /// for root, Windows needs an administrator for Wintun, and Linux needs
+    /// `CAP_NET_ADMIN`. The variant that refuses outright is kept for a target
+    /// where signing, not privilege, is the obstacle.
     #[must_use]
     pub const fn unsigned_tun_availability(self) -> TunAvailability {
         match self.os {
-            OperatingSystem::MacOs => TunAvailability::UnavailableInUnsignedBuild,
-            OperatingSystem::Windows | OperatingSystem::Linux => TunAvailability::RequiresElevation,
+            OperatingSystem::MacOs | OperatingSystem::Windows | OperatingSystem::Linux => {
+                TunAvailability::RequiresElevation
+            }
         }
     }
 }

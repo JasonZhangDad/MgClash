@@ -5,7 +5,9 @@ fn returns_an_unsigned_macos_intel_summary() {
     let summary = platform_summary_for("macos", "x86_64").expect("target should be supported");
 
     assert_eq!(summary.artifact_identifier, "macos-x86_64");
-    assert_eq!(summary.tun_availability, "unavailableInUnsignedBuild");
+    // The TUN toggle is offered on macOS now: the device needs root, which the
+    // app can ask for, not a signature, which it cannot.
+    assert_eq!(summary.tun_availability, "requiresElevation");
 }
 
 #[test]

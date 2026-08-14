@@ -2170,7 +2170,8 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let session = DesktopSession::new(
         PlatformSecretStore,
         HostCoreControl::from_install(Some(&core_install), health_address, HEALTH_TIMEOUT)
-            .with_xray_asset_directory(geo_assets.directory()),
+            .with_xray_asset_directory(geo_assets.directory())
+            .with_runtime_directory(&runtime_directory),
         system_proxy.clone(),
         runtime_directory,
     );
