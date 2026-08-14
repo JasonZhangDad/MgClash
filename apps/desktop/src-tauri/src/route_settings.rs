@@ -6,7 +6,7 @@ use std::path::Path;
 
 use magies_routing::{
     Network, RouteConfigError, RouteOutbound, RouteProfile, RoutingMode, RoutingRule,
-    RuleProviderFormat,
+    RuleProviderFormat, SniffedProtocol,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -185,6 +185,7 @@ pub enum RouteRuleKind {
     GeoSite,
     Port,
     Network,
+    Protocol,
     ProcessName,
     ProcessPath,
 }
@@ -262,6 +263,19 @@ impl RouteRuleSetting {
                     }
                 };
                 RoutingRule::network(network, outbound, priority, self.enabled)
+            }
+            RouteRuleKind::Protocol => {
+                let protocol = match self.value.trim().to_ascii_lowercase().as_str() {
+                    "http" => SniffedProtocol::Http,
+                    "tls" => SniffedProtocol::Tls,
+                    "bittorrent" => SniffedProtocol::Bittorrent,
+                    _ => {
+                        return Err(RouteSettingsError::InvalidProtocol {
+                            value: self.value.clone(),
+                        });
+                    }
+                };
+                RoutingRule::protocol(protocol, outbound, priority, self.enabled)
             }
             RouteRuleKind::ProcessName => {
                 RoutingRule::process_name(&self.value, outbound, priority, self.enabled)?
@@ -389,6 +403,8 @@ impl RouteSettings {
 pub enum RouteSettingsError {
     #[error("route port is not an integer: {value}")]
     InvalidPortValue { value: String },
+    #[error("route protocol must be http, tls or bittorrent, got {value}")]
+    InvalidProtocol { value: String },
     #[error("route network must be tcp or udp, got {value}")]
     InvalidNetwork { value: String },
     #[error("routing scheme name cannot be empty")]

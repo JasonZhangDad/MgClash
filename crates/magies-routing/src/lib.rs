@@ -55,6 +55,28 @@ impl Network {
     }
 }
 
+/// What the Core decided a connection carries, once it has looked.
+///
+/// The three both Cores can sniff and v2rayN offers. Matching on any of them
+/// costs sniffing, which is why [`RouteProfile::requires_sniffing`] exists.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SniffedProtocol {
+    Http,
+    Tls,
+    Bittorrent,
+}
+
+impl SniffedProtocol {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::Tls => "tls",
+            Self::Bittorrent => "bittorrent",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GeoKind {
     Ip,
@@ -85,6 +107,7 @@ enum RuleMatcher {
     IpCidr(IpNet),
     Port(NonZeroU16),
     Network(Network),
+    Protocol(SniffedProtocol),
     ProcessName(String),
     ProcessPath(String),
     Geo {
@@ -285,6 +308,18 @@ impl RoutingRule {
         Self::new(RuleMatcher::Network(network), outbound, priority, enabled)
     }
 
+    /// Creates a rule matching the sniffed protocol, the way v2rayN's protocol
+    /// column does.
+    #[must_use]
+    pub const fn protocol(
+        protocol: SniffedProtocol,
+        outbound: RouteOutbound,
+        priority: i32,
+        enabled: bool,
+    ) -> Self {
+        Self::new(RuleMatcher::Protocol(protocol), outbound, priority, enabled)
+    }
+
     /// Creates a process-name rule (sing-box `process_name`, Xray `process`).
     ///
     /// # Errors
@@ -462,6 +497,7 @@ impl RoutingRule {
             RuleMatcher::IpCidr(network) => json!({ "ip_cidr": [network.to_string()] }),
             RuleMatcher::Port(port) => json!({ "port": [port.get()] }),
             RuleMatcher::Network(network) => json!({ "network": network.as_str() }),
+            RuleMatcher::Protocol(protocol) => json!({ "protocol": [protocol.as_str()] }),
             RuleMatcher::ProcessName(name) => json!({ "process_name": [name] }),
             RuleMatcher::ProcessPath(path) => json!({ "process_path": [path] }),
             RuleMatcher::Geo { kind, code } => {
@@ -522,6 +558,20 @@ impl RouteProfile {
     #[must_use]
     pub const fn mode(&self) -> RoutingMode {
         self.mode
+    }
+
+    /// Whether any enabled rule matches on what the traffic actually is.
+    ///
+    /// The Core can only answer a protocol rule by looking inside the first
+    /// packets, and that costs work on every connection — so the assemblers
+    /// turn sniffing on for these profiles and leave it off for the rest.
+    #[must_use]
+    pub fn requires_sniffing(&self) -> bool {
+        self.mode == RoutingMode::Rule
+            && self
+                .rules
+                .iter()
+                .any(|rule| rule.enabled && matches!(rule.matcher, RuleMatcher::Protocol(_)))
     }
 
     /// Whether any enabled rule drops its traffic.

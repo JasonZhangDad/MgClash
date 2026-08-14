@@ -9,7 +9,7 @@ use magies_profiles::{
     NodeCredential, NodeGroupStrategy, OutboundConfigError, RuntimeConfigError, ShadowsocksParser,
     SingBoxRuntimeConfigGenerator, SingBoxRuntimeProfile, TunProfile, VlessParser,
 };
-use magies_routing::{RouteOutbound, RouteProfile, RoutingMode, RoutingRule};
+use magies_routing::{RouteOutbound, RouteProfile, RoutingMode, RoutingRule, SniffedProtocol};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -600,4 +600,70 @@ fn a_front_node_becomes_the_detour_the_proxy_dials_through() {
         .find(|outbound| outbound["tag"] == "proxy")
         .unwrap();
     assert_eq!(proxy["detour"], front_tag);
+}
+
+#[test]
+fn a_protocol_rule_turns_sniffing_on_without_a_tun_inbound() {
+    let parsed = ShadowsocksParser
+        .parse("ss://aes-256-gcm:proxy-secret@edge.example.com:8388")
+        .unwrap();
+    let node = shadowsocks_node(true);
+    let dns = system_dns();
+    let route = RouteProfile::new(
+        RoutingMode::Rule,
+        vec![RoutingRule::protocol(
+            SniffedProtocol::Bittorrent,
+            RouteOutbound::Direct,
+            10,
+            true,
+        )],
+        RouteOutbound::Proxy,
+    )
+    .unwrap();
+    let profile = SingBoxRuntimeProfile::new(
+        &node,
+        NodeCredential::from(parsed.credential()),
+        &dns,
+        &route,
+    );
+
+    let generated = SingBoxRuntimeConfigGenerator::generate(&profile).unwrap();
+
+    // Without this action sing-box never looks at what the traffic is, and the
+    // rule below it silently matches nothing.
+    assert_eq!(
+        generated.json()["route"]["rules"][0],
+        json!({ "action": "sniff" })
+    );
+    assert_eq!(
+        generated.json()["route"]["rules"][2]["protocol"],
+        json!(["bittorrent"])
+    );
+}
+
+#[test]
+fn a_route_that_asks_nothing_about_the_traffic_does_not_sniff() {
+    let parsed = ShadowsocksParser
+        .parse("ss://aes-256-gcm:proxy-secret@edge.example.com:8388")
+        .unwrap();
+    let node = shadowsocks_node(true);
+    let dns = system_dns();
+    let route = RouteProfile::new(RoutingMode::Global, Vec::new(), RouteOutbound::Proxy).unwrap();
+    let profile = SingBoxRuntimeProfile::new(
+        &node,
+        NodeCredential::from(parsed.credential()),
+        &dns,
+        &route,
+    );
+
+    let generated = SingBoxRuntimeConfigGenerator::generate(&profile).unwrap();
+
+    let rules = generated.json()["route"]["rules"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(
+        !rules.iter().any(|rule| rule["action"] == "sniff"),
+        "{rules:?}"
+    );
 }

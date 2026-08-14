@@ -3286,6 +3286,52 @@ describe("App", () => {
     }
   });
 
+  it("adds a rule that routes by the protocol the Core sniffs", async () => {
+    const rules = [
+      {
+        enabled: true,
+        kind: "protocol" as const,
+        outbound: "direct" as const,
+        value: "bittorrent",
+      },
+    ];
+    setRouteSettingsMock.mockResolvedValue({
+      ...IDLE,
+      route: { finalOutbound: "proxy", providers: [], rules },
+    });
+    await render();
+
+    const kind = container.querySelector<HTMLSelectElement>(
+      "select[aria-label='规则类型']",
+    );
+    const value = container.querySelector<HTMLInputElement>(
+      "input[aria-label='规则值']",
+    );
+    const outbound = container.querySelector<HTMLSelectElement>(
+      "select[aria-label='规则出口']",
+    );
+    await act(async () => {
+      selectValue("protocol", kind!);
+      selectValue("direct", outbound!);
+      typeInput("bittorrent", value!);
+    });
+    // v2rayN's protocol column: BitTorrent off the proxy without naming a
+    // single tracker domain.
+    await act(async () => button("添加规则").click());
+
+    const rows = container.querySelectorAll("[aria-label='路由规则列表'] tbody tr");
+    expect(rows[0]?.textContent).toContain("协议");
+    expect(rows[0]?.textContent).toContain("bittorrent");
+
+    await act(async () => button("保存路由").click());
+
+    expect(setRouteSettingsMock).toHaveBeenCalledWith({
+      finalOutbound: "proxy",
+      providers: [],
+      rules,
+    });
+  });
+
   it("keeps a visible error when a background refresh fails", async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
