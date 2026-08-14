@@ -19,12 +19,13 @@ use magies_platform::{CpuArchitecture, OperatingSystem};
 use magies_profiles::{
     BulkImportError, BulkNodeImportParser, CoreCapabilityMatrix, CorePreference, CoreRejection,
     CoreRequirements, CoreSelectionError, CredentialCodec, CredentialCodecError, DnsConfigError,
-    DnsProfile, LocalHttpProfile, LocalProxyConfigError, LocalSocksProfile, ManualNodeDraft,
-    ManualNodeDraftError, ManualNodeStoreError, NodeFingerprint, NodeGroup, NodeGroupStoreError,
-    NodeGroupStrategy, NodeOrderStoreError, ShareLinkParseError, ShareLinkParser, ShareLinkQrCode,
-    ShareLinkQrError, ShareLinkSerializer, ShareLinkSerializerError, SqliteManualNodeStore,
-    SqliteNodeGroupStore, SqliteNodeOrderStore, SqliteSubscriptionStore, StoredNodeCredential,
-    SubscriptionTransactionError, TunProfile, TunProfileError, core_name, node_fingerprint,
+    DnsProfile, GroupProbe, LocalHttpProfile, LocalProxyConfigError, LocalSocksProfile,
+    ManualNodeDraft, ManualNodeDraftError, ManualNodeStoreError, NodeFingerprint, NodeGroup,
+    NodeGroupStoreError, NodeGroupStrategy, NodeOrderStoreError, ShareLinkParseError,
+    ShareLinkParser, ShareLinkQrCode, ShareLinkQrError, ShareLinkSerializer,
+    ShareLinkSerializerError, SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore,
+    SqliteSubscriptionStore, StoredNodeCredential, SubscriptionTransactionError, TunProfile,
+    TunProfileError, core_name, node_fingerprint,
 };
 use magies_routing::{RouteProfile, RoutingMode};
 use magies_session::{
@@ -97,6 +98,8 @@ pub struct SessionDefaults {
     /// `noises` (Xray only).
     pub udp_noise_enabled: bool,
     pub url_test_address: String,
+    pub url_test_interval_seconds: u32,
+    pub url_test_tolerance_ms: u32,
 }
 
 impl SessionDefaults {
@@ -123,6 +126,8 @@ impl SessionDefaults {
             final_fragment_enabled: false,
             udp_noise_enabled: false,
             url_test_address: DEFAULT_URL_TEST_ADDRESS.to_owned(),
+            url_test_interval_seconds: 180,
+            url_test_tolerance_ms: 50,
         }
     }
 
@@ -1721,11 +1726,7 @@ where
         if node.protocol_type != ProxyProtocol::Custom
             && let Some((strategy, members)) = self.group_members_for(&node, core)?
         {
-            profile = profile.with_group_outbound(
-                strategy,
-                members,
-                self.defaults.url_test_address.clone(),
-            );
+            profile = profile.with_group_outbound(strategy, members, self.group_probe()?);
         }
         // The two are mutually exclusive in DesktopSession, so TUN replaces
         // System Proxy rather than being layered on top of it.
@@ -2047,6 +2048,40 @@ where
     }
 
     /// Sets the URL-TEST probe used when a group runs as a Core balancer.
+    /// The validated probe a policy group measures its members with.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when the stored probe is one the Core would reject.
+    pub fn group_probe(&self) -> Result<GroupProbe, SessionCommandError<C::Error, P::Error>> {
+        GroupProbe::new(
+            &self.defaults.url_test_address,
+            self.defaults.url_test_interval_seconds,
+            self.defaults.url_test_tolerance_ms,
+        )
+        .map_err(SessionCommandError::InvalidGroupProbe)
+    }
+
+    /// Replaces how policy groups measure their members.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when the Core would reject the interval, tolerance
+    /// or URL, leaving the stored probe alone.
+    pub fn set_group_probe(
+        &mut self,
+        address: &str,
+        interval_seconds: u32,
+        tolerance_ms: u32,
+    ) -> Result<(), SessionCommandError<C::Error, P::Error>> {
+        GroupProbe::new(address, interval_seconds, tolerance_ms)
+            .map_err(SessionCommandError::InvalidGroupProbe)?;
+        address.clone_into(&mut self.defaults.url_test_address);
+        self.defaults.url_test_interval_seconds = interval_seconds;
+        self.defaults.url_test_tolerance_ms = tolerance_ms;
+        Ok(())
+    }
+
     pub fn set_url_test_address(&mut self, address: impl Into<String>) {
         self.defaults.url_test_address = address.into();
     }
@@ -2221,6 +2256,8 @@ where
     RouteSettingsStore(#[source] RouteSettingsStoreError),
     #[error("invalid DNS settings")]
     InvalidDnsSettings(#[source] DnsConfigError),
+    #[error("invalid policy group probe")]
+    InvalidGroupProbe(#[source] magies_profiles::GroupProbeError),
     #[error("failed to save the DNS settings")]
     DnsSettingsStore(#[source] DnsSettingsStoreError),
     #[error("subscription node {id} is managed by its subscription")]
@@ -2286,6 +2323,7 @@ where
             Self::InvalidRouteSettings(_) => "invalid_route_settings",
             Self::RouteSettingsStore(_) => "route_settings_store_failed",
             Self::InvalidDnsSettings(_) => "invalid_dns_settings",
+            Self::InvalidGroupProbe(_) => "invalid_group_probe",
             Self::DnsSettingsStore(_) => "dns_settings_store_failed",
             Self::SessionActive => "session_active",
             Self::SessionInactive => "session_inactive",

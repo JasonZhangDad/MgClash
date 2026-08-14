@@ -5,6 +5,7 @@ use magies_domain::{CoreType, ProxyNode};
 use crate::NodeGroupStrategy;
 use magies_routing::{RouteProfile, SingBoxRouteConfigGenerator};
 use serde_json::{Value, json};
+use url::Url;
 
 use crate::{
     DnsProfile, GeneratedCoreConfig, LocalHttpConfigGenerator, LocalHttpProfile,
@@ -14,8 +15,109 @@ use crate::{
 };
 
 const DEFAULT_URLTEST_PROBE: &str = "https://www.gstatic.com/generate_204";
-const URLTEST_INTERVAL: &str = "3m";
-const URLTEST_TOLERANCE_MS: u32 = 50;
+/// The Core polls this often at the fastest; anything shorter is a self-inflicted
+/// denial of service against the probe endpoint.
+const MIN_PROBE_INTERVAL_SECONDS: u32 = 10;
+const MAX_PROBE_INTERVAL_SECONDS: u32 = 24 * 60 * 60;
+/// A tolerance above this makes the group ignore every real latency difference.
+const MAX_PROBE_TOLERANCE_MS: u32 = 5_000;
+
+/// How a policy group measures its members: what to fetch, how often, and how
+/// much better a member has to be before the group switches to it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GroupProbe {
+    url: String,
+    interval_seconds: u32,
+    tolerance_ms: u32,
+}
+
+impl GroupProbe {
+    /// Validates one probe configuration.
+    ///
+    /// An empty URL keeps the built-in probe; everything else has to be an
+    /// HTTP(S) URL the Core can fetch.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for a non-HTTP URL, an interval outside
+    /// 10s..=24h, or a tolerance above five seconds.
+    pub fn new(
+        url: &str,
+        interval_seconds: u32,
+        tolerance_ms: u32,
+    ) -> Result<Self, GroupProbeError> {
+        let trimmed = url.trim();
+        let url = if trimmed.is_empty() {
+            DEFAULT_URLTEST_PROBE.to_owned()
+        } else {
+            let parsed = Url::parse(trimmed).map_err(|_| GroupProbeError::InvalidUrl {
+                value: trimmed.to_owned(),
+            })?;
+            if !matches!(parsed.scheme(), "http" | "https") {
+                return Err(GroupProbeError::InvalidUrl {
+                    value: trimmed.to_owned(),
+                });
+            }
+            trimmed.to_owned()
+        };
+        if !(MIN_PROBE_INTERVAL_SECONDS..=MAX_PROBE_INTERVAL_SECONDS).contains(&interval_seconds) {
+            return Err(GroupProbeError::IntervalOutOfRange {
+                seconds: interval_seconds,
+            });
+        }
+        if tolerance_ms > MAX_PROBE_TOLERANCE_MS {
+            return Err(GroupProbeError::ToleranceOutOfRange {
+                milliseconds: tolerance_ms,
+            });
+        }
+        Ok(Self {
+            url,
+            interval_seconds,
+            tolerance_ms,
+        })
+    }
+
+    #[must_use]
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    #[must_use]
+    pub const fn tolerance_ms(&self) -> u32 {
+        self.tolerance_ms
+    }
+
+    /// The interval in the duration spelling both Cores accept.
+    #[must_use]
+    pub fn interval(&self) -> String {
+        if self.interval_seconds % 60 == 0 {
+            format!("{}m", self.interval_seconds / 60)
+        } else {
+            format!("{}s", self.interval_seconds)
+        }
+    }
+}
+
+impl Default for GroupProbe {
+    fn default() -> Self {
+        Self {
+            url: DEFAULT_URLTEST_PROBE.to_owned(),
+            interval_seconds: 180,
+            tolerance_ms: 50,
+        }
+    }
+}
+
+/// Why a probe configuration was refused.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum GroupProbeError {
+    #[error("the group probe must be an HTTP(S) URL: {value}")]
+    InvalidUrl { value: String },
+    #[error("the group probe interval must be 10s..=24h, got {seconds}s")]
+    IntervalOutOfRange { seconds: u32 },
+    #[error("the group probe tolerance must be at most 5000ms, got {milliseconds}ms")]
+    ToleranceOutOfRange { milliseconds: u32 },
+}
 
 #[expect(
     clippy::struct_excessive_bools,
@@ -39,7 +141,7 @@ pub struct SingBoxRuntimeProfile<'a> {
 struct GroupOutbound<'a> {
     strategy: NodeGroupStrategy,
     members: Vec<SelectedNode<'a>>,
-    probe_url: &'a str,
+    probe: &'a GroupProbe,
 }
 
 #[derive(Clone, Copy)]
@@ -166,7 +268,7 @@ impl<'a> SingBoxRuntimeProfile<'a> {
         mut self,
         strategy: NodeGroupStrategy,
         members: Vec<(&'a ProxyNode, NodeCredential<'a>)>,
-        probe_url: &'a str,
+        probe: &'a GroupProbe,
     ) -> Self {
         self.group_outbound = Some(GroupOutbound {
             strategy,
@@ -174,7 +276,7 @@ impl<'a> SingBoxRuntimeProfile<'a> {
                 .into_iter()
                 .map(|(node, credential)| SelectedNode { node, credential })
                 .collect(),
-            probe_url,
+            probe,
         });
         self
     }
@@ -185,9 +287,9 @@ impl<'a> SingBoxRuntimeProfile<'a> {
     pub fn with_urltest(
         self,
         members: Vec<(&'a ProxyNode, NodeCredential<'a>)>,
-        probe_url: &'a str,
+        probe: &'a GroupProbe,
     ) -> Self {
-        self.with_group_outbound(NodeGroupStrategy::UrlTest, members, probe_url)
+        self.with_group_outbound(NodeGroupStrategy::UrlTest, members, probe)
     }
 }
 
@@ -261,26 +363,23 @@ fn proxy_outbounds(profile: &SingBoxRuntimeProfile<'_>) -> Result<Vec<Value>, Ru
             tags.push(tag.clone());
             outbounds.push(member_outbound(profile, member, &tag)?);
         }
-        let probe = if group.probe_url.trim().is_empty() {
-            DEFAULT_URLTEST_PROBE
-        } else {
-            group.probe_url
-        };
+        let probe = group.probe.url();
+        let interval = group.probe.interval();
         let group_outbound = match group.strategy {
             NodeGroupStrategy::UrlTest => json!({
                 "type": "urltest",
                 "tag": "proxy",
                 "outbounds": tags,
                 "url": probe,
-                "interval": URLTEST_INTERVAL,
-                "tolerance": URLTEST_TOLERANCE_MS,
+                "interval": interval,
+                "tolerance": group.probe.tolerance_ms(),
             }),
             NodeGroupStrategy::Fallback => json!({
                 "type": "fallback",
                 "tag": "proxy",
                 "outbounds": tags,
                 "url": probe,
-                "interval": URLTEST_INTERVAL,
+                "interval": interval,
             }),
             NodeGroupStrategy::LoadBalance => json!({
                 "type": "loadbalance",

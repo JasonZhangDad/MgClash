@@ -1539,7 +1539,11 @@ fn set_app_settings(
                 service.set_fragment_enabled(settings.fragment_enabled);
                 service.set_final_fragment_enabled(settings.final_fragment_enabled);
                 service.set_udp_noise_enabled(settings.udp_noise_enabled);
-                service.set_url_test_address(settings.url_test_address.clone());
+                service.set_group_probe(
+                    &settings.url_test_address,
+                    settings.url_test_interval_seconds,
+                    settings.url_test_tolerance_ms,
+                )?;
                 service.set_allow_lan(settings.allow_lan);
                 service.set_inbound_udp_enabled(settings.inbound_udp_enabled);
                 service.set_system_proxy_mode(settings.system_proxy_mode.mode(pac_url.as_deref()));
@@ -2056,7 +2060,15 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         service.set_fragment_enabled(settings.fragment_enabled);
         service.set_final_fragment_enabled(settings.final_fragment_enabled);
         service.set_udp_noise_enabled(settings.udp_noise_enabled);
-        service.set_url_test_address(settings.url_test_address.clone());
+        // A probe stored by an older build could be out of range; the startup
+        // path keeps the defaults rather than refusing to launch.
+        if let Err(error) = service.set_group_probe(
+            &settings.url_test_address,
+            settings.url_test_interval_seconds,
+            settings.url_test_tolerance_ms,
+        ) {
+            tracing::warn!("stored policy group probe rejected: {}", describe(&error));
+        }
         service.set_allow_lan(settings.allow_lan);
         service.set_inbound_udp_enabled(settings.inbound_udp_enabled);
         service

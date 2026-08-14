@@ -22,7 +22,7 @@ use crate::xray_outbound::{
     apply_xray_mux, normalize_xray_finalmask_tcp, xray_fragment_outbound_with_options,
 };
 use crate::{
-    DnsProfile, GeneratedCoreConfig, LocalHttpConfigGenerator, LocalHttpProfile,
+    DnsProfile, GeneratedCoreConfig, GroupProbe, LocalHttpConfigGenerator, LocalHttpProfile,
     LocalSocksConfigGenerator, LocalSocksProfile, NodeCredential, XrayDnsConfigGenerator,
     node_outbound_tag,
 };
@@ -31,8 +31,6 @@ use crate::{
 /// user switching Cores sees the same addresses.
 const FAKE_DNS_V4_POOL: &str = "198.18.0.0/15";
 const FAKE_DNS_POOL_SIZE: u32 = 65_535;
-const DEFAULT_URLTEST_PROBE: &str = "https://www.gstatic.com/generate_204";
-const URLTEST_INTERVAL: &str = "3m";
 
 #[expect(
     clippy::struct_excessive_bools,
@@ -61,7 +59,7 @@ struct SelectedNode<'a> {
 struct GroupOutbound<'a> {
     strategy: NodeGroupStrategy,
     members: Vec<SelectedNode<'a>>,
-    probe_url: &'a str,
+    probe: &'a GroupProbe,
 }
 
 impl<'a> XrayRuntimeProfile<'a> {
@@ -169,7 +167,7 @@ impl<'a> XrayRuntimeProfile<'a> {
         mut self,
         strategy: NodeGroupStrategy,
         members: Vec<(&'a ProxyNode, NodeCredential<'a>)>,
-        probe_url: &'a str,
+        probe: &'a GroupProbe,
     ) -> Self {
         self.group_outbound = Some(GroupOutbound {
             strategy,
@@ -177,7 +175,7 @@ impl<'a> XrayRuntimeProfile<'a> {
                 .into_iter()
                 .map(|(node, credential)| SelectedNode { node, credential })
                 .collect(),
-            probe_url,
+            probe,
         });
         self
     }
@@ -188,9 +186,9 @@ impl<'a> XrayRuntimeProfile<'a> {
     pub fn with_urltest(
         self,
         members: Vec<(&'a ProxyNode, NodeCredential<'a>)>,
-        probe_url: &'a str,
+        probe: &'a GroupProbe,
     ) -> Self {
-        self.with_group_outbound(NodeGroupStrategy::UrlTest, members, probe_url)
+        self.with_group_outbound(NodeGroupStrategy::UrlTest, members, probe)
     }
 }
 
@@ -285,15 +283,10 @@ impl XrayRuntimeConfigGenerator {
         if let Some(group) = used_group
             && group.strategy.uses_observatory()
         {
-            let probe = if group.probe_url.trim().is_empty() {
-                DEFAULT_URLTEST_PROBE
-            } else {
-                group.probe_url
-            };
             config["observatory"] = json!({
                 "subjectSelector": ["node-"],
-                "probeUrl": probe,
-                "probeInterval": URLTEST_INTERVAL,
+                "probeUrl": group.probe.url(),
+                "probeInterval": group.probe.interval(),
             });
         }
 

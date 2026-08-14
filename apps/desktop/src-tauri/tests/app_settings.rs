@@ -70,6 +70,8 @@ fn saved_settings_survive_a_restart() {
         locale: LocaleSetting::Japanese,
         socks_port: 20_808,
         http_port: 20_809,
+        url_test_interval_seconds: 600,
+        url_test_tolerance_ms: 150,
         clash_api_port: 19_090,
         mux_enabled: true,
         auto_select_lowest_latency: true,
