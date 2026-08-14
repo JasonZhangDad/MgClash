@@ -167,3 +167,16 @@ fn rule_mode_rules_are_ignored_outside_rule_mode() {
 
     assert_eq!(rules(&profile).len(), 2);
 }
+
+#[test]
+fn a_blocked_rule_points_xray_at_its_blackhole() {
+    let rules =
+        vec![RoutingRule::domain_suffix("ads.example", RouteOutbound::Block, 0, true).unwrap()];
+    let profile = RouteProfile::new(RoutingMode::Rule, rules, RouteOutbound::Proxy).unwrap();
+    let config = XrayRouteConfigGenerator::generate(&profile);
+
+    // The private-address rule always comes first.
+    let rule = &config.json()["rules"][1];
+    assert_eq!(rule["domain"][0], "domain:ads.example");
+    assert_eq!(rule["outboundTag"], "block");
+}

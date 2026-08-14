@@ -272,3 +272,42 @@ fn a_rule_provider_with_a_bad_url_is_a_typed_error() {
 
     assert!(settings.profile(RoutingMode::Rule).is_err());
 }
+
+#[test]
+fn a_blocked_rule_and_rule_set_reach_the_generated_config() {
+    let settings = RouteSettings {
+        rules: vec![RouteRuleSetting {
+            kind: RouteRuleKind::DomainSuffix,
+            value: "ads.example".to_owned(),
+            outbound: DesktopRouteOutbound::Block,
+            enabled: true,
+        }],
+        providers: vec![RuleProviderSetting {
+            name: "ads".to_owned(),
+            url: "https://example.com/ads.srs".to_owned(),
+            format: RuleProviderFormatSetting::Binary,
+            outbound: DesktopRouteOutbound::Block,
+            enabled: true,
+        }],
+        final_outbound: DesktopRouteOutbound::Proxy,
+    };
+
+    let profile = settings.profile(RoutingMode::Rule).unwrap();
+    let config = SingBoxRouteConfigGenerator::generate(&profile);
+
+    assert_eq!(config.json()["rules"][1]["action"], "reject");
+    assert!(config.json()["rules"][1]["outbound"].is_null());
+    assert_eq!(config.json()["rules"][2]["rule_set"][0], "ads");
+    assert_eq!(config.json()["rules"][2]["action"], "reject");
+}
+
+#[test]
+fn blocking_by_default_is_refused_by_the_desktop_settings() {
+    let settings = RouteSettings {
+        rules: Vec::new(),
+        providers: Vec::new(),
+        final_outbound: DesktopRouteOutbound::Block,
+    };
+
+    assert!(settings.profile(RoutingMode::Rule).is_err());
+}

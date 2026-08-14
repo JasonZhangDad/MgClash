@@ -244,6 +244,11 @@ impl XrayRuntimeConfigGenerator {
             }
         }
         outbounds.push(json!({ "protocol": "freedom", "tag": "direct" }));
+        // Xray resolves rules by tag, so a blocked rule needs the blackhole it
+        // names; emitting it unconditionally would ship an outbound nothing uses.
+        if profile.route.blocks_anything() {
+            outbounds.push(json!({ "protocol": "blackhole", "tag": "block" }));
+        }
 
         let fake_dns = profile.dns.fake_ip_enabled();
         let inbounds = vec![

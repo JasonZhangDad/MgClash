@@ -179,6 +179,8 @@ pub enum DesktopRouteOutbound {
     #[default]
     Proxy,
     Direct,
+    /// Drops the traffic. Offered for rules and rule sets, never as the default.
+    Block,
 }
 
 impl From<DesktopRouteOutbound> for RouteOutbound {
@@ -186,6 +188,7 @@ impl From<DesktopRouteOutbound> for RouteOutbound {
         match outbound {
             DesktopRouteOutbound::Proxy => Self::Proxy,
             DesktopRouteOutbound::Direct => Self::Direct,
+            DesktopRouteOutbound::Block => Self::Block,
         }
     }
 }

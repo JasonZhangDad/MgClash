@@ -26,6 +26,8 @@ pub enum RoutingMode {
 pub enum RouteOutbound {
     Proxy,
     Direct,
+    /// Drop the connection. Valid for a rule, never as the default outbound.
+    Block,
 }
 
 impl RouteOutbound {
@@ -33,6 +35,7 @@ impl RouteOutbound {
         match self {
             Self::Proxy => "proxy",
             Self::Direct => "direct",
+            Self::Block => "block",
         }
     }
 }
@@ -420,8 +423,14 @@ impl RoutingRule {
             }
             RuleMatcher::RuleProvider { tag, .. } => json!({ "rule_set": [tag] }),
         };
-        value["action"] = Value::String("route".to_owned());
-        value["outbound"] = Value::String(self.outbound.as_str().to_owned());
+        // A blocked rule is an action, not a destination: sing-box 1.11 replaced
+        // the `block` outbound with `reject`, which takes no outbound at all.
+        if self.outbound == RouteOutbound::Block {
+            value["action"] = Value::String("reject".to_owned());
+        } else {
+            value["action"] = Value::String("route".to_owned());
+            value["outbound"] = Value::String(self.outbound.as_str().to_owned());
+        }
         value
     }
 }
@@ -454,6 +463,9 @@ impl RouteProfile {
         if mode == RoutingMode::Direct && final_outbound != RouteOutbound::Direct {
             return Err(RouteConfigError::DirectModeRequiresDirectFinal);
         }
+        if final_outbound == RouteOutbound::Block {
+            return Err(RouteConfigError::BlockCannotBeFinal);
+        }
         Ok(Self {
             mode,
             rules,
@@ -464,6 +476,19 @@ impl RouteProfile {
     #[must_use]
     pub const fn mode(&self) -> RoutingMode {
         self.mode
+    }
+
+    /// Whether any enabled rule drops its traffic.
+    ///
+    /// Xray needs this to decide whether to emit the blackhole outbound its
+    /// blocked rules refer to by tag.
+    #[must_use]
+    pub fn blocks_anything(&self) -> bool {
+        self.mode == RoutingMode::Rule
+            && self
+                .rules
+                .iter()
+                .any(|rule| rule.enabled && rule.outbound == RouteOutbound::Block)
     }
 }
 
@@ -638,4 +663,6 @@ pub enum RouteConfigError {
     GlobalModeRequiresProxyFinal,
     #[error("Direct mode must use the direct final outbound")]
     DirectModeRequiresDirectFinal,
+    #[error("the block outbound applies to a rule, not to the default outbound")]
+    BlockCannotBeFinal,
 }

@@ -324,7 +324,7 @@ export type RouteRuleKind =
   | "processName"
   | "processPath";
 
-export type RouteOutbound = "proxy" | "direct";
+export type RouteOutbound = "proxy" | "direct" | "block";
 
 export interface RouteRuleSetting {
   enabled: boolean;
