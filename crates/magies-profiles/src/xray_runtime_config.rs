@@ -38,6 +38,7 @@ const FAKE_DNS_POOL_SIZE: u32 = 65_535;
 )]
 pub struct XrayRuntimeProfile<'a> {
     selected: Option<SelectedNode<'a>>,
+    front: Option<SelectedNode<'a>>,
     group_outbound: Option<GroupOutbound<'a>>,
     dns: &'a DnsProfile,
     route: &'a RouteProfile,
@@ -72,6 +73,7 @@ impl<'a> XrayRuntimeProfile<'a> {
     ) -> Self {
         Self {
             selected: Some(SelectedNode { node, credential }),
+            front: None,
             group_outbound: None,
             dns,
             route,
@@ -89,6 +91,7 @@ impl<'a> XrayRuntimeProfile<'a> {
     pub fn without_selected_node(dns: &'a DnsProfile, route: &'a RouteProfile) -> Self {
         Self {
             selected: None,
+            front: None,
             group_outbound: None,
             dns,
             route,
@@ -160,6 +163,18 @@ impl<'a> XrayRuntimeProfile<'a> {
         self
     }
 
+    /// Dials every proxy outbound through `node` first, the way v2rayN's front
+    /// proxy chains one server in front of another.
+    #[must_use]
+    pub const fn with_front_node(
+        mut self,
+        node: &'a ProxyNode,
+        credential: NodeCredential<'a>,
+    ) -> Self {
+        self.front = Some(SelectedNode { node, credential });
+        self
+    }
+
     /// Emits a multi-node balancer tagged `proxy` when `members` has at least
     /// two nodes.
     #[must_use]
@@ -209,6 +224,10 @@ impl XrayRuntimeConfigGenerator {
             .json()
             .clone();
         let mut outbounds = Vec::new();
+        // The front comes first so the outbound that names it already exists.
+        if let Some(front) = xray_front_outbound(profile)? {
+            outbounds.push(front);
+        }
         let group_outbound = profile
             .group_outbound
             .as_ref()
@@ -294,6 +313,24 @@ impl XrayRuntimeConfigGenerator {
     }
 }
 
+fn xray_front_tag(node: &ProxyNode) -> String {
+    format!("front-{}", node.id)
+}
+
+/// The front node's own outbound, dialled directly.
+fn xray_front_outbound(
+    profile: &XrayRuntimeProfile<'_>,
+) -> Result<Option<Value>, XrayRuntimeConfigError> {
+    let Some(front) = profile.front else {
+        return Ok(None);
+    };
+    let mut outbound = XrayOutboundConfigGenerator::generate(front.node, front.credential)?
+        .json()
+        .clone();
+    outbound["tag"] = Value::String(xray_front_tag(front.node));
+    Ok(Some(outbound))
+}
+
 fn xray_member_outbound(
     profile: &XrayRuntimeProfile<'_>,
     member: &SelectedNode<'_>,
@@ -303,6 +340,10 @@ fn xray_member_outbound(
         .json()
         .clone();
     outbound["tag"] = Value::String(tag.to_owned());
+    if let Some(front) = profile.front {
+        // Xray spells the detour as a per-outbound proxy tag.
+        outbound["proxySettings"] = json!({ "tag": xray_front_tag(front.node) });
+    }
     if profile.mux_enabled {
         apply_xray_mux(&mut outbound, member.credential);
     }

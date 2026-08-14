@@ -562,3 +562,42 @@ fn a_probe_the_core_would_reject_is_refused() {
         "https://www.gstatic.com/generate_204"
     );
 }
+
+#[test]
+fn a_front_node_becomes_the_detour_the_proxy_dials_through() {
+    let parsed = ShadowsocksParser
+        .parse("ss://aes-256-gcm:proxy-secret@edge.example.com:8388")
+        .unwrap();
+    let front_parsed = ShadowsocksParser
+        .parse("ss://aes-256-gcm:front-secret@front.example.com:8388")
+        .unwrap();
+    let node = shadowsocks_node(true);
+    let mut front = shadowsocks_node(true);
+    front.id = Uuid::parse_str("018f78b5-08ee-7caa-94f3-1d5d781aba24").unwrap();
+    front.server = ServerAddress::new("front.example.com").unwrap();
+    let dns = system_dns();
+    let route = RouteProfile::new(RoutingMode::Global, Vec::new(), RouteOutbound::Proxy).unwrap();
+    let profile = SingBoxRuntimeProfile::new(
+        &node,
+        NodeCredential::from(parsed.credential()),
+        &dns,
+        &route,
+    )
+    .with_front_node(&front, NodeCredential::from(front_parsed.credential()));
+
+    let generated = SingBoxRuntimeConfigGenerator::generate(&profile).unwrap();
+    let outbounds = generated.json()["outbounds"].as_array().unwrap();
+    let front_tag = format!("front-{}", front.id);
+    // The front dials out directly; the proxy reaches the internet through it.
+    let front_outbound = outbounds
+        .iter()
+        .find(|outbound| outbound["tag"] == front_tag)
+        .expect("the front node has its own outbound");
+    assert_eq!(front_outbound["server"], "front.example.com");
+    assert!(front_outbound["detour"].is_null());
+    let proxy = outbounds
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert_eq!(proxy["detour"], front_tag);
+}

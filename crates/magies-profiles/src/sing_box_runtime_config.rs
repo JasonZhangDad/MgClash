@@ -125,6 +125,7 @@ pub enum GroupProbeError {
 )]
 pub struct SingBoxRuntimeProfile<'a> {
     selected: Option<SelectedNode<'a>>,
+    front: Option<SelectedNode<'a>>,
     group_outbound: Option<GroupOutbound<'a>>,
     dns: &'a DnsProfile,
     route: &'a RouteProfile,
@@ -160,6 +161,7 @@ impl<'a> SingBoxRuntimeProfile<'a> {
     ) -> Self {
         Self {
             selected: Some(SelectedNode { node, credential }),
+            front: None,
             group_outbound: None,
             dns,
             route,
@@ -178,6 +180,7 @@ impl<'a> SingBoxRuntimeProfile<'a> {
     pub fn without_selected_node(dns: &'a DnsProfile, route: &'a RouteProfile) -> Self {
         Self {
             selected: None,
+            front: None,
             group_outbound: None,
             dns,
             route,
@@ -261,6 +264,18 @@ impl<'a> SingBoxRuntimeProfile<'a> {
         self
     }
 
+    /// Dials every proxy outbound through `node` first, the way v2rayN's front
+    /// proxy chains one server in front of another.
+    #[must_use]
+    pub const fn with_front_node(
+        mut self,
+        node: &'a ProxyNode,
+        credential: NodeCredential<'a>,
+    ) -> Self {
+        self.front = Some(SelectedNode { node, credential });
+        self
+    }
+
     /// Emits a multi-node group outbound tagged `proxy` when `members` has at
     /// least two nodes. Fewer members fall back to the selected single outbound.
     #[must_use]
@@ -312,6 +327,10 @@ impl SingBoxRuntimeConfigGenerator {
         let requires_proxy = route_requires_proxy(&route);
         let mut outbounds = Vec::new();
         if requires_proxy {
+            // The front comes first so the outbound it fronts can name it.
+            if let Some((_, front)) = front_outbound(profile)? {
+                outbounds.push(front);
+            }
             outbounds.extend(proxy_outbounds(profile)?);
         }
         outbounds.push(json!({ "type": "direct", "tag": "direct" }));
@@ -399,6 +418,26 @@ fn proxy_outbounds(profile: &SingBoxRuntimeProfile<'_>) -> Result<Vec<Value>, Ru
     Ok(vec![member_outbound(profile, &selected, "proxy")?])
 }
 
+/// The front node's own outbound, dialled directly, plus its tag.
+fn front_outbound(
+    profile: &SingBoxRuntimeProfile<'_>,
+) -> Result<Option<(String, Value)>, RuntimeConfigError> {
+    let Some(front) = profile.front else {
+        return Ok(None);
+    };
+    let tag = front_outbound_tag(front.node);
+    // Built without the front applied to itself: the chain has to end somewhere.
+    let mut outbound = SingBoxOutboundConfigGenerator::generate(front.node, front.credential)?
+        .json()
+        .clone();
+    outbound["tag"] = Value::String(tag.clone());
+    Ok(Some((tag, outbound)))
+}
+
+fn front_outbound_tag(node: &ProxyNode) -> String {
+    format!("front-{}", node.id)
+}
+
 fn member_outbound(
     profile: &SingBoxRuntimeProfile<'_>,
     member: &SelectedNode<'_>,
@@ -408,6 +447,9 @@ fn member_outbound(
         .json()
         .clone();
     outbound["tag"] = Value::String(tag.to_owned());
+    if let Some(front) = profile.front {
+        outbound["detour"] = Value::String(front_outbound_tag(front.node));
+    }
     if profile.mux_enabled {
         apply_sing_box_multiplex(&mut outbound, member.node.protocol_type);
     }

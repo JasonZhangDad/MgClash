@@ -167,6 +167,8 @@ pub struct NodeSummary {
     pub server: String,
     pub port: u16,
     pub group_id: Option<Uuid>,
+    /// The node this one dials through, when it names a front proxy.
+    pub front_node_id: Option<Uuid>,
     /// The stream transport, as the node table shows it.
     pub transport: &'static str,
     /// Which TLS layer the node uses, or `None` for plaintext.
@@ -187,6 +189,7 @@ impl From<&ProxyNode> for NodeSummary {
             server: node.server.as_str().to_owned(),
             port: node.port.get(),
             group_id: node.group_id,
+            front_node_id: node.front_node_id,
             transport: transport_name(node.protocol_type, node.transport.as_ref()),
             tls: node.tls.as_ref().map(tls_name),
             deletable: node.subscription_id.is_none(),
@@ -1131,6 +1134,40 @@ where
         self.nodes()
     }
 
+    /// Points one node at the front proxy it dials through, or clears it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when either node is missing, when the front is the
+    /// node itself, when it is disabled, or when it chains further.
+    pub fn set_node_front(
+        &mut self,
+        id: Uuid,
+        front_id: Option<Uuid>,
+    ) -> Result<Vec<NodeSummary>, SessionCommandError<C::Error, P::Error>> {
+        self.reject_running_node(id)?;
+        let mut node = self
+            .stored_nodes()?
+            .into_iter()
+            .find(|node| node.id == id)
+            .ok_or(SessionCommandError::NodeStore(
+                ManualNodeStoreError::NodeNotFound { id },
+            ))?;
+        node.front_node_id = front_id;
+        // Validated before it is stored: an unusable chain must not be saved
+        // only to fail at connect.
+        self.front_node_for(&node)?;
+        self.manual_nodes
+            .update(&node)
+            .map_err(SessionCommandError::NodeStore)?;
+        if let Some(selected) = &mut self.node
+            && selected.id == id
+        {
+            selected.front_node_id = front_id;
+        }
+        self.nodes()
+    }
+
     /// Changes how a named group selects a node when connecting.
     ///
     /// # Errors
@@ -1729,6 +1766,9 @@ where
         .with_fragment(self.defaults.fragment_enabled)
         .with_final_fragment(self.defaults.final_fragment_enabled)
         .with_udp_noise(self.defaults.udp_noise_enabled);
+        if let Some(front) = self.front_node_for(&node)? {
+            profile = profile.with_front_node(front);
+        }
         if node.protocol_type != ProxyProtocol::Custom
             && let Some((strategy, members)) = self.group_members_for(&node, core)?
         {
@@ -1817,6 +1857,39 @@ where
         } else {
             requirements
         }
+    }
+
+    /// The node `node` dials through, when it names one.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when the front is missing, disabled, chained, or
+    /// the node itself: a chain that cannot be built must not start a session
+    /// that silently ignores it.
+    fn front_node_for(
+        &self,
+        node: &ProxyNode,
+    ) -> Result<Option<ProxyNode>, SessionCommandError<C::Error, P::Error>> {
+        let Some(front_id) = node.front_node_id else {
+            return Ok(None);
+        };
+        if front_id == node.id {
+            return Err(SessionCommandError::FrontNodeIsSelf { id: front_id });
+        }
+        let front = self
+            .stored_nodes()?
+            .into_iter()
+            .find(|candidate| candidate.id == front_id)
+            .ok_or(SessionCommandError::FrontNodeNotFound { id: front_id })?;
+        if !front.enabled {
+            return Err(SessionCommandError::FrontNodeDisabled { id: front_id });
+        }
+        if front.front_node_id.is_some() {
+            // One hop only: a chain of chains is a loop waiting to happen, and
+            // neither Core reports it usefully.
+            return Err(SessionCommandError::FrontNodeChained { id: front_id });
+        }
+        Ok(Some(front))
     }
 
     #[expect(
@@ -2281,6 +2354,14 @@ where
     InvalidDnsSettings(#[source] DnsConfigError),
     #[error("invalid policy group probe")]
     InvalidGroupProbe(#[source] magies_profiles::GroupProbeError),
+    #[error("a node cannot be its own front proxy")]
+    FrontNodeIsSelf { id: Uuid },
+    #[error("front proxy node {id} is missing")]
+    FrontNodeNotFound { id: Uuid },
+    #[error("front proxy node {id} is disabled")]
+    FrontNodeDisabled { id: Uuid },
+    #[error("front proxy node {id} has a front proxy of its own")]
+    FrontNodeChained { id: Uuid },
     #[error("failed to save the DNS settings")]
     DnsSettingsStore(#[source] DnsSettingsStoreError),
     #[error("subscription node {id} is managed by its subscription")]
@@ -2347,6 +2428,10 @@ where
             Self::RouteSettingsStore(_) => "route_settings_store_failed",
             Self::InvalidDnsSettings(_) => "invalid_dns_settings",
             Self::InvalidGroupProbe(_) => "invalid_group_probe",
+            Self::FrontNodeIsSelf { .. }
+            | Self::FrontNodeNotFound { .. }
+            | Self::FrontNodeDisabled { .. }
+            | Self::FrontNodeChained { .. } => "invalid_front_node",
             Self::DnsSettingsStore(_) => "dns_settings_store_failed",
             Self::SessionActive => "session_active",
             Self::SessionInactive => "session_inactive",

@@ -483,6 +483,10 @@ pub struct ProxyNode {
     /// Final Fragment is enabled globally. Stores a mask entry or `{tcp:[...]}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub xray_finalmask_json: Option<String>,
+    /// The node this one dials through, the way v2rayN calls a front proxy.
+    /// The Core reaches the front first and tunnels this node inside it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub front_node_id: Option<Uuid>,
 }
 
 impl ProxyNode {
@@ -524,6 +528,7 @@ impl ProxyNode {
             last_tested_at: None,
             enabled: true,
             xray_finalmask_json: None,
+            front_node_id: None,
         })
     }
 }

@@ -64,6 +64,7 @@ import {
   setDnsSettings,
   setNodeEnabled,
   setNodeGroup,
+  setNodeFront,
   setNodeGroupStrategy as saveNodeGroupStrategy,
   setRouteSettings,
   setRouteScheme,
@@ -222,6 +223,8 @@ export default function App() {
   const [nodeGroups, setNodeGroups] = useState<NodeGroupSummary[]>([]);
   const [nodeGroupFilter, setNodeGroupFilter] = useState("all");
   const [groupingNodeId, setGroupingNodeId] = useState<string | null>(null);
+  const [frontingNodeId, setFrontingNodeId] = useState<string | null>(null);
+  const [frontChoice, setFrontChoice] = useState("");
   const [nodeMenu, setNodeMenu] = useState<NodeMenuPosition | null>(null);
   const [checkedNodes, setCheckedNodes] = useState<Set<string>>(new Set());
   const [qrCode, setQrCode] = useState<{ name: string; svg: string } | null>(
@@ -1232,6 +1235,23 @@ export default function App() {
     setNodeGroupName("");
     setNodeGroupStrategy("select");
   }, []);
+
+  const onSaveNodeFront = useCallback(async () => {
+    if (frontingNodeId === null) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      setNodes(await setNodeFront(frontingNodeId, frontChoice || null));
+      setFrontingNodeId(null);
+      setFrontChoice("");
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, [frontChoice, frontingNodeId]);
 
   const onGroupNode = useCallback(
     (candidate: NodeSummary) => {
@@ -2468,6 +2488,19 @@ export default function App() {
                           <button
                             type="button"
                             role="menuitem"
+                            disabled={busy || (connected && selected)}
+                            onClick={act(() => {
+                              setFrontingNodeId(target.id);
+                              setFrontChoice(target.frontNodeId ?? "");
+                            })}
+                          >
+                            {t("前置代理")}
+                          </button>
+                        </li>
+                        <li>
+                          <button
+                            type="button"
+                            role="menuitem"
                             disabled={busy || !reorderable || index === 0}
                             onClick={act(() => void onMoveNode(target.id, "up"))}
                           >
@@ -2539,6 +2572,55 @@ export default function App() {
                       </ul>
                     );
                   })()}
+
+                {frontingNodeId !== null && (
+                  <div className="settings-form" aria-label={t("设置前置代理")}>
+                    <label>
+                      {t("前置代理节点")}
+                      <select
+                        aria-label={t("前置代理节点")}
+                        disabled={busy}
+                        value={frontChoice}
+                        onChange={(event) => setFrontChoice(event.target.value)}
+                      >
+                        <option value="">{t("不使用")}</option>
+                        {nodes
+                          .filter(
+                            (candidate) =>
+                              candidate.id !== frontingNodeId &&
+                              candidate.frontNodeId === null,
+                          )
+                          .map((candidate) => (
+                            <option key={candidate.id} value={candidate.id}>
+                              {candidate.name}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    <p className="hint">
+                      {t("先连到前置节点，再从它连到当前节点。只支持一跳。")}
+                    </p>
+                    <div className="actions">
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void onSaveNodeFront()}
+                      >
+                        {t("保存前置代理")}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => {
+                          setFrontingNodeId(null);
+                          setFrontChoice("");
+                        }}
+                      >
+                        {t("取消")}
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {groupingNodeId !== null && (
                   <div className="settings-form" aria-label={t("设置节点分组")}>

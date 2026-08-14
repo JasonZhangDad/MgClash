@@ -499,6 +499,7 @@ mod tests {
             server: "example.com".to_owned(),
             port: 443,
             group_id: None,
+            front_node_id: None,
             transport: "tcp",
             tls: None,
             deletable: true,

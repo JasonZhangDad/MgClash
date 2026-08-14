@@ -553,3 +553,30 @@ fn a_blocked_rule_brings_the_blackhole_outbound_with_it() {
         .expect("the blocked rule needs a blackhole outbound");
     assert_eq!(blackhole["protocol"], "blackhole");
 }
+
+#[test]
+fn a_front_node_becomes_the_xray_proxy_settings_tag() {
+    let (selected, credential) = node();
+    let (mut front, front_credential) = node();
+    front.id = Uuid::parse_str("018f78b5-08ee-7caa-94f3-1d5d781aba24").unwrap();
+    let dns = dns(false);
+    let route = global_route();
+
+    let config = generate(
+        &XrayRuntimeProfile::new(&selected, credential.as_node_credential(), &dns, &route)
+            .with_front_node(&front, front_credential.as_node_credential()),
+    );
+
+    let outbounds = config["outbounds"].as_array().unwrap();
+    let front_tag = format!("front-{}", front.id);
+    assert!(
+        outbounds
+            .iter()
+            .any(|outbound| outbound["tag"] == front_tag)
+    );
+    let proxy = outbounds
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert_eq!(proxy["proxySettings"]["tag"], front_tag);
+}
