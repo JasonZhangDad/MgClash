@@ -2076,7 +2076,7 @@ where
     ) -> Result<(), SessionCommandError<C::Error, P::Error>> {
         GroupProbe::new(address, interval_seconds, tolerance_ms)
             .map_err(SessionCommandError::InvalidGroupProbe)?;
-        self.defaults.url_test_address = address.to_owned();
+        address.clone_into(&mut self.defaults.url_test_address);
         self.defaults.url_test_interval_seconds = interval_seconds;
         self.defaults.url_test_tolerance_ms = tolerance_ms;
         Ok(())
