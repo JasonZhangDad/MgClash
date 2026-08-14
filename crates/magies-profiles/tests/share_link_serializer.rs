@@ -23,6 +23,34 @@ const USER_ID: &str = "b0dd64e4-0fbd-4038-9139-d1f32a68a0dc";
 fn links() -> Vec<(&'static str, String)> {
     vec![
         (
+            "tuic",
+            format!(
+                "tuic://{USER_ID}:hunter2@edge.example.com:443?sni=cdn.example.com\
+                 &congestion_control=bbr&udp_relay_mode=native#Tokyo"
+            ),
+        ),
+        (
+            "wireguard",
+            "wireguard://cHJpdmF0ZS1rZXk%3D@edge.example.com:51821\
+             ?publickey=cGVlci1wdWJsaWMta2V5&address=10.0.0.2/32,fd00::1/128\
+             &mtu=1420&presharedkey=cHNr&reserved=1,2,3#Tokyo"
+                .to_owned(),
+        ),
+        (
+            "vless-httpupgrade",
+            format!(
+                "vless://{USER_ID}@edge.example.com:443?type=httpupgrade\
+                 &path=%2Fupgrade&host=cdn.example.com#Tokyo"
+            ),
+        ),
+        (
+            "vless-xhttp",
+            format!(
+                "vless://{USER_ID}@edge.example.com:443?type=xhttp&path=%2Fx\
+                 &host=cdn.example.com&mode=packet-up#Tokyo"
+            ),
+        ),
+        (
             "vless-tcp",
             format!("vless://{USER_ID}@edge.example.com:443"),
         ),

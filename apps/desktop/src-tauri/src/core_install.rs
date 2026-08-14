@@ -1061,6 +1061,330 @@ mod tests {
     use super::*;
     use std::time::UNIX_EPOCH;
 
+    fn temporary_directory(name: &str) -> PathBuf {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "mgclash-core-install-unit-{name}-{}-{stamp}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        directory
+    }
+
+    fn zip_with(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write;
+        use zip::write::{SimpleFileOptions, ZipWriter};
+
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, body) in entries {
+            writer
+                .start_file(*name, SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(body).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn tar_gz_with(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+
+        let mut builder = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::fast()));
+        for (name, body) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder.append_data(&mut header, name, *body).unwrap();
+        }
+        builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn skips_blank_lines_and_lowercases_a_checksum_entry() {
+        let body = "\n  \nAABBCC  *sing-box-1.14.0-windows-amd64.zip\nddee  other.zip\n";
+
+        assert_eq!(
+            parse_checksum_entry(body, "sing-box-1.14.0-windows-amd64.zip"),
+            Some("aabbcc".to_owned())
+        );
+        assert_eq!(parse_checksum_entry(body, "missing.zip"), None);
+    }
+
+    #[test]
+    fn verifies_an_archive_against_its_checksum_line() {
+        let archive = b"archive-body";
+        let digest = Sha256Hash::digest(archive).to_string();
+        let body = format!("{digest}  core.zip\n");
+
+        verify_archive_checksum(&body, "core.zip", archive).unwrap();
+
+        assert!(matches!(
+            verify_archive_checksum(&body, "other.zip", archive),
+            Err(CoreInstallError::ChecksumEntryMissing { archive }) if archive == "other.zip"
+        ));
+        assert!(matches!(
+            verify_archive_checksum(&body, "core.zip", b"tampered"),
+            Err(CoreInstallError::ArchiveChecksumMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn names_every_supported_asset() {
+        for (os, arch, sing_box_archive, xray_archive) in [
+            (
+                "macos",
+                "x86_64",
+                "sing-box-1.14.0-darwin-amd64.tar.gz",
+                "Xray-macos-64.zip",
+            ),
+            (
+                "macos",
+                "aarch64",
+                "sing-box-1.14.0-darwin-arm64.tar.gz",
+                "Xray-macos-arm64-v8a.zip",
+            ),
+            (
+                "windows",
+                "x86_64",
+                "sing-box-1.14.0-windows-amd64.zip",
+                "Xray-windows-64.zip",
+            ),
+            (
+                "linux",
+                "x86_64",
+                "sing-box-1.14.0-linux-amd64.tar.gz",
+                "Xray-linux-64.zip",
+            ),
+        ] {
+            let target = TargetPlatform::parse(os, arch).unwrap();
+            let sing_box = sing_box_asset(target, "1.14.0");
+            assert_eq!(sing_box.archive_name, sing_box_archive);
+            assert_eq!(sing_box.checksums_name, "sing-box-1.14.0-checksums.txt");
+            assert!(sing_box.extract_dir.starts_with("sing-box-1.14.0-"));
+            assert_eq!(xray_asset(target).archive_name, xray_archive);
+        }
+        assert_eq!(
+            binary_file_name("xray"),
+            format!("xray{}", std::env::consts::EXE_SUFFIX)
+        );
+    }
+
+    #[test]
+    fn rejects_an_empty_release_tag_and_compares_versions_without_the_v() {
+        assert!(matches!(
+            normalize_tag("  v  "),
+            Err(CoreInstallError::EmptyVersionTag)
+        ));
+        ensure_version_matches("v1.14.0", "1.14.0").unwrap();
+        assert!(matches!(
+            ensure_version_matches("1.14.0", "1.13.18"),
+            Err(CoreInstallError::VersionMismatch { expected, actual })
+                if expected == "1.14.0" && actual == "1.13.18"
+        ));
+    }
+
+    #[test]
+    fn unpacks_a_sing_box_zip_from_inside_its_release_directory() {
+        let directory = temporary_directory("zip");
+        let asset = sing_box_asset(
+            TargetPlatform::parse("windows", "x86_64").unwrap(),
+            "1.14.0",
+        );
+        let archive = zip_with(&[
+            (
+                &format!("{}/sing-box.exe", asset.extract_dir),
+                b"core".as_slice(),
+            ),
+            (
+                &format!("{}/docs/readme.md", asset.extract_dir),
+                b"docs".as_slice(),
+            ),
+            // Anything outside the release directory is not ours to unpack.
+            ("unrelated/file.txt", b"skip".as_slice()),
+        ]);
+
+        extract_sing_box_archive(&archive, &directory, &asset).unwrap();
+
+        assert_eq!(fs::read(directory.join("sing-box.exe")).unwrap(), b"core");
+        assert!(directory.join("docs/readme.md").is_file());
+        assert!(!directory.join("unrelated").exists());
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn unpacks_a_sing_box_tarball() {
+        let directory = temporary_directory("tar");
+        let asset = sing_box_asset(TargetPlatform::parse("linux", "x86_64").unwrap(), "1.14.0");
+        let archive = tar_gz_with(&[(
+            &format!("{}/sing-box", asset.extract_dir),
+            b"core".as_slice(),
+        )]);
+
+        extract_sing_box_archive(&archive, &directory, &asset).unwrap();
+
+        assert_eq!(
+            fs::read(directory.join(&asset.extract_dir).join("sing-box")).unwrap(),
+            b"core"
+        );
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn unpacks_xray_and_hands_the_geo_files_to_the_asset_directory() {
+        let directory = temporary_directory("xray");
+        let geo = temporary_directory("xray-geo");
+        let asset = xray_asset(TargetPlatform::parse("linux", "x86_64").unwrap());
+        let archive = zip_with(&[
+            (asset.binary_name.as_str(), b"core".as_slice()),
+            (GEOIP_FILE, b"geoip".as_slice()),
+            (GEOSITE_FILE, b"geosite".as_slice()),
+        ]);
+
+        extract_xray_archive(&archive, &directory, &asset, Some(&geo)).unwrap();
+
+        assert_eq!(
+            fs::read(directory.join(&asset.binary_name)).unwrap(),
+            b"core"
+        );
+        assert_eq!(fs::read(geo.join(GEOIP_FILE)).unwrap(), b"geoip");
+        assert_eq!(fs::read(geo.join(GEOSITE_FILE)).unwrap(), b"geosite");
+        let _ = fs::remove_dir_all(directory);
+        let _ = fs::remove_dir_all(geo);
+    }
+
+    #[test]
+    fn an_archive_without_the_binary_is_a_typed_error() {
+        let directory = temporary_directory("xray-empty");
+        let asset = xray_asset(TargetPlatform::parse("linux", "x86_64").unwrap());
+        let archive = zip_with(&[("readme.md", b"docs".as_slice())]);
+
+        assert!(matches!(
+            extract_xray_archive(&archive, &directory, &asset, None),
+            Err(CoreInstallError::BinaryMissing { .. })
+        ));
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn a_body_that_is_not_a_zip_is_a_typed_error() {
+        let directory = temporary_directory("not-zip");
+
+        assert!(matches!(
+            extract_zip(b"not an archive", &directory, None),
+            Err(CoreInstallError::ExtractZip { .. })
+        ));
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn copying_a_missing_geo_file_is_not_a_failure() {
+        let directory = temporary_directory("copy");
+        let source = directory.join("geoip.dat");
+        let destination = directory.join("assets").join("geoip.dat");
+
+        copy_if_present(&source, &destination).unwrap();
+        assert!(!destination.exists());
+
+        fs::write(&source, b"geoip").unwrap();
+        copy_if_present(&source, &destination).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"geoip");
+        // The temporary file the copy goes through must not be left behind.
+        assert!(!destination.with_extension("dat.partial").exists());
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn archives_the_previous_binary_and_replaces_an_older_backup() {
+        let directory = temporary_directory("archive");
+        let binary = directory.join("sing-box");
+        fs::write(&binary, b"old").unwrap();
+        let previous = InstalledCoreEntry {
+            version: "1.13.18".to_owned(),
+            sha256: "abc".to_owned(),
+            binary: binary.display().to_string(),
+            previous_version: None,
+        };
+
+        let backup = archive_previous(&directory, &previous).unwrap();
+        assert_eq!(fs::read(&backup).unwrap(), b"old");
+        assert!(!binary.is_file());
+
+        // A second install of the same version overwrites the stale backup.
+        fs::write(&binary, b"older").unwrap();
+        let again = archive_previous(&directory, &previous).unwrap();
+        assert_eq!(again, backup);
+        assert_eq!(fs::read(&backup).unwrap(), b"older");
+
+        assert!(matches!(
+            archive_previous(&directory, &previous),
+            Err(CoreInstallError::BinaryMissing { .. })
+        ));
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn writes_the_manifest_through_a_temporary_file() {
+        let directory = temporary_directory("manifest");
+        let manifest = CoreInstallManifest {
+            sing_box: Some(InstalledCoreEntry {
+                version: "1.14.0".to_owned(),
+                sha256: "abc".to_owned(),
+                binary: directory.join("sing-box").display().to_string(),
+                previous_version: None,
+            }),
+            xray: None,
+        };
+
+        write_manifest(&directory, &manifest).unwrap();
+
+        let store = CoreInstallStore::open(&directory).unwrap();
+        assert_eq!(store.load_manifest().unwrap(), Some(manifest));
+        assert!(!directory.join("manifest.json.partial").exists());
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn a_rollback_without_a_previous_install_just_removes_the_new_binary() {
+        let directory = temporary_directory("rollback-fresh");
+        let destination = directory.join("sing-box");
+        fs::write(&destination, b"new").unwrap();
+        let mut manifest = CoreInstallManifest::default();
+
+        rollback_failed_install(
+            &directory,
+            &destination,
+            None,
+            None,
+            &mut manifest,
+            CoreKind::SingBox,
+        )
+        .unwrap();
+
+        assert!(!destination.exists());
+        assert_eq!(manifest, CoreInstallManifest::default());
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn writes_a_smoke_config_named_after_the_core() {
+        let directory = temporary_directory("smoke");
+
+        let path = write_smoke_config(&directory, "xray", "{}").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{}");
+        assert!(
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains("install-smoke-xray")
+        );
+        let _ = fs::remove_dir_all(directory);
+    }
+
     #[test]
     fn parses_checksum_lines() {
         let body = "abc123  sing-box-1.14.0-linux-amd64.tar.gz\n";

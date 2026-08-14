@@ -2051,3 +2051,147 @@ fn drawing_a_code_for_an_unknown_node_is_a_typed_not_found() {
         ))
     ));
 }
+
+#[test]
+fn exports_the_node_half_of_a_profile_and_imports_it_into_a_fresh_store() {
+    let (mut source, _runtime, _fail_start) = service();
+    let tokyo = source.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
+    source.create_node(trojan_draft("Frankfurt", 8443)).unwrap();
+    source.select_node(tokyo.id).unwrap();
+
+    let exported = source.export_profile_nodes().unwrap();
+
+    let (mut target, _target_runtime, _target_fail) = service();
+    let status = target.import_profile_nodes(exported).unwrap();
+
+    let names: Vec<_> = target
+        .nodes()
+        .unwrap()
+        .into_iter()
+        .map(|node| node.name)
+        .collect();
+    assert!(names.contains(&"Tokyo Edge".to_owned()));
+    assert!(names.contains(&"Frankfurt".to_owned()));
+    // The selection travels with the nodes so the restored profile connects to
+    // the same server.
+    assert_eq!(status.node.as_ref().unwrap().name, "Tokyo Edge");
+}
+
+#[test]
+fn refuses_to_import_a_profile_while_connected() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    let exported = service.export_profile_nodes().unwrap();
+    service.connect().unwrap();
+
+    assert_eq!(
+        service.import_profile_nodes(exported).unwrap_err().code(),
+        "session_active"
+    );
+}
+
+#[test]
+fn creates_selects_and_deletes_routing_schemes() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+
+    let status = service.create_route_scheme("Work").unwrap();
+    assert_eq!(status.route_schemes.len(), 2);
+    let work = status
+        .route_schemes
+        .iter()
+        .find(|scheme| scheme.name == "Work")
+        .expect("the new scheme is listed")
+        .id
+        .clone();
+
+    let status = service.set_route_scheme(&work).unwrap();
+    assert_eq!(status.route_scheme_id, work);
+
+    // Each scheme keeps its own rules.
+    service
+        .set_route_settings(RouteSettings {
+            rules: vec![RouteRuleSetting {
+                kind: RouteRuleKind::DomainSuffix,
+                value: "work.example".to_owned(),
+                outbound: DesktopRouteOutbound::Direct,
+                enabled: true,
+            }],
+            providers: Vec::new(),
+            final_outbound: DesktopRouteOutbound::Proxy,
+        })
+        .unwrap();
+    assert_eq!(service.status().route.rules.len(), 1);
+
+    let status = service.delete_route_scheme(&work).unwrap();
+    assert_eq!(status.route_schemes.len(), 1);
+    assert!(status.route.rules.is_empty());
+}
+
+#[test]
+fn refuses_to_delete_the_last_routing_scheme() {
+    let (mut service, _runtime, _fail_start) = service();
+    let scheme_id = service.status().route_scheme_id;
+
+    assert!(service.delete_route_scheme(&scheme_id).is_err());
+    assert!(service.set_route_scheme("no-such-scheme").is_err());
+}
+
+#[test]
+fn a_group_strategy_turns_the_group_into_a_core_outbound() {
+    let (mut service, _runtime, _fail_start) = service();
+    let tokyo = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
+    let osaka = service
+        .import_node("ss://aes-128-gcm:runtime-secret@edge.example.com:9000#Osaka")
+        .unwrap()
+        .node
+        .unwrap();
+    service.set_node_group(tokyo.id, Some("Work")).unwrap();
+    service.set_node_group(osaka.id, Some("Work")).unwrap();
+    let group_id = service.node_groups().unwrap()[0].id;
+    service
+        .set_node_group_strategy(group_id, magies_profiles::NodeGroupStrategy::UrlTest)
+        .unwrap();
+    service.select_node(tokyo.id).unwrap();
+
+    service.connect().unwrap();
+
+    let config: serde_json::Value =
+        serde_json::from_slice(&fs::read(service.runtime_config_path().unwrap()).unwrap()).unwrap();
+    let outbounds = config["outbounds"].as_array().unwrap();
+    let group = outbounds
+        .iter()
+        .find(|outbound| outbound["type"] == "urltest")
+        .expect("the group becomes a urltest outbound");
+    assert_eq!(group["outbounds"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn the_startup_only_switches_reach_the_generated_config() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    service.set_allow_lan(true);
+    service.set_inbound_udp_enabled(false);
+    service.set_mux_enabled(true);
+    service.set_url_test_address("https://probe.example.com".to_owned());
+
+    service.connect().unwrap();
+
+    let config: serde_json::Value =
+        serde_json::from_slice(&fs::read(service.runtime_config_path().unwrap()).unwrap()).unwrap();
+    let inbounds = config["inbounds"].as_array().unwrap();
+    // Allowing LAN peers is the difference between a loopback and a wildcard
+    // listener, which is the part a user can get wrong from the window.
+    assert!(
+        inbounds
+            .iter()
+            .all(|inbound| inbound["listen"] == "0.0.0.0")
+    );
+    let proxy = config["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert_eq!(proxy["multiplex"]["enabled"], true);
+}
