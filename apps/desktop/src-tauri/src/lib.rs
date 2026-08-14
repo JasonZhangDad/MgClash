@@ -2150,10 +2150,10 @@ fn handle_run_event(app: &AppHandle, event: tauri::RunEvent) {
 
 /// Adopts an elevated Core a previous run left behind, so it can be stopped.
 ///
-/// Only macOS starts a Core it does not own; everywhere else this is the
+/// Only Unix starts a Core it does not own; everywhere else this is the
 /// control unchanged.
 fn reclaimed_core_control(control: HostCoreControl) -> HostCoreControl {
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     {
         let mut control = control;
         if let Some(pid) = control.reclaim_elevated_core() {
@@ -2161,7 +2161,7 @@ fn reclaimed_core_control(control: HostCoreControl) -> HostCoreControl {
         }
         control
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(unix))]
     control
 }
 

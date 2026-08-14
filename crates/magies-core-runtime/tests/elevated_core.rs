@@ -419,3 +419,29 @@ fn process_is_alive_in_test(pid: u32) -> bool {
         .output()
         .is_ok_and(|output| output.status.success())
 }
+
+#[test]
+fn the_linux_prompt_hands_the_script_to_a_shell_it_names() {
+    use magies_core_runtime::elevated::pkexec_arguments;
+
+    let arguments = pkexec_arguments("core run -c config");
+
+    // pkexec runs one program with arguments, not a shell line, so the shell
+    // has to be named explicitly — and by absolute path, because pkexec
+    // refuses a program it cannot resolve without a PATH it trusts.
+    assert_eq!(arguments, vec!["/bin/sh", "-c", "core run -c config"]);
+}
+
+#[test]
+fn a_cancelled_polkit_dialog_is_the_same_refusal_macos_reports() {
+    use magies_core_runtime::elevated::pkexec_error;
+
+    // 126 is what pkexec exits with when the user dismisses the dialog; 127
+    // means the authorization itself could not be obtained.
+    assert_eq!(
+        pkexec_error(Some(126), "").code(),
+        "tun_authorization_declined"
+    );
+    assert_eq!(pkexec_error(Some(127), "").code(), "tun_elevation_failed");
+    assert_eq!(pkexec_error(Some(1), "boom").code(), "tun_elevation_failed");
+}
