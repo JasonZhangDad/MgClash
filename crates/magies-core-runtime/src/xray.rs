@@ -3,7 +3,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use crate::adapter::{CoreConfigPathError, execute_core_command, resolve_config_path};
+use crate::adapter::{CoreConfigPathError, resolve_config_path};
 use crate::{CoreProcessSpec, ValidatedCoreBinary};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,12 +79,23 @@ impl ValidatedXrayConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct XrayAdapter {
     binary: ValidatedCoreBinary,
+    asset_directory: Option<PathBuf>,
 }
 
 impl XrayAdapter {
     #[must_use]
     pub const fn new(binary: ValidatedCoreBinary) -> Self {
-        Self { binary }
+        Self {
+            binary,
+            asset_directory: None,
+        }
+    }
+
+    /// Points Xray at a directory that holds `geoip.dat` / `geosite.dat`.
+    #[must_use]
+    pub fn with_asset_directory(mut self, directory: impl Into<PathBuf>) -> Self {
+        self.asset_directory = Some(directory.into());
+        self
     }
 
     /// Reads and parses the version reported by the validated Xray binary.
@@ -132,14 +143,21 @@ impl XrayAdapter {
 
     #[must_use]
     pub fn process_spec(&self, config: &ValidatedXrayConfig) -> CoreProcessSpec {
-        CoreProcessSpec::new(
+        let mut spec = CoreProcessSpec::new(
             &self.binary,
             [
                 OsString::from("run"),
                 OsString::from("-c"),
                 config.path().as_os_str().to_owned(),
             ],
-        )
+        );
+        if let Some(directory) = &self.asset_directory {
+            spec = spec.with_environment([(
+                OsString::from("XRAY_LOCATION_ASSET"),
+                directory.as_os_str().to_owned(),
+            )]);
+        }
+        spec
     }
 
     fn execute<I, A>(
@@ -151,7 +169,13 @@ impl XrayAdapter {
         I: IntoIterator<Item = A>,
         A: AsRef<std::ffi::OsStr>,
     {
-        let output = execute_core_command(&self.binary, arguments)
+        let mut command = std::process::Command::new(self.binary.path());
+        command.args(arguments);
+        if let Some(directory) = &self.asset_directory {
+            command.env("XRAY_LOCATION_ASSET", directory);
+        }
+        let output = command
+            .output()
             .map_err(|source| XrayAdapterError::CommandStartFailed { operation, source })?;
         if !output.status.success() {
             return Err(XrayAdapterError::CommandFailed {

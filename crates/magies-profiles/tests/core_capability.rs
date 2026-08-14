@@ -5,7 +5,7 @@ use magies_domain::{CoreType, ProxyProtocol};
 use magies_platform::CpuArchitecture;
 use magies_profiles::{
     CoreCapabilityMatrix, CorePreference, CoreRejection, CoreRequirements, CoreSelectionError,
-    core_name, parse_core_name,
+    core_name, parse_core_name, protocol_name,
 };
 
 fn requirements(protocol: ProxyProtocol, tun: bool) -> CoreRequirements {
@@ -27,12 +27,52 @@ fn sing_box_serves_every_v01_protocol() {
         ProxyProtocol::Trojan,
         ProxyProtocol::Shadowsocks,
         ProxyProtocol::Hysteria2,
+        ProxyProtocol::AnyTls,
+        ProxyProtocol::Naive,
     ] {
         assert!(
             CoreCapabilityMatrix::supports(CoreType::SingBox, requirements(protocol, false)),
             "sing-box should support {protocol:?}"
         );
     }
+}
+
+#[test]
+fn xray_has_no_anytls_outbound() {
+    assert_eq!(
+        CoreCapabilityMatrix::rejection(CoreType::Xray, requirements(ProxyProtocol::AnyTls, false)),
+        Some(CoreRejection::ProtocolUnsupported {
+            core: CoreType::Xray,
+            protocol: ProxyProtocol::AnyTls,
+        })
+    );
+    assert_eq!(
+        CoreCapabilityMatrix::select(
+            CorePreference::Auto,
+            requirements(ProxyProtocol::AnyTls, false)
+        ),
+        Ok(CoreType::SingBox)
+    );
+    assert_eq!(protocol_name(ProxyProtocol::AnyTls), "AnyTLS");
+}
+
+#[test]
+fn xray_has_no_naive_outbound() {
+    assert_eq!(
+        CoreCapabilityMatrix::rejection(CoreType::Xray, requirements(ProxyProtocol::Naive, false)),
+        Some(CoreRejection::ProtocolUnsupported {
+            core: CoreType::Xray,
+            protocol: ProxyProtocol::Naive,
+        })
+    );
+    assert_eq!(
+        CoreCapabilityMatrix::select(
+            CorePreference::Auto,
+            requirements(ProxyProtocol::Naive, false)
+        ),
+        Ok(CoreType::SingBox)
+    );
+    assert_eq!(protocol_name(ProxyProtocol::Naive), "Naive");
 }
 
 #[test]
@@ -52,6 +92,30 @@ fn xray_serves_the_stream_protocols_but_not_hysteria2() {
         Some(CoreRejection::ProtocolUnsupported {
             core: CoreType::Xray,
             protocol: ProxyProtocol::Hysteria2,
+        })
+    );
+}
+
+#[test]
+fn both_cores_serve_socks_and_http() {
+    for core in [CoreType::SingBox, CoreType::Xray] {
+        for protocol in [ProxyProtocol::Socks, ProxyProtocol::Http] {
+            assert!(
+                CoreCapabilityMatrix::supports(core, requirements(protocol, false)),
+                "{core:?} should support {protocol:?}"
+            );
+        }
+    }
+
+    // Only sing-box can put SOCKS/HTTP behind TUN; Xray has no TUN inbound.
+    assert!(CoreCapabilityMatrix::supports(
+        CoreType::SingBox,
+        requirements(ProxyProtocol::Socks, true)
+    ));
+    assert_eq!(
+        CoreCapabilityMatrix::rejection(CoreType::Xray, requirements(ProxyProtocol::Http, true)),
+        Some(CoreRejection::TunUnsupported {
+            core: CoreType::Xray
         })
     );
 }
@@ -199,6 +263,8 @@ fn the_unreachable_rejections_still_read_correctly() {
             protocol: ProxyProtocol::Hysteria2,
             tun: true,
             certificate_pin: false,
+            xhttp: false,
+            kcp: false,
         }
         .to_string(),
         "no available Core supports Hysteria2 with TUN on"
@@ -208,6 +274,8 @@ fn the_unreachable_rejections_still_read_correctly() {
             protocol: ProxyProtocol::Vless,
             tun: false,
             certificate_pin: false,
+            xhttp: false,
+            kcp: false,
         }
         .to_string(),
         "no available Core supports VLESS with TUN off"
@@ -219,9 +287,22 @@ fn the_unreachable_rejections_still_read_correctly() {
             protocol: ProxyProtocol::Hysteria2,
             tun: false,
             certificate_pin: true,
+            xhttp: false,
+            kcp: false,
         }
         .to_string(),
         "no available Core supports Hysteria2 with TUN off and a pinned certificate"
+    );
+    assert_eq!(
+        CoreSelectionError::NoUsableCore {
+            protocol: ProxyProtocol::Vless,
+            tun: false,
+            certificate_pin: false,
+            xhttp: false,
+            kcp: true,
+        }
+        .to_string(),
+        "no available Core supports VLESS with TUN off and mKCP transport"
     );
 }
 
@@ -281,4 +362,70 @@ fn a_pinned_hysteria2_node_has_no_usable_core() {
         CoreCapabilityMatrix::select(CorePreference::Auto, pinned),
         Err(CoreSelectionError::NoUsableCore { .. })
     ));
+}
+
+#[test]
+fn an_xhttp_node_is_routed_to_xray() {
+    let xhttp =
+        CoreRequirements::new(ProxyProtocol::Vless, false, CpuArchitecture::X86_64).with_xhttp();
+
+    assert_eq!(
+        CoreCapabilityMatrix::select(CorePreference::Auto, xhttp).unwrap(),
+        CoreType::Xray
+    );
+    assert_eq!(
+        CoreCapabilityMatrix::rejection(CoreType::SingBox, xhttp),
+        Some(CoreRejection::XhttpUnsupported {
+            core: CoreType::SingBox
+        })
+    );
+    assert_eq!(
+        CoreCapabilityMatrix::select(CorePreference::Fixed(CoreType::SingBox), xhttp),
+        Err(CoreSelectionError::ChosenCoreUnusable {
+            rejection: CoreRejection::XhttpUnsupported {
+                core: CoreType::SingBox
+            }
+        })
+    );
+}
+
+#[test]
+fn a_kcp_node_is_routed_to_xray() {
+    let kcp =
+        CoreRequirements::new(ProxyProtocol::Vless, false, CpuArchitecture::X86_64).with_kcp();
+
+    assert_eq!(
+        CoreCapabilityMatrix::select(CorePreference::Auto, kcp).unwrap(),
+        CoreType::Xray
+    );
+    assert_eq!(
+        CoreCapabilityMatrix::rejection(CoreType::SingBox, kcp),
+        Some(CoreRejection::KcpUnsupported {
+            core: CoreType::SingBox
+        })
+    );
+    assert_eq!(
+        CoreCapabilityMatrix::select(CorePreference::Fixed(CoreType::SingBox), kcp),
+        Err(CoreSelectionError::ChosenCoreUnusable {
+            rejection: CoreRejection::KcpUnsupported {
+                core: CoreType::SingBox
+            }
+        })
+    );
+}
+
+#[test]
+fn custom_is_available_on_both_cores_without_tun_on_xray() {
+    let plain = requirements(ProxyProtocol::Custom, false);
+    assert!(CoreCapabilityMatrix::supports(CoreType::SingBox, plain));
+    assert!(CoreCapabilityMatrix::supports(CoreType::Xray, plain));
+
+    let tun = requirements(ProxyProtocol::Custom, true);
+    assert!(CoreCapabilityMatrix::supports(CoreType::SingBox, tun));
+    assert_eq!(
+        CoreCapabilityMatrix::rejection(CoreType::Xray, tun),
+        Some(CoreRejection::TunUnsupported {
+            core: CoreType::Xray
+        })
+    );
 }

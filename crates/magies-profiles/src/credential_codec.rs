@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    Hysteria2Credential, NodeCredential, ShadowsocksCredential, TrojanCredential, VlessCredential,
-    VmessCredential,
+    AnyTlsCredential, CustomCredential, HttpCredential, Hysteria2Credential, NaiveCredential,
+    NodeCredential, ShadowsocksCredential, SocksCredential, TrojanCredential, TuicCredential,
+    VlessCredential, VmessCredential, WireGuardCredential,
 };
 
 const CREDENTIAL_PAYLOAD_VERSION: u8 = 1;
@@ -21,6 +22,13 @@ pub enum StoredNodeCredential {
     Trojan(TrojanCredential),
     Shadowsocks(ShadowsocksCredential),
     Hysteria2(Hysteria2Credential),
+    Tuic(TuicCredential),
+    Socks(SocksCredential),
+    Http(HttpCredential),
+    WireGuard(WireGuardCredential),
+    AnyTls(AnyTlsCredential),
+    Naive(NaiveCredential),
+    Custom(CustomCredential),
 }
 
 impl StoredNodeCredential {
@@ -32,6 +40,13 @@ impl StoredNodeCredential {
             Self::Trojan(_) => ProxyProtocol::Trojan,
             Self::Shadowsocks(_) => ProxyProtocol::Shadowsocks,
             Self::Hysteria2(_) => ProxyProtocol::Hysteria2,
+            Self::Tuic(_) => ProxyProtocol::Tuic,
+            Self::Socks(_) => ProxyProtocol::Socks,
+            Self::Http(_) => ProxyProtocol::Http,
+            Self::WireGuard(_) => ProxyProtocol::WireGuard,
+            Self::AnyTls(_) => ProxyProtocol::AnyTls,
+            Self::Naive(_) => ProxyProtocol::Naive,
+            Self::Custom(_) => ProxyProtocol::Custom,
         }
     }
 
@@ -43,6 +58,13 @@ impl StoredNodeCredential {
             Self::Trojan(value) => NodeCredential::Trojan(value),
             Self::Shadowsocks(value) => NodeCredential::Shadowsocks(value),
             Self::Hysteria2(value) => NodeCredential::Hysteria2(value),
+            Self::Tuic(value) => NodeCredential::Tuic(value),
+            Self::Socks(value) => NodeCredential::Socks(value),
+            Self::Http(value) => NodeCredential::Http(value),
+            Self::WireGuard(value) => NodeCredential::WireGuard(value),
+            Self::AnyTls(value) => NodeCredential::AnyTls(value),
+            Self::Naive(value) => NodeCredential::Naive(value),
+            Self::Custom(value) => NodeCredential::Custom(value),
         }
     }
 }
@@ -68,6 +90,13 @@ impl_from_credential!(VmessCredential, Vmess);
 impl_from_credential!(TrojanCredential, Trojan);
 impl_from_credential!(ShadowsocksCredential, Shadowsocks);
 impl_from_credential!(Hysteria2Credential, Hysteria2);
+impl_from_credential!(TuicCredential, Tuic);
+impl_from_credential!(SocksCredential, Socks);
+impl_from_credential!(HttpCredential, Http);
+impl_from_credential!(WireGuardCredential, WireGuard);
+impl_from_credential!(AnyTlsCredential, AnyTls);
+impl_from_credential!(NaiveCredential, Naive);
+impl_from_credential!(CustomCredential, Custom);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CredentialCodec;

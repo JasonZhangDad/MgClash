@@ -10,8 +10,8 @@ use url::Url;
 use uuid::Uuid;
 
 use super::{
-    QueryParameters, VlessParseError, decode_component, default_name, parse_port, parse_server,
-    parse_tls_with_default, validate_percent_encoding,
+    QueryParameters, VlessParseError, decode_component, default_name, parse_kcp_settings,
+    parse_port, parse_server, parse_tls_with_default, parse_xhttp_mode, validate_percent_encoding,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -198,6 +198,8 @@ pub enum TrojanParseError {
     UnsupportedTcpHeader { value: String },
     #[error("unsupported Trojan gRPC mode: {value}")]
     UnsupportedGrpcMode { value: String },
+    #[error("unsupported Trojan XHTTP mode: {value}")]
+    UnsupportedXhttpMode { value: String },
     #[error("Trojan parameter {name} must be 0 or 1, got {value}")]
     InvalidBoolean { name: &'static str, value: String },
     #[error("Trojan insecure parameter aliases conflict")]
@@ -241,6 +243,27 @@ fn parse_transport(parameters: &mut QueryParameters) -> Result<TransportConfig, 
                 .unwrap_or_else(|| "/".to_owned()),
             host: parameters.take("host"),
         }),
+        "httpupgrade" => Ok(TransportConfig::HttpUpgrade {
+            path: parameters
+                .take_non_empty("path")
+                .map_err(invalid_uri)?
+                .unwrap_or_else(|| "/".to_owned()),
+            host: parameters.take("host"),
+        }),
+        "xhttp" | "splithttp" => Ok(TransportConfig::XHttp {
+            path: parameters
+                .take_non_empty("path")
+                .map_err(invalid_uri)?
+                .unwrap_or_else(|| "/".to_owned()),
+            host: parameters.take("host"),
+            mode: parse_xhttp_mode(
+                parameters
+                    .take_non_empty("mode")
+                    .map_err(invalid_uri)?
+                    .as_deref(),
+            )
+            .map_err(|value| TrojanParseError::UnsupportedXhttpMode { value })?,
+        }),
         "grpc" => {
             let service_name = parameters
                 .take_required_non_empty("serviceName")
@@ -266,6 +289,7 @@ fn parse_transport(parameters: &mut QueryParameters) -> Result<TransportConfig, 
                 authority: parameters.take("authority"),
             })
         }
+        "kcp" | "mkcp" => parse_kcp_settings(parameters).map_err(invalid_uri),
         value => Err(TrojanParseError::UnsupportedTransport {
             value: value.to_owned(),
         }),
@@ -306,11 +330,17 @@ fn validate_transport_security(
     transport: &TransportConfig,
     tls: Option<&TlsConfig>,
 ) -> Result<(), TrojanParseError> {
-    if matches!(transport, TransportConfig::WebSocket { .. })
-        && matches!(tls, Some(TlsConfig::Reality { .. }))
+    if matches!(
+        transport,
+        TransportConfig::WebSocket { .. } | TransportConfig::HttpUpgrade { .. }
+    ) && matches!(tls, Some(TlsConfig::Reality { .. }))
     {
         Err(TrojanParseError::UnsupportedCombination {
-            transport: "websocket",
+            transport: if matches!(transport, TransportConfig::HttpUpgrade { .. }) {
+                "httpupgrade"
+            } else {
+                "websocket"
+            },
             security: "reality",
         })
     } else {

@@ -21,8 +21,9 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 /// Budget for a freshly spawned sing-box to bind its listener. Process startup
 /// and a socket read are different things: a cold Windows runner scanning a
 /// just-downloaded binary regularly needs more than the read budget, which is
-/// what made this test fail there while passing everywhere else.
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+/// what made this test fail there while passing everywhere else. Thirty seconds
+/// still timed out on that runner, so the budget is now a minute.
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[test]
 #[ignore = "requires MAGIES_SING_BOX_CONFIG_BIN pointing to official sing-box 1.13.18"]
@@ -53,8 +54,8 @@ fn generated_runtime_proxies_an_http_request_through_selected_node() {
             "route": { "final": "direct" }
         }),
     );
-    let _server = CoreProcess::start(&binary, server_config.path());
-    wait_for_port(server_port);
+    let mut server = CoreProcess::start(&binary, server_config.path());
+    wait_for_port(&mut server, server_port);
 
     let parsed = ShadowsocksParser
         .parse(&format!(
@@ -108,10 +109,10 @@ fn generated_runtime_proxies_an_http_request_through_selected_node() {
         "server_port": unreachable_port
     });
     let client_config = ConfigFile::new("client", &client_json);
-    let _client = CoreProcess::start(&binary, client_config.path());
-    wait_for_port(socks_port);
-    wait_for_port(http_port);
-    wait_for_port(api_port);
+    let mut client = CoreProcess::start(&binary, client_config.path());
+    wait_for_port(&mut client, socks_port);
+    wait_for_port(&mut client, http_port);
+    wait_for_port(&mut client, api_port);
 
     assert_traffic_stream(api_port);
     assert_http_proxy_request(http_port);
@@ -191,15 +192,27 @@ fn available_ports(count: usize) -> Vec<u16> {
         .collect()
 }
 
-fn wait_for_port(port: u16) {
+/// Waits for a Core to bind `port`, reporting what the Core said when it does
+/// not. A bare timeout says nothing about whether the binary refused the
+/// config, lost a race for the port, or was still being scanned.
+fn wait_for_port(core: &mut CoreProcess, port: u16) {
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     while Instant::now() < deadline {
         if TcpStream::connect(("127.0.0.1", port)).is_ok() {
             return;
         }
+        if let Some(status) = core.exited() {
+            panic!(
+                "sing-box exited with {status} before opening 127.0.0.1:{port}\n{}",
+                core.stderr()
+            );
+        }
         sleep(Duration::from_millis(25));
     }
-    panic!("sing-box did not open 127.0.0.1:{port} within {STARTUP_TIMEOUT:?}");
+    panic!(
+        "sing-box did not open 127.0.0.1:{port} within {STARTUP_TIMEOUT:?}\n{}",
+        core.stderr()
+    );
 }
 
 struct CoreProcess(Child);
@@ -212,10 +225,31 @@ impl CoreProcess {
             .arg(config)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            // Kept rather than discarded: this is the only place the Core can
+            // say why it never came up.
+            .stderr(Stdio::piped())
             .spawn()
             .unwrap();
         Self(child)
+    }
+
+    /// The exit status once the Core has stopped, or `None` while it runs.
+    fn exited(&mut self) -> Option<std::process::ExitStatus> {
+        self.0.try_wait().ok().flatten()
+    }
+
+    /// Whatever the Core wrote to stderr, for a failure message.
+    fn stderr(&mut self) -> String {
+        let Some(mut pipe) = self.0.stderr.take() else {
+            return String::from("(stderr already read)");
+        };
+        let mut output = String::new();
+        let _ = pipe.read_to_string(&mut output);
+        if output.trim().is_empty() {
+            String::from("(the Core wrote nothing to stderr)")
+        } else {
+            output
+        }
     }
 }
 

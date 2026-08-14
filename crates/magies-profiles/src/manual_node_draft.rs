@@ -13,15 +13,26 @@
 
 use std::fmt::{Debug, Formatter};
 
-use magies_domain::{CredentialRef, NodeModelError, ProxyNode, TlsConfig, TransportConfig};
-use serde::Deserialize;
+use magies_domain::{
+    CoreType, CredentialRef, NodeModelError, ProxyNode, TlsConfig, TransportConfig,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::anytls::AnyTlsCredential;
+use crate::custom::CustomCredential;
+use crate::http_proxy::HttpCredential;
 use crate::hysteria2::{Hysteria2Credential, Hysteria2Obfuscation, Hysteria2ObfuscationMethod};
+use crate::naive::{NaiveCongestionControl, NaiveCredential};
 use crate::shadowsocks::{SUPPORTED_METHODS, ShadowsocksCredential};
+use crate::socks::SocksCredential;
 use crate::trojan::TrojanCredential;
+use crate::tuic::{TuicCongestionControl, TuicCredential, TuicUdpRelayMode};
 use crate::vmess::{VmessCredential, VmessSecurity};
+use crate::wireguard::WireGuardCredential;
+use crate::xray_outbound::normalize_xray_finalmask_tcp;
 use crate::{StoredNodeCredential, VlessCredential};
 
 /// VLESS negotiates encryption at the TLS layer; the outbound generator accepts
@@ -29,7 +40,7 @@ use crate::{StoredNodeCredential, VlessCredential};
 const VLESS_ENCRYPTION: &str = "none";
 
 /// One node as entered in the manual creation form.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManualNodeDraft {
     pub name: String,
@@ -43,10 +54,31 @@ pub struct ManualNodeDraft {
     pub transport: Option<TransportConfig>,
     #[serde(default)]
     pub tls: Option<TlsConfig>,
+    /// Optional Xray finalmask JSON for this node (mask entry or `{tcp:[...]}`).
+    #[serde(default, rename = "xrayFinalmaskJson")]
+    pub xray_finalmask_json: Option<String>,
     pub credential: ManualCredentialDraft,
 }
 
 impl ManualNodeDraft {
+    /// Rebuilds the form draft from a persisted node and its decoded secret.
+    ///
+    /// Used by the edit dialog so the user sees the same fields that were saved,
+    /// including credentials that already live in the OS store.
+    #[must_use]
+    pub fn from_stored(node: &ProxyNode, credential: &StoredNodeCredential) -> Self {
+        Self {
+            name: node.name.as_str().to_owned(),
+            server: node.server.as_str().to_owned(),
+            port: u32::from(node.port.get()),
+            udp_enabled: node.udp_enabled,
+            transport: node.transport.clone(),
+            tls: node.tls.clone(),
+            xray_finalmask_json: node.xray_finalmask_json.clone(),
+            credential: ManualCredentialDraft::from_stored(credential),
+        }
+    }
+
     /// Validates the draft and splits it into a node and its credential.
     ///
     /// The protocol is taken from the credential variant rather than a separate
@@ -65,17 +97,23 @@ impl ManualNodeDraft {
         let credential = self.credential.build()?;
         let transport = resolve_transport(&credential, self.transport)?;
         let tls = resolve_tls(&credential, self.tls)?;
+        let (server, port) = match &credential {
+            StoredNodeCredential::Custom(_) => ("127.0.0.1".to_owned(), 443),
+            _ => (self.server, self.port),
+        };
         let mut node = ProxyNode::new(
             id,
             self.name,
             credential.protocol(),
-            self.server,
-            self.port,
+            server,
+            port,
             Some(credential_ref),
         )?;
         node.transport = transport;
         node.tls = tls;
         node.udp_enabled = self.udp_enabled;
+        node.xray_finalmask_json =
+            parse_xray_finalmask_json(&credential, self.xray_finalmask_json)?;
         Ok((node, credential))
     }
 }
@@ -99,30 +137,126 @@ fn resolve_transport(
             }
             Ok(None)
         }
+        StoredNodeCredential::Tuic(_) => {
+            if transport.is_some() {
+                return Err(ManualNodeDraftError::TuicRejectsTransport);
+            }
+            Ok(None)
+        }
+        StoredNodeCredential::WireGuard(_) => {
+            if transport.is_some() {
+                return Err(ManualNodeDraftError::WireGuardRejectsTransport);
+            }
+            Ok(None)
+        }
+        StoredNodeCredential::AnyTls(_) => {
+            if transport.is_some() {
+                return Err(ManualNodeDraftError::AnyTlsRejectsTransport);
+            }
+            Ok(None)
+        }
+        StoredNodeCredential::Naive(_) => {
+            if transport.is_some() {
+                return Err(ManualNodeDraftError::NaiveRejectsTransport);
+            }
+            Ok(None)
+        }
+        StoredNodeCredential::Custom(_) => {
+            if transport.is_some() {
+                return Err(ManualNodeDraftError::CustomRejectsTransport);
+            }
+            Ok(None)
+        }
         StoredNodeCredential::Shadowsocks(_) => match transport {
             None | Some(TransportConfig::Tcp) => Ok(Some(TransportConfig::Tcp)),
             Some(_) => Err(ManualNodeDraftError::ShadowsocksRequiresTcpTransport),
+        },
+        StoredNodeCredential::Socks(_) => match transport {
+            None | Some(TransportConfig::Tcp) => Ok(Some(TransportConfig::Tcp)),
+            Some(_) => Err(ManualNodeDraftError::SocksRequiresTcpTransport),
+        },
+        StoredNodeCredential::Http(_) => match transport {
+            None | Some(TransportConfig::Tcp) => Ok(Some(TransportConfig::Tcp)),
+            Some(_) => Err(ManualNodeDraftError::HttpRequiresTcpTransport),
         },
         _ => Ok(Some(transport.unwrap_or(TransportConfig::Tcp))),
     }
 }
 
-/// Hysteria2 always runs over TLS, and only standard TLS — Reality is a
+/// Hysteria2 / TUIC always run over TLS, and only standard TLS — Reality is a
 /// stream-protocol feature.
 fn resolve_tls(
     credential: &StoredNodeCredential,
     tls: Option<TlsConfig>,
 ) -> Result<Option<TlsConfig>, ManualNodeDraftError> {
-    if matches!(credential, StoredNodeCredential::Hysteria2(_))
-        && !matches!(tls, Some(TlsConfig::Tls { .. }))
-    {
-        return Err(ManualNodeDraftError::Hysteria2RequiresTls);
+    match credential {
+        StoredNodeCredential::Hysteria2(_) if !matches!(tls, Some(TlsConfig::Tls { .. })) => {
+            Err(ManualNodeDraftError::Hysteria2RequiresTls)
+        }
+        StoredNodeCredential::Tuic(_) if !matches!(tls, Some(TlsConfig::Tls { .. })) => {
+            Err(ManualNodeDraftError::TuicRequiresTls)
+        }
+        // SOCKS has no TLS layer of its own in this model.
+        StoredNodeCredential::Socks(_) if tls.is_some() => {
+            Err(ManualNodeDraftError::SocksRejectsTls)
+        }
+        // WireGuard authenticates peers by key, not by certificate.
+        StoredNodeCredential::WireGuard(_) if tls.is_some() => {
+            Err(ManualNodeDraftError::WireGuardRejectsTls)
+        }
+        // HTTP may run plain or wrapped in standard TLS, but Reality is a
+        // stream-protocol feature the HTTP outbound cannot use.
+        StoredNodeCredential::Http(_) if matches!(tls, Some(TlsConfig::Reality { .. })) => {
+            Err(ManualNodeDraftError::HttpRejectsReality)
+        }
+        // AnyTLS is TLS from the first byte; v2rayN also exposes Reality for
+        // it, so both TLS layers are accepted, but plaintext is not.
+        StoredNodeCredential::AnyTls(_)
+            if !matches!(tls, Some(TlsConfig::Tls { .. } | TlsConfig::Reality { .. })) =>
+        {
+            Err(ManualNodeDraftError::AnyTlsRequiresTls)
+        }
+        StoredNodeCredential::Naive(_) => validate_naive_tls(tls),
+        StoredNodeCredential::Custom(_) if tls.is_some() => {
+            Err(ManualNodeDraftError::CustomRejectsTls)
+        }
+        StoredNodeCredential::Custom(_) => Ok(None),
+        _ => Ok(tls),
     }
-    Ok(tls)
+}
+
+/// Naive requires plain TLS and only `server_name` — sing-box rejects the rest.
+fn validate_naive_tls(tls: Option<TlsConfig>) -> Result<Option<TlsConfig>, ManualNodeDraftError> {
+    match tls {
+        Some(TlsConfig::Tls {
+            server_name,
+            allow_insecure,
+            alpn,
+            fingerprint,
+            pinned_sha256,
+        }) => {
+            if allow_insecure
+                || !alpn.is_empty()
+                || fingerprint.is_some()
+                || pinned_sha256.is_some()
+            {
+                return Err(ManualNodeDraftError::NaiveRejectsTlsExtras);
+            }
+            Ok(Some(TlsConfig::Tls {
+                server_name,
+                allow_insecure: false,
+                alpn: Vec::new(),
+                fingerprint: None,
+                pinned_sha256: None,
+            }))
+        }
+        Some(TlsConfig::Reality { .. }) => Err(ManualNodeDraftError::NaiveRejectsReality),
+        None => Err(ManualNodeDraftError::NaiveRequiresTls),
+    }
 }
 
 /// Protocol-specific secret fields entered in the manual creation form.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "protocol", rename_all = "lowercase")]
 pub enum ManualCredentialDraft {
     #[serde(rename_all = "camelCase")]
@@ -149,9 +283,133 @@ pub enum ManualCredentialDraft {
         #[serde(default)]
         obfuscation: Option<ManualObfuscationDraft>,
     },
+    #[serde(rename_all = "camelCase")]
+    Tuic {
+        uuid: Uuid,
+        #[serde(default)]
+        password: Option<String>,
+        #[serde(default)]
+        congestion_control: Option<TuicCongestionControl>,
+        #[serde(default)]
+        udp_relay_mode: Option<TuicUdpRelayMode>,
+        #[serde(default)]
+        udp_over_stream: bool,
+        #[serde(default)]
+        zero_rtt_handshake: bool,
+    },
+    #[serde(rename_all = "camelCase")]
+    Socks {
+        #[serde(default)]
+        username: Option<String>,
+        #[serde(default)]
+        password: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Http {
+        #[serde(default)]
+        username: Option<String>,
+        #[serde(default)]
+        password: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    WireGuard {
+        private_key: String,
+        peer_public_key: String,
+        #[serde(default)]
+        pre_shared_key: Option<String>,
+        local_address: Vec<String>,
+        #[serde(default)]
+        mtu: Option<u32>,
+        #[serde(default)]
+        reserved: Option<[u8; 3]>,
+    },
+    #[serde(rename_all = "camelCase")]
+    AnyTls { password: String },
+    #[serde(rename_all = "camelCase")]
+    Naive {
+        #[serde(default)]
+        username: Option<String>,
+        #[serde(default)]
+        password: Option<String>,
+        #[serde(default)]
+        quic: bool,
+        #[serde(default)]
+        quic_congestion_control: Option<NaiveCongestionControl>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Custom { core: CoreType, document: String },
 }
 
 impl ManualCredentialDraft {
+    fn from_stored(credential: &StoredNodeCredential) -> Self {
+        match credential {
+            StoredNodeCredential::Vless(value) => Self::Vless {
+                user_id: value.user_id(),
+                flow: value.flow().map(str::to_owned),
+            },
+            StoredNodeCredential::Vmess(value) => Self::Vmess {
+                user_id: value.user_id(),
+                security: value.security(),
+                alter_id: value.alter_id(),
+            },
+            StoredNodeCredential::Trojan(value) => Self::Trojan {
+                password: value.password().to_owned(),
+            },
+            StoredNodeCredential::Shadowsocks(value) => Self::Shadowsocks {
+                method: value.method().to_owned(),
+                password: value.password().to_owned(),
+            },
+            StoredNodeCredential::Hysteria2(value) => Self::Hysteria2 {
+                authentication: value.authentication().map(str::to_owned),
+                obfuscation: value.obfuscation().map(|obfs| ManualObfuscationDraft {
+                    method: obfs.method(),
+                    password: obfs.password().to_owned(),
+                }),
+            },
+            StoredNodeCredential::Tuic(value) => Self::Tuic {
+                uuid: value.uuid(),
+                password: value.password().map(str::to_owned),
+                congestion_control: value.congestion_control(),
+                udp_relay_mode: value.udp_relay_mode(),
+                udp_over_stream: value.udp_over_stream(),
+                zero_rtt_handshake: value.zero_rtt_handshake(),
+            },
+            StoredNodeCredential::Socks(value) => Self::Socks {
+                username: value.username().map(str::to_owned),
+                password: value.password().map(str::to_owned),
+            },
+            StoredNodeCredential::Http(value) => Self::Http {
+                username: value.username().map(str::to_owned),
+                password: value.password().map(str::to_owned),
+            },
+            StoredNodeCredential::WireGuard(value) => Self::WireGuard {
+                private_key: value.private_key().to_owned(),
+                peer_public_key: value.peer_public_key().to_owned(),
+                pre_shared_key: value.pre_shared_key().map(str::to_owned),
+                local_address: value.local_address().to_vec(),
+                mtu: value.mtu(),
+                reserved: value.reserved(),
+            },
+            StoredNodeCredential::AnyTls(value) => Self::AnyTls {
+                password: value.password().to_owned(),
+            },
+            StoredNodeCredential::Naive(value) => Self::Naive {
+                username: value.username().map(str::to_owned),
+                password: value.password().map(str::to_owned),
+                quic: value.quic(),
+                quic_congestion_control: value.quic_congestion_control(),
+            },
+            StoredNodeCredential::Custom(value) => Self::Custom {
+                core: value.core(),
+                document: value.document().to_owned(),
+            },
+        }
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "each protocol variant is a short arm; splitting would scatter validation"
+    )]
     fn build(self) -> Result<StoredNodeCredential, ManualNodeDraftError> {
         match self {
             Self::Vless { user_id, flow } => Ok(StoredNodeCredential::Vless(VlessCredential {
@@ -198,15 +456,147 @@ impl ManualCredentialDraft {
                 authentication: optional(authentication),
                 obfuscation: obfuscation.map(ManualObfuscationDraft::build).transpose()?,
             })),
+            Self::Tuic {
+                uuid,
+                password,
+                congestion_control,
+                udp_relay_mode,
+                udp_over_stream,
+                zero_rtt_handshake,
+            } => {
+                if udp_relay_mode.is_some() && udp_over_stream {
+                    return Err(ManualNodeDraftError::ConflictingTuicUdpRelay);
+                }
+                Ok(StoredNodeCredential::Tuic(TuicCredential {
+                    uuid,
+                    password: optional(password),
+                    congestion_control,
+                    udp_relay_mode,
+                    udp_over_stream,
+                    zero_rtt_handshake,
+                }))
+            }
+            Self::Socks { username, password } => {
+                let (username, password) = build_user_pass_credential(
+                    username,
+                    password,
+                    ManualNodeDraftError::SocksPasswordRequiresUsername,
+                )?;
+                Ok(StoredNodeCredential::Socks(SocksCredential {
+                    username,
+                    password,
+                }))
+            }
+            Self::Http { username, password } => {
+                let (username, password) = build_user_pass_credential(
+                    username,
+                    password,
+                    ManualNodeDraftError::HttpPasswordRequiresUsername,
+                )?;
+                Ok(StoredNodeCredential::Http(HttpCredential {
+                    username,
+                    password,
+                }))
+            }
+            Self::WireGuard {
+                private_key,
+                peer_public_key,
+                pre_shared_key,
+                local_address,
+                mtu,
+                reserved,
+            } => {
+                let private_key = required(
+                    &private_key,
+                    ManualNodeDraftError::MissingWireGuardPrivateKey,
+                )?;
+                let peer_public_key = required(
+                    &peer_public_key,
+                    ManualNodeDraftError::MissingWireGuardPeerPublicKey,
+                )?;
+                let local_address: Vec<String> = local_address
+                    .into_iter()
+                    .map(|address| address.trim().to_owned())
+                    .filter(|address| !address.is_empty())
+                    .collect();
+                if local_address.is_empty() {
+                    return Err(ManualNodeDraftError::MissingWireGuardLocalAddress);
+                }
+                Ok(StoredNodeCredential::WireGuard(WireGuardCredential {
+                    private_key,
+                    peer_public_key,
+                    pre_shared_key: optional(pre_shared_key),
+                    local_address,
+                    mtu,
+                    reserved,
+                }))
+            }
+            Self::AnyTls { password } => {
+                let password = required(&password, ManualNodeDraftError::MissingAnyTlsPassword)?;
+                Ok(StoredNodeCredential::AnyTls(AnyTlsCredential { password }))
+            }
+            Self::Naive {
+                username,
+                password,
+                quic,
+                quic_congestion_control,
+            } => {
+                let (username, password) = build_user_pass_credential(
+                    username,
+                    password,
+                    ManualNodeDraftError::NaivePasswordRequiresUsername,
+                )?;
+                Ok(StoredNodeCredential::Naive(NaiveCredential {
+                    username,
+                    password,
+                    quic,
+                    quic_congestion_control,
+                }))
+            }
+            Self::Custom { core, document } => {
+                let document = required(&document, ManualNodeDraftError::MissingCustomDocument)?;
+                let trimmed = document.trim();
+                if trimmed.is_empty() {
+                    return Err(ManualNodeDraftError::MissingCustomDocument);
+                }
+                let value: serde_json::Value = serde_json::from_str(trimmed).map_err(|error| {
+                    ManualNodeDraftError::InvalidCustomDocument {
+                        message: error.to_string(),
+                    }
+                })?;
+                if !value.is_object() {
+                    return Err(ManualNodeDraftError::InvalidCustomDocumentNotObject);
+                }
+                Ok(StoredNodeCredential::Custom(CustomCredential {
+                    core,
+                    document: trimmed.to_owned(),
+                }))
+            }
         }
     }
+}
+
+/// Validates the optional username/password pair SOCKS and HTTP share: a
+/// username alone is fine, but a password with no username has nothing to
+/// authenticate.
+fn build_user_pass_credential(
+    username: Option<String>,
+    password: Option<String>,
+    password_requires_username: ManualNodeDraftError,
+) -> Result<(Option<String>, Option<String>), ManualNodeDraftError> {
+    let username = optional(username);
+    let password = optional(password);
+    if username.is_none() && password.is_some() {
+        return Err(password_requires_username);
+    }
+    Ok((username, password))
 }
 
 /// Optional Hysteria2 traffic obfuscation entered in the manual creation form.
 ///
 /// Packet-size shaping is deliberately absent: the outbound generator refuses
 /// it, so a form that collected it could only produce unusable nodes.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManualObfuscationDraft {
     pub method: Hysteria2ObfuscationMethod,
@@ -254,6 +644,88 @@ pub enum ManualNodeDraftError {
     Hysteria2RejectsTransport,
     #[error("Hysteria2 requires standard TLS")]
     Hysteria2RequiresTls,
+    #[error("TUIC carries its own transport and accepts no transport setting")]
+    TuicRejectsTransport,
+    #[error("TUIC requires standard TLS")]
+    TuicRequiresTls,
+    #[error("TUIC cannot set both udp_relay_mode and udp_over_stream")]
+    ConflictingTuicUdpRelay,
+    #[error("SOCKS only supports the TCP transport")]
+    SocksRequiresTcpTransport,
+    #[error("SOCKS has no TLS layer")]
+    SocksRejectsTls,
+    #[error("SOCKS password requires a username")]
+    SocksPasswordRequiresUsername,
+    #[error("HTTP proxy only supports the TCP transport")]
+    HttpRequiresTcpTransport,
+    #[error("HTTP proxy does not support Reality")]
+    HttpRejectsReality,
+    #[error("HTTP proxy password requires a username")]
+    HttpPasswordRequiresUsername,
+    #[error("WireGuard carries its own tunnel and accepts no transport setting")]
+    WireGuardRejectsTransport,
+    #[error("WireGuard authenticates peers by key and accepts no TLS setting")]
+    WireGuardRejectsTls,
+    #[error("WireGuard private key is required")]
+    MissingWireGuardPrivateKey,
+    #[error("WireGuard peer public key is required")]
+    MissingWireGuardPeerPublicKey,
+    #[error("WireGuard requires at least one local address")]
+    MissingWireGuardLocalAddress,
+    #[error("AnyTLS carries its own session layer and accepts no transport setting")]
+    AnyTlsRejectsTransport,
+    #[error("AnyTLS requires TLS or Reality")]
+    AnyTlsRequiresTls,
+    #[error("AnyTLS password is required")]
+    MissingAnyTlsPassword,
+    #[error("Naive carries its own tunnel and accepts no transport setting")]
+    NaiveRejectsTransport,
+    #[error("Naive requires standard TLS")]
+    NaiveRequiresTls,
+    #[error("Naive does not support Reality")]
+    NaiveRejectsReality,
+    #[error("Naive TLS accepts only server_name")]
+    NaiveRejectsTlsExtras,
+    #[error("Naive password requires a username")]
+    NaivePasswordRequiresUsername,
+    #[error("custom Core JSON is required")]
+    MissingCustomDocument,
+    #[error("custom Core JSON is malformed: {message}")]
+    InvalidCustomDocument { message: String },
+    #[error("custom Core JSON must be a JSON object")]
+    InvalidCustomDocumentNotObject,
+    #[error("custom nodes carry a full Core document and accept no transport setting")]
+    CustomRejectsTransport,
+    #[error("custom nodes carry a full Core document and accept no TLS setting")]
+    CustomRejectsTls,
+    #[error("custom nodes carry a full Core document and accept no Xray finalmask override")]
+    CustomRejectsFinalmask,
+    #[error("Xray finalmask JSON is malformed: {message}")]
+    InvalidXrayFinalmaskJson { message: String },
+    #[error(transparent)]
+    InvalidXrayFinalmask(#[from] crate::xray_outbound::XrayFinalmaskError),
+}
+
+fn parse_xray_finalmask_json(
+    credential: &StoredNodeCredential,
+    json: Option<String>,
+) -> Result<Option<String>, ManualNodeDraftError> {
+    let Some(text) = json.map(|value| value.trim().to_owned()) else {
+        return Ok(None);
+    };
+    if text.is_empty() {
+        return Ok(None);
+    }
+    if matches!(credential, StoredNodeCredential::Custom(_)) {
+        return Err(ManualNodeDraftError::CustomRejectsFinalmask);
+    }
+    let value: Value = serde_json::from_str(&text).map_err(|source| {
+        ManualNodeDraftError::InvalidXrayFinalmaskJson {
+            message: source.to_string(),
+        }
+    })?;
+    normalize_xray_finalmask_tcp(&value)?;
+    Ok(Some(text))
 }
 
 const fn enabled_by_default() -> bool {

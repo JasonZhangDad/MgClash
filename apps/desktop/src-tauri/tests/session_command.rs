@@ -18,13 +18,16 @@ use magies_desktop_lib::routing_mode::SqliteRoutingModeStore;
 use magies_desktop_lib::session::{
     NodeMoveDirection, NodeStores, SessionCommandError, SessionDefaults, SessionService,
 };
-use magies_domain::{CoreType, CredentialRef, ProxyProtocol, Subscription, TimestampMillis};
+use magies_domain::{
+    CoreType, CredentialRef, ProxyProtocol, Subscription, TimestampMillis, TlsConfig,
+    TransportConfig,
+};
 use magies_platform::system_proxy::SystemProxyState;
 use magies_profiles::{
     CorePreference, CredentialCodec, LocalHttpProfile, LocalSocksProfile, ManualCredentialDraft,
-    ManualNodeDraft, ManualNodeStoreError, ShareLinkParser, SqliteManualNodeStore,
-    SqliteNodeGroupStore, SqliteNodeOrderStore, SqliteSubscriptionStore, SubscriptionContentParser,
-    SubscriptionUpdate, SubscriptionValidators,
+    ManualNodeDraft, ManualNodeStoreError, NodeOrderStoreError, ShareLinkParser,
+    SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore, SqliteSubscriptionStore,
+    SubscriptionContentParser, SubscriptionUpdate, SubscriptionValidators,
 };
 use magies_routing::RoutingMode;
 use magies_session::{
@@ -67,6 +70,34 @@ fn importing_a_share_link_stores_the_credential_and_selects_the_node() {
     assert_eq!(node.server, "edge.example.com");
     assert_eq!(node.port, 8388);
     assert!(!status.connected);
+}
+
+#[test]
+fn importing_a_socks_link_stores_the_credential_and_connects() {
+    let (mut service, _runtime, _fail_start) = service();
+
+    let status = service
+        .import_node("socks5://alice:runtime-secret@edge.example.com:1080#Proxy")
+        .unwrap();
+
+    let node = status.node.as_ref().unwrap();
+    assert_eq!(node.protocol, ProxyProtocol::Socks);
+    assert_eq!(node.port, 1080);
+    assert!(service.connect().unwrap().connected);
+}
+
+#[test]
+fn importing_an_https_proxy_link_stores_tls_and_connects() {
+    let (mut service, _runtime, _fail_start) = service();
+
+    let status = service
+        .import_node("https://alice:runtime-secret@edge.example.com#Proxy")
+        .unwrap();
+
+    let node = status.node.as_ref().unwrap();
+    assert_eq!(node.protocol, ProxyProtocol::Http);
+    assert_eq!(node.port, 443);
+    assert!(service.connect().unwrap().connected);
 }
 
 #[test]
@@ -227,18 +258,15 @@ fn importing_an_unreadable_list_is_a_typed_error() {
 }
 
 #[test]
-fn refuses_to_import_a_list_while_connected() {
+fn imports_a_list_while_connected_without_switching_the_running_node() {
     let (mut service, _runtime, _fail_start) = service();
-    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    let tokyo = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
     service.connect().unwrap();
 
-    assert_eq!(
-        service
-            .import_nodes(OSAKA_LINK.as_bytes())
-            .unwrap_err()
-            .code(),
-        "session_active"
-    );
+    let report = service.import_nodes(OSAKA_LINK.as_bytes()).unwrap();
+
+    assert_eq!(report.imported, 1);
+    assert_eq!(service.status().node.as_ref().unwrap().id, tokyo.id);
 }
 
 #[test]
@@ -321,6 +349,56 @@ fn a_hysteria2_node_reports_its_own_quic_transport() {
 }
 
 #[test]
+fn a_tuic_node_imports_and_reports_its_own_quic_transport() {
+    let (mut service, _runtime, _fail_start) = service();
+    service
+        .import_node(
+            "tuic://d1b93f4a-9a5b-4c1e-8a2b-6b6f0c9a1234:secret@edge.example.com:8443#Tokyo",
+        )
+        .unwrap();
+
+    let node = &service.nodes().unwrap()[0];
+
+    // The model stores no transport for TUIC because it carries its own QUIC transport.
+    assert_eq!(node.transport, "quic");
+    assert_eq!(node.tls, Some("tls"));
+}
+
+#[test]
+fn a_wireguard_node_imports_and_reports_its_own_tunnel() {
+    let (mut service, _runtime, _fail_start) = service();
+    service
+        .import_node(
+            "wireguard://cHJpdmF0ZS1rZXk=@edge.example.com:51820\
+             ?publickey=cGVlci1wdWJsaWMta2V5&address=10.0.0.2/32#Tokyo",
+        )
+        .unwrap();
+
+    let node = &service.nodes().unwrap()[0];
+
+    // The model stores no transport or TLS for WireGuard because it is its own
+    // tunnel, but the two protocols must not be confused in the UI.
+    assert_eq!(node.transport, "wireguard");
+    assert_eq!(node.tls, None);
+    assert_eq!(node.protocol, ProxyProtocol::WireGuard);
+}
+
+#[test]
+fn an_anytls_node_imports_and_reports_its_own_transport() {
+    let (mut service, _runtime, _fail_start) = service();
+    service
+        .import_node("anytls://hunter2@edge.example.com:443?sni=cdn.example.com#Tokyo")
+        .unwrap();
+
+    let node = &service.nodes().unwrap()[0];
+
+    assert_eq!(node.transport, "anytls");
+    assert_eq!(node.tls, Some("tls"));
+    assert_eq!(node.protocol, ProxyProtocol::AnyTls);
+    assert_eq!(service.selected_core(), Ok(CoreType::SingBox));
+}
+
+#[test]
 fn the_status_reports_sing_box_by_default() {
     let (mut service, _runtime, _fail_start) = service();
     assert_eq!(service.status().core, "sing-box");
@@ -370,6 +448,59 @@ fn auto_keeps_sing_box_for_a_hysteria2_node() {
     service.set_core_preference(CorePreference::Auto);
 
     assert_eq!(service.selected_core(), Ok(CoreType::SingBox));
+}
+
+#[test]
+fn choosing_xray_for_a_wireguard_node_reports_why_it_cannot_run() {
+    let (mut service, _runtime, _fail_start) = service();
+    service
+        .import_node(
+            "wireguard://cHJpdmF0ZS1rZXk=@edge.example.com:51820\
+             ?publickey=cGVlci1wdWJsaWMta2V5&address=10.0.0.2/32#Tokyo",
+        )
+        .unwrap();
+
+    service.set_core_preference(CorePreference::Fixed(CoreType::Xray));
+
+    let error = service.selected_core().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "the selected Core cannot run this node: xray does not support WireGuard"
+    );
+}
+
+#[test]
+fn auto_keeps_sing_box_for_a_wireguard_node() {
+    let (mut service, _runtime, _fail_start) = service();
+    service
+        .import_node(
+            "wireguard://cHJpdmF0ZS1rZXk=@edge.example.com:51820\
+             ?publickey=cGVlci1wdWJsaWMta2V5&address=10.0.0.2/32#Tokyo",
+        )
+        .unwrap();
+
+    service.set_core_preference(CorePreference::Auto);
+
+    assert_eq!(service.selected_core(), Ok(CoreType::SingBox));
+}
+
+#[test]
+fn auto_picks_xray_for_an_xhttp_node() {
+    let (mut service, _runtime, _fail_start) = service();
+    service
+        .import_node(
+            "vless://b0dd64e4-0fbd-4038-9139-d1f32a68a0dc@edge.example.com:443\
+             ?type=xhttp&path=%2Fxh&security=tls&sni=www.example.com#XHTTP",
+        )
+        .unwrap();
+    let id = service.nodes().unwrap()[0].id;
+    service.select_node(id).unwrap();
+
+    service.set_core_preference(CorePreference::Auto);
+
+    assert_eq!(service.nodes().unwrap()[0].transport, "xhttp");
+    assert_eq!(service.selected_core(), Ok(CoreType::Xray));
+    assert_eq!(service.status().core, "xray");
 }
 
 #[test]
@@ -516,6 +647,50 @@ fn edits_a_manual_node_while_preserving_its_protocol_and_credential() {
 }
 
 #[test]
+fn updates_a_manual_node_transport_tls_and_credential_in_place() {
+    let (mut service, _runtime, _fail_start) = service();
+    let original = service
+        .create_node(trojan_draft("Frankfurt", 8443))
+        .unwrap()
+        .node
+        .unwrap();
+
+    let mut draft = service.node_draft(original.id).unwrap();
+    draft.name = "Frankfurt TLS".to_owned();
+    draft.server = "edge.example.com".to_owned();
+    draft.port = 443;
+    draft.tls = Some(TlsConfig::Tls {
+        server_name: Some("edge.example.com".to_owned()),
+        allow_insecure: false,
+        alpn: vec!["h2".to_owned()],
+        fingerprint: None,
+        pinned_sha256: None,
+    });
+    draft.transport = Some(TransportConfig::WebSocket {
+        path: "/ws".to_owned(),
+        host: Some("edge.example.com".to_owned()),
+    });
+
+    let status = service.update_node(original.id, draft).unwrap();
+    let updated = status.node.unwrap();
+    assert_eq!(updated.id, original.id);
+    assert_eq!(updated.name, "Frankfurt TLS");
+    assert_eq!(updated.server, "edge.example.com");
+    assert_eq!(updated.port, 443);
+    assert_eq!(updated.transport, "ws");
+    assert_eq!(updated.tls, Some("tls"));
+    assert_eq!(updated.protocol, ProxyProtocol::Trojan);
+
+    let reloaded = service.node_draft(original.id).unwrap();
+    assert_eq!(reloaded.name, "Frankfurt TLS");
+    assert!(matches!(
+        reloaded.transport,
+        Some(TransportConfig::WebSocket { .. })
+    ));
+    assert!(matches!(reloaded.tls, Some(TlsConfig::Tls { .. })));
+}
+
+#[test]
 fn reorders_manual_and_subscription_nodes_together() {
     let (mut service, managed_id, _runtime) = service_with_subscription_node();
     let manual_id = service
@@ -554,6 +729,61 @@ fn reorders_manual_and_subscription_nodes_together() {
 }
 
 #[test]
+fn reorders_nodes_by_explicit_id_list() {
+    let (mut service, managed_id, _runtime) = service_with_subscription_node();
+    let manual_id = service
+        .import_node(SHADOWSOCKS_LINK)
+        .unwrap()
+        .node
+        .unwrap()
+        .id;
+    assert_eq!(
+        service
+            .nodes()
+            .unwrap()
+            .into_iter()
+            .map(|node| node.id)
+            .collect::<Vec<_>>(),
+        vec![manual_id, managed_id]
+    );
+
+    let reordered = service.reorder_nodes(&[managed_id, manual_id]).unwrap();
+    assert_eq!(
+        reordered
+            .into_iter()
+            .map(|node| node.id)
+            .collect::<Vec<_>>(),
+        vec![managed_id, manual_id]
+    );
+    assert_eq!(
+        service
+            .nodes()
+            .unwrap()
+            .into_iter()
+            .map(|node| node.id)
+            .collect::<Vec<_>>(),
+        vec![managed_id, manual_id]
+    );
+
+    let missing = Uuid::from_u128(999);
+    assert!(matches!(
+        service.reorder_nodes(&[managed_id, missing]),
+        Err(SessionCommandError::NodeStore(
+            ManualNodeStoreError::NodeNotFound { id }
+        )) if id == missing
+    ));
+    assert!(matches!(
+        service.reorder_nodes(&[managed_id]),
+        Err(SessionCommandError::NodeOrderStore(
+            NodeOrderStoreError::IncompleteReorder {
+                expected: 2,
+                actual: 1
+            }
+        ))
+    ));
+}
+
+#[test]
 fn groups_manual_and_subscription_nodes_with_shared_names() {
     let (mut service, managed_id, _runtime) = service_with_subscription_node();
     let manual_id = service
@@ -572,6 +802,18 @@ fn groups_manual_and_subscription_nodes_with_shared_names() {
         .unwrap();
     assert_eq!(service.status().node.unwrap().group_id, Some(group_id));
     assert_eq!(service.node_groups().unwrap()[0].name, "Work");
+    assert_eq!(
+        service.node_groups().unwrap()[0].strategy,
+        magies_profiles::NodeGroupStrategy::Select
+    );
+
+    let groups = service
+        .set_node_group_strategy(group_id, magies_profiles::NodeGroupStrategy::UrlTest)
+        .unwrap();
+    assert_eq!(
+        groups[0].strategy,
+        magies_profiles::NodeGroupStrategy::UrlTest
+    );
 
     let nodes = service.set_node_group(managed_id, Some("Work")).unwrap();
     assert!(nodes.iter().all(|node| node.group_id == Some(group_id)));
@@ -663,6 +905,25 @@ fn selects_and_deletes_nodes_while_disconnected() {
 }
 
 #[test]
+fn switches_nodes_while_connected_without_dropping_the_session() {
+    let (mut service, _runtime, _fail_start) = service();
+    let tokyo = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
+    let osaka = service
+        .import_node("ss://aes-128-gcm:runtime-secret@edge.example.com:9000#Osaka")
+        .unwrap()
+        .node
+        .unwrap();
+    service.select_node(tokyo.id).unwrap();
+    service.connect().unwrap();
+
+    let status = service.switch_node(osaka.id).unwrap();
+
+    assert!(status.connected);
+    assert_eq!(status.node.as_ref().unwrap().id, osaka.id);
+    assert_eq!(status.node.as_ref().unwrap().name, "Osaka");
+}
+
+#[test]
 fn selects_and_connects_a_read_only_subscription_node() {
     let (mut service, subscription_node_id, _runtime) = service_with_subscription_node();
 
@@ -731,7 +992,7 @@ fn synchronization_drops_a_subscription_node_that_was_disabled() {
 }
 
 #[test]
-fn refuses_to_change_nodes_while_connected() {
+fn refuses_to_touch_the_running_node_while_connected() {
     let (mut service, _runtime, _fail_start) = service();
     let node = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
     service.connect().unwrap();
@@ -745,16 +1006,76 @@ fn refuses_to_change_nodes_while_connected() {
         "session_active"
     );
     assert_eq!(
-        service.import_node(SHADOWSOCKS_LINK).unwrap_err().code(),
-        "session_active"
-    );
-    assert_eq!(
         service
-            .create_node(trojan_draft("Frankfurt", 8443))
+            .edit_node(node.id, "Renamed", "edge.example.com", 443)
             .unwrap_err()
             .code(),
         "session_active"
     );
+    assert_eq!(
+        service.set_node_enabled(node.id, false).unwrap_err().code(),
+        "session_active"
+    );
+}
+
+#[test]
+fn adds_nodes_while_connected_without_switching_the_running_one() {
+    let (mut service, _runtime, _fail_start) = service();
+    let tokyo = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
+    service.connect().unwrap();
+
+    let status = service
+        .import_node("ss://aes-128-gcm:runtime-secret@edge.example.com:9000#Osaka")
+        .unwrap();
+
+    assert!(status.connected);
+    assert_eq!(status.node.as_ref().unwrap().id, tokyo.id);
+
+    service
+        .create_node(trojan_draft("Frankfurt", 8443))
+        .unwrap();
+    service.clone_node(tokyo.id).unwrap();
+
+    assert_eq!(service.nodes().unwrap().len(), 4);
+    assert_eq!(service.status().node.as_ref().unwrap().id, tokyo.id);
+    assert!(service.status().connected);
+}
+
+#[test]
+fn imports_a_list_while_connected() {
+    let (mut service, _runtime, _fail_start) = service();
+    let tokyo = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
+    service.connect().unwrap();
+
+    let report = service
+        .import_nodes(b"ss://aes-128-gcm:runtime-secret@edge.example.com:9000#Osaka")
+        .unwrap();
+
+    assert_eq!(report.imported, 1);
+    assert_eq!(service.status().node.as_ref().unwrap().id, tokyo.id);
+}
+
+#[test]
+fn edits_and_deletes_other_nodes_while_connected() {
+    let (mut service, _runtime, _fail_start) = service();
+    let tokyo = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
+    let osaka = service
+        .import_node("ss://aes-128-gcm:runtime-secret@edge.example.com:9000#Osaka")
+        .unwrap()
+        .node
+        .unwrap();
+    service.select_node(tokyo.id).unwrap();
+    service.connect().unwrap();
+
+    service
+        .edit_node(osaka.id, "Osaka 2", "edge2.example.com", 9001)
+        .unwrap();
+    service.set_node_enabled(osaka.id, false).unwrap();
+    let status = service.delete_node(osaka.id).unwrap();
+
+    assert!(status.connected);
+    assert_eq!(status.node.as_ref().unwrap().id, tokyo.id);
+    assert_eq!(service.nodes().unwrap().len(), 1);
 }
 
 #[test]
@@ -772,15 +1093,51 @@ fn changes_the_route_while_disconnected_and_uses_it_for_the_next_connection() {
 }
 
 #[test]
-fn refuses_to_change_the_route_while_connected() {
+fn changes_local_ports_while_connected_by_restarting_the_core() {
     let (mut service, _runtime, _fail_start) = service();
     service.import_node(SHADOWSOCKS_LINK).unwrap();
     service.connect().unwrap();
 
-    let error = service.set_routing_mode(RoutingMode::Rule).unwrap_err();
+    let status = service
+        .restarting(|service| service.set_local_proxies(11_080, 11_081, 9_090))
+        .unwrap();
 
-    assert_eq!(error.code(), "session_active");
-    assert_eq!(service.status().mode, "global");
+    assert!(status.connected);
+    assert_eq!(status.socks_port, 11_080);
+    assert_eq!(status.http_port, 11_081);
+    assert_eq!(status.clash_api_port, 9_090);
+    let config: serde_json::Value =
+        serde_json::from_slice(&fs::read(service.runtime_config_path().unwrap()).unwrap()).unwrap();
+    assert_eq!(config["inbounds"][0]["listen_port"], 11_080);
+}
+
+#[test]
+fn rejects_duplicate_ports_while_connected_without_dropping_the_session() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    service.connect().unwrap();
+
+    let error = service
+        .check_local_proxies(11_080, 11_080, 9_090)
+        .unwrap_err();
+
+    assert_eq!(error.code(), "invalid_local_proxy_port");
+    assert!(service.status().connected);
+}
+
+#[test]
+fn changes_the_route_while_connected_by_restarting_the_core() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    service.connect().unwrap();
+
+    let status = service.set_routing_mode(RoutingMode::Direct).unwrap();
+
+    assert!(status.connected);
+    assert_eq!(status.mode, "direct");
+    let config: serde_json::Value =
+        serde_json::from_slice(&fs::read(service.runtime_config_path().unwrap()).unwrap()).unwrap();
+    assert_eq!(config["route"]["final"], "direct");
 }
 
 #[test]
@@ -795,6 +1152,7 @@ fn changes_route_rules_and_uses_them_for_the_next_connection() {
             outbound: DesktopRouteOutbound::Direct,
             enabled: true,
         }],
+        providers: Vec::new(),
         final_outbound: DesktopRouteOutbound::Proxy,
     };
 
@@ -830,18 +1188,51 @@ fn rejects_invalid_route_settings_without_changing_the_current_settings() {
 }
 
 #[test]
-fn refuses_to_change_route_settings_while_connected() {
+fn changes_route_settings_while_connected_by_restarting_the_core() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    service.set_routing_mode(RoutingMode::Rule).unwrap();
+    service.connect().unwrap();
+
+    let status = service
+        .set_route_settings(RouteSettings {
+            rules: vec![RouteRuleSetting {
+                kind: RouteRuleKind::DomainSuffix,
+                value: "cn".to_owned(),
+                outbound: DesktopRouteOutbound::Direct,
+                enabled: true,
+            }],
+            ..RouteSettings::default()
+        })
+        .unwrap();
+
+    assert!(status.connected);
+    assert_eq!(status.route.rules.len(), 1);
+    let config: serde_json::Value =
+        serde_json::from_slice(&fs::read(service.runtime_config_path().unwrap()).unwrap()).unwrap();
+    assert_eq!(config["route"]["rules"][1]["domain_suffix"][0], ".cn");
+}
+
+#[test]
+fn rejects_invalid_route_settings_while_connected_without_dropping_the_session() {
     let (mut service, _runtime, _fail_start) = service();
     service.import_node(SHADOWSOCKS_LINK).unwrap();
     service.connect().unwrap();
 
-    assert_eq!(
-        service
-            .set_route_settings(RouteSettings::default())
-            .unwrap_err()
-            .code(),
-        "session_active"
-    );
+    let error = service
+        .set_route_settings(RouteSettings {
+            rules: vec![RouteRuleSetting {
+                kind: RouteRuleKind::Port,
+                value: "zero".to_owned(),
+                outbound: DesktopRouteOutbound::Proxy,
+                enabled: true,
+            }],
+            ..RouteSettings::default()
+        })
+        .unwrap_err();
+
+    assert_eq!(error.code(), "invalid_route_settings");
+    assert!(service.status().connected);
 }
 
 #[test]
@@ -872,19 +1263,41 @@ fn changes_dns_while_disconnected_and_uses_it_for_the_next_connection() {
 }
 
 #[test]
-fn refuses_to_change_dns_while_connected() {
+fn changes_dns_while_connected_by_restarting_the_core() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    service.connect().unwrap();
+
+    let status = service
+        .set_dns_settings(DnsSettings {
+            mode: DnsMode::PlainTcp,
+            ..DnsSettings::default()
+        })
+        .unwrap();
+
+    assert!(status.connected);
+    assert_eq!(status.dns.mode, DnsMode::PlainTcp);
+    let config: serde_json::Value =
+        serde_json::from_slice(&fs::read(service.runtime_config_path().unwrap()).unwrap()).unwrap();
+    assert_eq!(config["dns"]["servers"][1]["type"], "tcp");
+}
+
+#[test]
+fn rejects_invalid_dns_while_connected_without_dropping_the_session() {
     let (mut service, _runtime, _fail_start) = service();
     service.import_node(SHADOWSOCKS_LINK).unwrap();
     service.connect().unwrap();
 
     let error = service
         .set_dns_settings(DnsSettings {
-            mode: DnsMode::PlainTcp,
+            mode: DnsMode::PlainUdp,
+            port: 0,
             ..DnsSettings::default()
         })
         .unwrap_err();
 
-    assert_eq!(error.code(), "session_active");
+    assert_eq!(error.code(), "invalid_dns_settings");
+    assert!(service.status().connected);
     assert_eq!(service.status().dns, DnsSettings::default());
 }
 
@@ -909,7 +1322,7 @@ fn rejects_an_unsupported_share_link_without_selecting_a_node() {
     let (mut service, _runtime, _fail_start) = service();
 
     assert!(matches!(
-        service.import_node("tuic://token@edge.example.com:443"),
+        service.import_node("ssr://token@edge.example.com:443"),
         Err(SessionCommandError::ShareLink(_))
     ));
     assert!(service.status().node.is_none());
@@ -1049,7 +1462,38 @@ fn trojan_draft(name: &str, port: u32) -> ManualNodeDraft {
         credential: ManualCredentialDraft::Trojan {
             password: "runtime-secret".to_owned(),
         },
+        xray_finalmask_json: None,
     }
+}
+
+#[test]
+fn creates_a_custom_node_and_selects_its_pinned_core() {
+    let (mut service, _runtime, _fail_start) = service();
+    let document = r#"{"inbounds":[],"outbounds":[{"type":"direct","tag":"direct"}]}"#;
+    let status = service
+        .create_node(ManualNodeDraft {
+            name: "Full JSON".to_owned(),
+            server: "ignored.example.com".to_owned(),
+            port: 8443,
+            udp_enabled: false,
+            transport: None,
+            tls: None,
+            credential: ManualCredentialDraft::Custom {
+                core: CoreType::Xray,
+                document: document.to_owned(),
+            },
+            xray_finalmask_json: None,
+        })
+        .unwrap();
+    let node = status.node.unwrap();
+    assert_eq!(node.protocol, ProxyProtocol::Custom);
+    assert_eq!(node.server, "127.0.0.1");
+    assert_eq!(node.port, 443);
+    assert_eq!(node.transport, "custom");
+    assert_eq!(service.selected_core(), Ok(CoreType::Xray));
+
+    service.set_core_preference(CorePreference::Fixed(CoreType::SingBox));
+    assert!(service.selected_core().is_err());
 }
 
 fn service_with_events(
@@ -1250,7 +1694,7 @@ fn every_session_failure_carries_a_stable_code_for_the_ui() {
     assert_eq!(service.connect().unwrap_err().code(), "no_selected_node");
     assert_eq!(
         service
-            .import_node("tuic://token@edge.example.com")
+            .import_node("ssr://token@edge.example.com")
             .unwrap_err()
             .code(),
         "invalid_share_link"
@@ -1606,4 +2050,148 @@ fn drawing_a_code_for_an_unknown_node_is_a_typed_not_found() {
             ManualNodeStoreError::NodeNotFound { .. }
         ))
     ));
+}
+
+#[test]
+fn exports_the_node_half_of_a_profile_and_imports_it_into_a_fresh_store() {
+    let (mut source, _runtime, _fail_start) = service();
+    let tokyo = source.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
+    source.create_node(trojan_draft("Frankfurt", 8443)).unwrap();
+    source.select_node(tokyo.id).unwrap();
+
+    let exported = source.export_profile_nodes().unwrap();
+
+    let (mut target, _target_runtime, _target_fail) = service();
+    let status = target.import_profile_nodes(exported).unwrap();
+
+    let names: Vec<_> = target
+        .nodes()
+        .unwrap()
+        .into_iter()
+        .map(|node| node.name)
+        .collect();
+    assert!(names.contains(&"Tokyo Edge".to_owned()));
+    assert!(names.contains(&"Frankfurt".to_owned()));
+    // The selection travels with the nodes so the restored profile connects to
+    // the same server.
+    assert_eq!(status.node.as_ref().unwrap().name, "Tokyo Edge");
+}
+
+#[test]
+fn refuses_to_import_a_profile_while_connected() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    let exported = service.export_profile_nodes().unwrap();
+    service.connect().unwrap();
+
+    assert_eq!(
+        service.import_profile_nodes(exported).unwrap_err().code(),
+        "session_active"
+    );
+}
+
+#[test]
+fn creates_selects_and_deletes_routing_schemes() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+
+    let status = service.create_route_scheme("Work").unwrap();
+    assert_eq!(status.route_schemes.len(), 2);
+    let work = status
+        .route_schemes
+        .iter()
+        .find(|scheme| scheme.name == "Work")
+        .expect("the new scheme is listed")
+        .id
+        .clone();
+
+    let status = service.set_route_scheme(&work).unwrap();
+    assert_eq!(status.route_scheme_id, work);
+
+    // Each scheme keeps its own rules.
+    service
+        .set_route_settings(RouteSettings {
+            rules: vec![RouteRuleSetting {
+                kind: RouteRuleKind::DomainSuffix,
+                value: "work.example".to_owned(),
+                outbound: DesktopRouteOutbound::Direct,
+                enabled: true,
+            }],
+            providers: Vec::new(),
+            final_outbound: DesktopRouteOutbound::Proxy,
+        })
+        .unwrap();
+    assert_eq!(service.status().route.rules.len(), 1);
+
+    let status = service.delete_route_scheme(&work).unwrap();
+    assert_eq!(status.route_schemes.len(), 1);
+    assert!(status.route.rules.is_empty());
+}
+
+#[test]
+fn refuses_to_delete_the_last_routing_scheme() {
+    let (mut service, _runtime, _fail_start) = service();
+    let scheme_id = service.status().route_scheme_id;
+
+    assert!(service.delete_route_scheme(&scheme_id).is_err());
+    assert!(service.set_route_scheme("no-such-scheme").is_err());
+}
+
+#[test]
+fn a_group_strategy_turns_the_group_into_a_core_outbound() {
+    let (mut service, _runtime, _fail_start) = service();
+    let tokyo = service.import_node(SHADOWSOCKS_LINK).unwrap().node.unwrap();
+    let osaka = service
+        .import_node("ss://aes-128-gcm:runtime-secret@edge.example.com:9000#Osaka")
+        .unwrap()
+        .node
+        .unwrap();
+    service.set_node_group(tokyo.id, Some("Work")).unwrap();
+    service.set_node_group(osaka.id, Some("Work")).unwrap();
+    let group_id = service.node_groups().unwrap()[0].id;
+    service
+        .set_node_group_strategy(group_id, magies_profiles::NodeGroupStrategy::UrlTest)
+        .unwrap();
+    service.select_node(tokyo.id).unwrap();
+
+    service.connect().unwrap();
+
+    let config: serde_json::Value =
+        serde_json::from_slice(&fs::read(service.runtime_config_path().unwrap()).unwrap()).unwrap();
+    let outbounds = config["outbounds"].as_array().unwrap();
+    let group = outbounds
+        .iter()
+        .find(|outbound| outbound["type"] == "urltest")
+        .expect("the group becomes a urltest outbound");
+    assert_eq!(group["outbounds"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn the_startup_only_switches_reach_the_generated_config() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    service.set_allow_lan(true);
+    service.set_inbound_udp_enabled(false);
+    service.set_mux_enabled(true);
+    service.set_url_test_address("https://probe.example.com".to_owned());
+
+    service.connect().unwrap();
+
+    let config: serde_json::Value =
+        serde_json::from_slice(&fs::read(service.runtime_config_path().unwrap()).unwrap()).unwrap();
+    let inbounds = config["inbounds"].as_array().unwrap();
+    // Allowing LAN peers is the difference between a loopback and a wildcard
+    // listener, which is the part a user can get wrong from the window.
+    assert!(
+        inbounds
+            .iter()
+            .all(|inbound| inbound["listen"] == "0.0.0.0")
+    );
+    let proxy = config["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert_eq!(proxy["multiplex"]["enabled"], true);
 }

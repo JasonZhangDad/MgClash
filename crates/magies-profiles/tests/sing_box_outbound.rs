@@ -2,8 +2,9 @@ use magies_domain::{
     CertificatePin, CredentialRef, GrpcMode, ProxyNode, ProxyProtocol, TlsConfig, TransportConfig,
 };
 use magies_profiles::{
-    Hysteria2Parser, NodeCredential, OutboundConfigError, ShadowsocksParser,
-    SingBoxOutboundConfigGenerator, TrojanParser, VlessParser, VmessParser,
+    AnyTlsParser, HttpProxyParser, Hysteria2Parser, NaiveParser, NodeCredential,
+    OutboundConfigError, ShadowsocksParser, SingBoxOutboundConfigGenerator, SocksParser,
+    TrojanParser, VlessParser, VmessParser,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -49,6 +50,80 @@ fn generates_vless_websocket_tls_and_tcp_only_network() {
                 "headers": { "Host": "cdn.example.com" }
             }
         })
+    );
+}
+
+#[test]
+fn generates_vless_httpupgrade() {
+    let parsed = VlessParser
+        .parse(&format!(
+            "vless://{USER_ID}@edge.example.com:443?type=httpupgrade\
+             &path=%2Fupgrade&host=cdn.example.com&security=tls&sni=www.example.com"
+        ))
+        .unwrap();
+    let mut node = node(ProxyProtocol::Vless);
+    node.transport = Some(parsed.transport().clone());
+    node.tls = parsed.tls().cloned();
+
+    let outbound =
+        SingBoxOutboundConfigGenerator::generate(&node, NodeCredential::from(parsed.credential()))
+            .unwrap();
+
+    assert_eq!(
+        outbound.json()["transport"],
+        json!({
+            "type": "httpupgrade",
+            "path": "/upgrade",
+            "host": "cdn.example.com"
+        })
+    );
+}
+
+#[test]
+fn refuses_xhttp_because_the_pinned_sing_box_has_none() {
+    use magies_domain::XhttpMode;
+
+    let parsed = VlessParser
+        .parse(&format!(
+            "vless://{USER_ID}@edge.example.com:443?type=tcp&security=tls&sni=www.example.com"
+        ))
+        .unwrap();
+    let mut node = node(ProxyProtocol::Vless);
+    node.transport = Some(TransportConfig::XHttp {
+        path: "/xh".to_owned(),
+        host: None,
+        mode: XhttpMode::Auto,
+    });
+    node.tls = parsed.tls().cloned();
+
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(&node, NodeCredential::from(parsed.credential())),
+        Err(OutboundConfigError::XhttpUnsupported)
+    );
+}
+
+#[test]
+fn refuses_kcp_because_the_pinned_sing_box_has_none() {
+    let parsed = VlessParser
+        .parse(&format!(
+            "vless://{USER_ID}@edge.example.com:443?type=tcp&security=tls&sni=www.example.com"
+        ))
+        .unwrap();
+    let mut node = node(ProxyProtocol::Vless);
+    node.transport = Some(TransportConfig::Kcp {
+        mtu: None,
+        tti: None,
+        uplink_capacity: None,
+        downlink_capacity: None,
+        congestion: false,
+        header_type: None,
+        seed: None,
+    });
+    node.tls = parsed.tls().cloned();
+
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(&node, NodeCredential::from(parsed.credential())),
+        Err(OutboundConfigError::KcpUnsupported)
     );
 }
 
@@ -171,6 +246,294 @@ fn generates_trojan_shadowsocks_and_hysteria2_outbounds() {
                 "alpn": ["h3"],
                 "utls": { "enabled": true, "fingerprint": "chrome" }
             }
+        })
+    );
+}
+
+#[test]
+fn generates_anytls_tls_and_reality_outbounds() {
+    let anytls = AnyTlsParser
+        .parse("anytls://anytls-secret@edge.example.com:443?sni=cdn.example.com&insecure=1")
+        .unwrap();
+    let mut anytls_node = node(ProxyProtocol::AnyTls);
+    anytls_node.transport = None;
+    anytls_node.tls = anytls.tls().cloned();
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &anytls_node,
+            NodeCredential::from(anytls.credential())
+        )
+        .unwrap()
+        .json(),
+        &json!({
+            "type": "anytls",
+            "tag": "proxy",
+            "server": "edge.example.com",
+            "server_port": 443,
+            "password": "anytls-secret",
+            "tls": {
+                "enabled": true,
+                "server_name": "cdn.example.com",
+                "insecure": true
+            }
+        })
+    );
+
+    let anytls_reality = AnyTlsParser
+        .parse(
+            "anytls://anytls-secret@edge.example.com:443?security=reality\
+             &sni=www.example.com&pbk=example-public-key&sid=abcd&fp=chrome",
+        )
+        .unwrap();
+    let mut reality_node = node(ProxyProtocol::AnyTls);
+    reality_node.transport = None;
+    reality_node.tls = anytls_reality.tls().cloned();
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &reality_node,
+            NodeCredential::from(anytls_reality.credential())
+        )
+        .unwrap()
+        .json(),
+        &json!({
+            "type": "anytls",
+            "tag": "proxy",
+            "server": "edge.example.com",
+            "server_port": 443,
+            "password": "anytls-secret",
+            "tls": {
+                "enabled": true,
+                "server_name": "www.example.com",
+                "utls": { "enabled": true, "fingerprint": "chrome" },
+                "reality": {
+                    "enabled": true,
+                    "public_key": "example-public-key",
+                    "short_id": "abcd"
+                }
+            }
+        })
+    );
+}
+
+#[test]
+fn rejects_an_anytls_node_missing_tls_or_carrying_a_transport() {
+    let anytls = AnyTlsParser
+        .parse("anytls://anytls-secret@edge.example.com:443")
+        .unwrap();
+    let mut missing_tls = node(ProxyProtocol::AnyTls);
+    missing_tls.transport = None;
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &missing_tls,
+            NodeCredential::from(anytls.credential())
+        ),
+        Err(OutboundConfigError::MissingTls {
+            protocol: ProxyProtocol::AnyTls
+        })
+    );
+
+    let mut transported = node(ProxyProtocol::AnyTls);
+    transported.transport = Some(TransportConfig::Tcp);
+    transported.tls = anytls.tls().cloned();
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &transported,
+            NodeCredential::from(anytls.credential())
+        ),
+        Err(OutboundConfigError::UnsupportedTransport {
+            protocol: ProxyProtocol::AnyTls
+        })
+    );
+}
+
+#[test]
+fn generates_a_naive_outbound_with_sni_only_tls() {
+    let naive = NaiveParser
+        .parse(
+            "naive+quic://alice:secret@edge.example.com:443?\
+             sni=cdn.example.com&congestion_control=reno",
+        )
+        .unwrap();
+    let mut naive_node = node(ProxyProtocol::Naive);
+    naive_node.transport = None;
+    naive_node.tls = naive.tls().cloned();
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &naive_node,
+            NodeCredential::from(naive.credential())
+        )
+        .unwrap()
+        .json(),
+        &json!({
+            "type": "naive",
+            "tag": "proxy",
+            "server": "edge.example.com",
+            "server_port": 443,
+            "username": "alice",
+            "password": "secret",
+            "quic": true,
+            "quic_congestion_control": "reno",
+            "tls": {
+                "enabled": true,
+                "server_name": "cdn.example.com"
+            }
+        })
+    );
+}
+
+#[test]
+fn rejects_naive_tls_extras_and_transport() {
+    let naive = NaiveParser.parse("naive://edge.example.com").unwrap();
+    let mut extras = node(ProxyProtocol::Naive);
+    extras.transport = None;
+    extras.tls = Some(TlsConfig::Tls {
+        server_name: None,
+        allow_insecure: true,
+        alpn: Vec::new(),
+        fingerprint: None,
+        pinned_sha256: None,
+    });
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(&extras, NodeCredential::from(naive.credential())),
+        Err(OutboundConfigError::UnsupportedTls {
+            protocol: ProxyProtocol::Naive
+        })
+    );
+
+    let mut transported = node(ProxyProtocol::Naive);
+    transported.transport = Some(TransportConfig::Tcp);
+    transported.tls = naive.tls().cloned();
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &transported,
+            NodeCredential::from(naive.credential())
+        ),
+        Err(OutboundConfigError::UnsupportedTransport {
+            protocol: ProxyProtocol::Naive
+        })
+    );
+}
+
+#[test]
+fn generates_socks_and_http_outbounds() {
+    let socks = SocksParser
+        .parse("socks5://alice:hunter2@edge.example.com:1080")
+        .unwrap();
+    let mut socks_node = node(ProxyProtocol::Socks);
+    socks_node.transport = Some(TransportConfig::Tcp);
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &socks_node,
+            NodeCredential::from(socks.credential())
+        )
+        .unwrap()
+        .json(),
+        &json!({
+            "type": "socks",
+            "tag": "proxy",
+            "server": "edge.example.com",
+            "server_port": 443,
+            "version": "5",
+            "username": "alice",
+            "password": "hunter2"
+        })
+    );
+
+    let socks_anonymous = SocksParser.parse("socks://edge.example.com:1080").unwrap();
+    let mut socks_anonymous_node = node(ProxyProtocol::Socks);
+    socks_anonymous_node.transport = Some(TransportConfig::Tcp);
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &socks_anonymous_node,
+            NodeCredential::from(socks_anonymous.credential())
+        )
+        .unwrap()
+        .json(),
+        &json!({
+            "type": "socks",
+            "tag": "proxy",
+            "server": "edge.example.com",
+            "server_port": 443,
+            "version": "5"
+        })
+    );
+
+    let http_plain = HttpProxyParser
+        .parse("http://alice:hunter2@edge.example.com:8080")
+        .unwrap();
+    let mut http_node = node(ProxyProtocol::Http);
+    http_node.transport = Some(TransportConfig::Tcp);
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &http_node,
+            NodeCredential::from(http_plain.credential())
+        )
+        .unwrap()
+        .json(),
+        &json!({
+            "type": "http",
+            "tag": "proxy",
+            "server": "edge.example.com",
+            "server_port": 443,
+            "username": "alice",
+            "password": "hunter2"
+        })
+    );
+
+    let https = HttpProxyParser.parse("https://edge.example.com").unwrap();
+    let mut tls_http_node = node(ProxyProtocol::Http);
+    tls_http_node.transport = Some(TransportConfig::Tcp);
+    tls_http_node.tls = https.tls().cloned();
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &tls_http_node,
+            NodeCredential::from(https.credential())
+        )
+        .unwrap()
+        .json(),
+        &json!({
+            "type": "http",
+            "tag": "proxy",
+            "server": "edge.example.com",
+            "server_port": 443,
+            "tls": {
+                "enabled": true,
+                "server_name": "edge.example.com"
+            }
+        })
+    );
+}
+
+#[test]
+fn rejects_socks_tls_and_missing_transport() {
+    let socks = SocksParser.parse("socks://edge.example.com:1080").unwrap();
+    let mut tls_socks = node(ProxyProtocol::Socks);
+    tls_socks.transport = Some(TransportConfig::Tcp);
+    tls_socks.tls = Some(TlsConfig::Tls {
+        server_name: None,
+        allow_insecure: false,
+        alpn: Vec::new(),
+        fingerprint: None,
+        pinned_sha256: None,
+    });
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &tls_socks,
+            NodeCredential::from(socks.credential())
+        ),
+        Err(OutboundConfigError::UnsupportedTls {
+            protocol: ProxyProtocol::Socks
+        })
+    );
+
+    let missing_transport = node(ProxyProtocol::Socks);
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(
+            &missing_transport,
+            NodeCredential::from(socks.credential())
+        ),
+        Err(OutboundConfigError::MissingTransport {
+            protocol: ProxyProtocol::Socks
         })
     );
 }

@@ -1,14 +1,18 @@
 //! Node import and profile services for `MgClash`.
 
+mod anytls;
 mod bulk_import;
 mod core_capability;
 mod credential_codec;
+mod custom;
 mod diagnostics;
 mod dns_config;
+mod http_proxy;
 mod hysteria2;
 mod local_proxy_config;
 mod manual_node_draft;
 mod manual_node_store;
+mod naive;
 mod node_dedup;
 mod node_group_store;
 mod node_list_text;
@@ -19,18 +23,23 @@ mod share_link_qr;
 mod share_link_serializer;
 mod sing_box_outbound;
 mod sing_box_runtime_config;
+mod socks;
 mod subscription;
 mod subscription_content;
 mod subscription_management;
 mod subscription_service;
 mod subscription_transaction;
+mod subscription_url;
 mod trojan;
+mod tuic;
 mod tun_config;
 mod vmess;
+mod wireguard;
 mod xray_dns_config;
 mod xray_outbound;
 mod xray_runtime_config;
 
+pub use anytls::{AnyTlsCredential, AnyTlsParseError, AnyTlsParser, ParsedAnyTlsNode};
 pub use bulk_import::{
     BulkImportError, BulkImportFailure, BulkImportLineError, BulkImportOutcome,
     BulkNodeImportParser, ParsedBulkNode, node_fingerprint,
@@ -40,11 +49,13 @@ pub use core_capability::{
     CoreSelectionError, architecture_name, core_name, parse_core_name, protocol_name,
 };
 pub use credential_codec::{CredentialCodec, CredentialCodecError, StoredNodeCredential};
+pub use custom::CustomCredential;
 pub use diagnostics::{DiagnosticRedactor, REDACTED};
 pub use dns_config::{
     DnsConfigError, DnsProfile, DnsRule, DnsServer, DnsStrategy, GeneratedDnsConfig,
     PlainDnsTransport, SingBoxDnsConfigGenerator,
 };
+pub use http_proxy::{HttpCredential, HttpProxyParseError, HttpProxyParser, ParsedHttpProxyNode};
 pub use hysteria2::{
     Hysteria2Credential, Hysteria2Obfuscation, Hysteria2ObfuscationMethod, Hysteria2ParseError,
     Hysteria2Parser, ParsedHysteria2Node,
@@ -57,11 +68,16 @@ pub use manual_node_draft::{
     ManualCredentialDraft, ManualNodeDraft, ManualNodeDraftError, ManualObfuscationDraft,
 };
 pub use manual_node_store::{ManualNodeStoreError, SqliteManualNodeStore};
+pub use naive::{
+    NaiveCongestionControl, NaiveCredential, NaiveParseError, NaiveParser, ParsedNaiveNode,
+};
 pub use node_dedup::{
     CredentialIdentity, NodeDedupCandidate, NodeDedupResult, NodeDedupSummary, NodeDeduplicator,
     NodeFingerprint,
 };
-pub use node_group_store::{NodeGroup, NodeGroupStoreError, SqliteNodeGroupStore};
+pub use node_group_store::{
+    NodeGroup, NodeGroupSnapshot, NodeGroupStoreError, NodeGroupStrategy, SqliteNodeGroupStore,
+};
 pub use node_order_store::{NodeOrderStoreError, SqliteNodeOrderStore};
 pub use shadowsocks::{
     ParsedShadowsocksNode, ShadowsocksCredential, ShadowsocksParseError, ShadowsocksParser,
@@ -73,10 +89,12 @@ pub use share_link_qr::{
 pub use share_link_serializer::{ShareLinkSerializer, ShareLinkSerializerError};
 pub use sing_box_outbound::{
     GeneratedSingBoxOutbound, NodeCredential, OutboundConfigError, SingBoxOutboundConfigGenerator,
+    apply_sing_box_fragment, apply_sing_box_multiplex, node_outbound_tag,
 };
 pub use sing_box_runtime_config::{
     RuntimeConfigError, SingBoxRuntimeConfigGenerator, SingBoxRuntimeProfile,
 };
+pub use socks::{ParsedSocksNode, SocksCredential, SocksParseError, SocksParser};
 pub use subscription::{
     SubscriptionFetchError, SubscriptionFetchOptions, SubscriptionFetchResult, SubscriptionFetcher,
     SubscriptionValidators, ensure_rustls_crypto_provider,
@@ -96,11 +114,27 @@ pub use subscription_transaction::{
     DeletedSubscription, SqliteSubscriptionStore, SubscriptionCommit, SubscriptionState,
     SubscriptionTransactionError, SubscriptionUpdate,
 };
+pub use subscription_url::{
+    SubscriptionUrlError, effective_fetch_urls, split_subscription_urls, validated_url_secret,
+    wrap_subconverter,
+};
 pub use trojan::{ParsedTrojanNode, TrojanCredential, TrojanParseError, TrojanParser};
+pub use tuic::{
+    ParsedTuicNode, TuicCongestionControl, TuicCredential, TuicParseError, TuicParser,
+    TuicUdpRelayMode,
+};
 pub use tun_config::{SingBoxTunConfigGenerator, TunProfile, TunProfileError, TunRouteSettings};
 pub use vmess::{ParsedVmessNode, VmessCredential, VmessParseError, VmessParser, VmessSecurity};
+pub use wireguard::{
+    ParsedWireGuardNode, WireGuardCredential, WireGuardParseError, WireGuardParser,
+};
 pub use xray_dns_config::{FAKE_DNS_SERVER, XrayDnsConfigGenerator};
-pub use xray_outbound::{GeneratedXrayOutbound, XrayOutboundConfigGenerator, XrayOutboundError};
+pub use xray_outbound::{
+    FRAGMENT_OUTBOUND_TAG, GeneratedXrayOutbound, XrayFinalmaskError, XrayOutboundConfigGenerator,
+    XrayOutboundError, apply_xray_final_fragment, apply_xray_fragment, apply_xray_mux,
+    normalize_xray_finalmask_tcp, xray_finalmask_fragment_mask, xray_fragment_outbound,
+    xray_fragment_outbound_with_options,
+};
 pub use xray_runtime_config::{
     XrayRuntimeConfigError, XrayRuntimeConfigGenerator, XrayRuntimeProfile,
 };
@@ -110,8 +144,8 @@ use std::fmt::{Debug, Formatter};
 use std::num::NonZeroU16;
 
 use magies_domain::{
-    CredentialRef, GrpcMode, NodeModelError, NodeName, ProxyNode, ProxyProtocol, ServerAddress,
-    TlsConfig, TransportConfig,
+    CertificatePin, CredentialRef, GrpcMode, NodeModelError, NodeName, ProxyNode, ProxyProtocol,
+    ServerAddress, TlsConfig, TransportConfig, XhttpMode,
 };
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
@@ -334,8 +368,18 @@ pub enum VlessParseError {
     UnsupportedSecurity { value: String },
     #[error("unsupported VLESS gRPC mode: {value}")]
     UnsupportedGrpcMode { value: String },
+    #[error("unsupported VLESS XHTTP mode: {value}")]
+    UnsupportedXhttpMode { value: String },
+    #[error("unsupported VLESS KCP header type: {value}")]
+    UnsupportedKcpHeaderType { value: String },
+    #[error("VLESS KCP parameter {name} must be an unsigned integer, got {value}")]
+    InvalidKcpParameter { name: &'static str, value: String },
     #[error("invalid VLESS ALPN list")]
     InvalidAlpn,
+    #[error("invalid VLESS certificate pin: {value}")]
+    InvalidCertificatePin { value: String },
+    #[error("VLESS URI carries disagreeing certificate pins")]
+    ConflictingCertificatePins,
     #[error("unsupported VLESS parameter: {name}")]
     UnsupportedParameter { name: String },
     #[error("invalid parsed VLESS node")]
@@ -408,6 +452,19 @@ fn parse_port(url: &Url) -> Result<NonZeroU16, VlessParseError> {
     NonZeroU16::new(port).ok_or(VlessParseError::InvalidPort { port })
 }
 
+/// Reads the URI port, falling back to `default` when the link omits it.
+///
+/// `Url::port_or_known_default` already resolves `http`/`https` to 80/443;
+/// `socks`/`socks5`/`socks5h` are not URL-crate "special" schemes, so their
+/// default of 1080 is supplied by the caller instead.
+pub(crate) fn parse_port_with_default(
+    url: &Url,
+    default: u16,
+) -> Result<NonZeroU16, VlessParseError> {
+    let port = url.port_or_known_default().unwrap_or(default);
+    NonZeroU16::new(port).ok_or(VlessParseError::InvalidPort { port })
+}
+
 fn parse_transport(parameters: &mut QueryParameters) -> Result<TransportConfig, VlessParseError> {
     let transport = parameters
         .take_non_empty("type")?
@@ -419,6 +476,22 @@ fn parse_transport(parameters: &mut QueryParameters) -> Result<TransportConfig, 
                 .take_non_empty("path")?
                 .unwrap_or_else(|| "/".to_owned()),
             host: parameters.take("host"),
+        }),
+        "httpupgrade" => Ok(TransportConfig::HttpUpgrade {
+            path: parameters
+                .take_non_empty("path")?
+                .unwrap_or_else(|| "/".to_owned()),
+            host: parameters.take("host"),
+        }),
+        // `splithttp` is Xray's earlier name for the same transport; XHTTP
+        // superseded it but share links from both eras must still parse.
+        "xhttp" | "splithttp" => Ok(TransportConfig::XHttp {
+            path: parameters
+                .take_non_empty("path")?
+                .unwrap_or_else(|| "/".to_owned()),
+            host: parameters.take("host"),
+            mode: parse_xhttp_mode(parameters.take_non_empty("mode")?.as_deref())
+                .map_err(|value| VlessParseError::UnsupportedXhttpMode { value })?,
         }),
         "grpc" => {
             let service_name = parameters.take_required_non_empty("serviceName")?;
@@ -442,9 +515,95 @@ fn parse_transport(parameters: &mut QueryParameters) -> Result<TransportConfig, 
                 authority: parameters.take("authority"),
             })
         }
+        // `mkcp` is the name Xray's own docs use for the same transport;
+        // share links from either spelling must still parse.
+        "kcp" | "mkcp" => parse_kcp_settings(parameters),
         value => Err(VlessParseError::UnsupportedTransport {
             value: value.to_owned(),
         }),
+    }
+}
+
+/// Parses the mKCP query parameters shared by every sharing-URI parser that
+/// offers the transport (`mtu`, `tti`, `uplinkCapacity`, `downlinkCapacity`,
+/// `congestion`, `headerType`, `seed`).
+pub(crate) fn parse_kcp_settings(
+    parameters: &mut QueryParameters,
+) -> Result<TransportConfig, VlessParseError> {
+    let mtu = parse_optional_u32(parameters, "mtu")?;
+    let tti = parse_optional_u32(parameters, "tti")?;
+    let uplink_capacity = parse_optional_u32(parameters, "uplinkCapacity")?;
+    let downlink_capacity = parse_optional_u32(parameters, "downlinkCapacity")?;
+    let congestion = match parameters.take_non_empty("congestion")?.as_deref() {
+        None | Some("0") => false,
+        Some("1") => true,
+        Some(value) => {
+            return Err(VlessParseError::InvalidKcpParameter {
+                name: "congestion",
+                value: value.to_owned(),
+            });
+        }
+    };
+    let header_type = match parameters.take_non_empty("headerType")? {
+        None => None,
+        Some(value) => Some(validate_kcp_header_type(value)?),
+    };
+    let seed = parameters.take_non_empty("seed")?;
+    Ok(TransportConfig::Kcp {
+        mtu,
+        tti,
+        uplink_capacity,
+        downlink_capacity,
+        congestion,
+        header_type,
+        seed,
+    })
+}
+
+fn parse_optional_u32(
+    parameters: &mut QueryParameters,
+    name: &'static str,
+) -> Result<Option<u32>, VlessParseError> {
+    let Some(value) = parameters.take_non_empty(name)? else {
+        return Ok(None);
+    };
+    value
+        .parse()
+        .map(Some)
+        .map_err(|_| VlessParseError::InvalidKcpParameter { name, value })
+}
+
+/// Validates a KCP obfuscation header type against Xray's known set.
+pub(crate) fn validate_kcp_header_type(value: String) -> Result<String, VlessParseError> {
+    match value.as_str() {
+        "none" | "srtp" | "utp" | "wechat-video" | "dtls" | "wireguard" => Ok(value),
+        _ => Err(VlessParseError::UnsupportedKcpHeaderType { value }),
+    }
+}
+
+/// Parses the XHTTP `mode` query parameter, shared by every sharing-URI
+/// parser that offers the transport.
+///
+/// Returns the raw value as the error payload so each caller can wrap it in
+/// its own typed error variant.
+pub(crate) fn parse_xhttp_mode(value: Option<&str>) -> Result<XhttpMode, String> {
+    match value.unwrap_or("auto") {
+        "auto" => Ok(XhttpMode::Auto),
+        "packet-up" => Ok(XhttpMode::PacketUp),
+        "stream-up" => Ok(XhttpMode::StreamUp),
+        "stream-one" => Ok(XhttpMode::StreamOne),
+        value => Err(value.to_owned()),
+    }
+}
+
+/// The stable spelling Xray and share links use for [`XhttpMode`].
+#[must_use]
+pub(crate) const fn xhttp_mode_name(mode: XhttpMode) -> &'static str {
+    match mode {
+        XhttpMode::Auto => "auto",
+        XhttpMode::PacketUp => "packet-up",
+        XhttpMode::StreamUp => "stream-up",
+        XhttpMode::StreamOne => "stream-one",
     }
 }
 
@@ -470,7 +629,7 @@ fn parse_tls_with_default(
             allow_insecure: false,
             alpn: parse_alpn(parameters)?,
             fingerprint: parameters.take_non_empty("fp")?,
-            pinned_sha256: None,
+            pinned_sha256: parse_tls_certificate_pin(parameters)?,
         })),
         "reality" => {
             let public_key = parameters.take_required_non_empty("pbk")?;
@@ -490,6 +649,28 @@ fn parse_tls_with_default(
             value: value.to_owned(),
         }),
     }
+}
+
+/// Reads the digest from either spelling of the pin parameter.
+///
+/// `pinSHA256` is the Hysteria2/Xray spelling; `pcs` is the abbreviation v2rayN
+/// writes. A link carrying both must agree, because keeping one and discarding
+/// the other would pin against a digest the user did not choose.
+fn parse_tls_certificate_pin(
+    parameters: &mut QueryParameters,
+) -> Result<Option<CertificatePin>, VlessParseError> {
+    let mut pin = None;
+    for name in ["pinSHA256", "pcs"] {
+        let Some(value) = parameters.take(name) else {
+            continue;
+        };
+        let parsed = CertificatePin::new(&value)
+            .map_err(|_| VlessParseError::InvalidCertificatePin { value })?;
+        if pin.get_or_insert(parsed.clone()) != &parsed {
+            return Err(VlessParseError::ConflictingCertificatePins);
+        }
+    }
+    Ok(pin)
 }
 
 fn parse_alpn(parameters: &mut QueryParameters) -> Result<Vec<String>, VlessParseError> {

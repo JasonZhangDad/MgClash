@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use magies_desktop_lib::route_settings::{
     DesktopRouteOutbound, RouteRuleKind, RouteRuleSetting, RouteSettings, RouteSettingsStoreError,
-    SqliteRouteSettingsStore,
+    RuleProviderFormatSetting, RuleProviderSetting, SqliteRouteSettingsStore,
 };
 use magies_routing::{RoutingMode, SingBoxRouteConfigGenerator};
 use rusqlite::Connection;
@@ -44,11 +44,22 @@ fn builds_every_v01_matcher_in_runtime_order() {
             rule(RouteRuleKind::Port, "443", DesktopRouteOutbound::Proxy),
             rule(RouteRuleKind::Network, "udp", DesktopRouteOutbound::Direct),
             rule(
+                RouteRuleKind::ProcessName,
+                "chrome",
+                DesktopRouteOutbound::Proxy,
+            ),
+            rule(
+                RouteRuleKind::ProcessPath,
+                "/Applications/Safari.app",
+                DesktopRouteOutbound::Direct,
+            ),
+            rule(
                 RouteRuleKind::GeoSite,
                 "private",
                 DesktopRouteOutbound::Direct,
             ),
         ],
+        providers: Vec::new(),
         final_outbound: DesktopRouteOutbound::Direct,
     };
 
@@ -62,9 +73,36 @@ fn builds_every_v01_matcher_in_runtime_order() {
     assert_eq!(config.json()["rules"][5]["ip_cidr"][0], "2001:db8::/32");
     assert_eq!(config.json()["rules"][6]["port"][0], 443);
     assert_eq!(config.json()["rules"][7]["network"], "udp");
-    assert_eq!(config.json()["rules"][8]["rule_set"][0], "geoip-cn");
-    assert_eq!(config.json()["rules"][9]["rule_set"][0], "geosite-private");
+    assert_eq!(config.json()["rules"][8]["process_name"][0], "chrome");
+    assert_eq!(
+        config.json()["rules"][9]["process_path"][0],
+        "/Applications/Safari.app"
+    );
+    assert_eq!(config.json()["rules"][10]["rule_set"][0], "geoip-cn");
+    assert_eq!(config.json()["rules"][11]["rule_set"][0], "geosite-private");
     assert_eq!(config.json()["final"], "direct");
+}
+
+#[test]
+fn migrates_legacy_settings_into_a_default_scheme_bundle() {
+    let path = database_path("legacy-bundle");
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE route_settings (id INTEGER PRIMARY KEY, settings_json TEXT NOT NULL);
+             INSERT INTO route_settings (id, settings_json) VALUES (1, '{\"rules\":[],\"finalOutbound\":\"proxy\"}');",
+        )
+        .unwrap();
+    drop(connection);
+
+    let store = SqliteRouteSettingsStore::open(&path).unwrap();
+    let bundle = store.load_bundle().unwrap();
+    assert_eq!(bundle.active_scheme_id, "default");
+    assert_eq!(bundle.schemes.len(), 1);
+    assert_eq!(bundle.active_settings(), RouteSettings::default());
+
+    drop(store);
+    fs::remove_file(path).unwrap();
 }
 
 #[test]
@@ -75,6 +113,7 @@ fn global_and_direct_modes_ignore_saved_rules_and_final() {
             "example.com",
             DesktopRouteOutbound::Direct,
         )],
+        providers: Vec::new(),
         final_outbound: DesktopRouteOutbound::Direct,
     };
 
@@ -133,6 +172,7 @@ fn defaults_and_persists_the_complete_settings() {
             "private",
             DesktopRouteOutbound::Direct,
         )],
+        providers: Vec::new(),
         final_outbound: DesktopRouteOutbound::Direct,
     };
 
@@ -183,4 +223,52 @@ fn database_path(name: &str) -> std::path::PathBuf {
         "mgclash-route-settings-{name}-{}-{sequence}.sqlite",
         id()
     ))
+}
+
+#[test]
+fn rule_providers_become_remote_rule_sets_after_the_explicit_rules() {
+    let settings = RouteSettings {
+        rules: vec![RouteRuleSetting {
+            kind: RouteRuleKind::DomainSuffix,
+            value: "cn".to_owned(),
+            outbound: DesktopRouteOutbound::Direct,
+            enabled: true,
+        }],
+        providers: vec![RuleProviderSetting {
+            name: "ads".to_owned(),
+            url: "https://example.com/ads.srs".to_owned(),
+            format: RuleProviderFormatSetting::Binary,
+            outbound: DesktopRouteOutbound::Direct,
+            enabled: true,
+        }],
+        final_outbound: DesktopRouteOutbound::Proxy,
+    };
+
+    let profile = settings.profile(RoutingMode::Rule).unwrap();
+    let config = SingBoxRouteConfigGenerator::generate(&profile);
+
+    assert_eq!(config.json()["rules"][1]["domain_suffix"][0], ".cn");
+    assert_eq!(config.json()["rules"][2]["rule_set"][0], "ads");
+    assert_eq!(
+        config.json()["rule_set"][0]["url"],
+        "https://example.com/ads.srs"
+    );
+    assert_eq!(config.json()["rule_set"][0]["format"], "binary");
+}
+
+#[test]
+fn a_rule_provider_with_a_bad_url_is_a_typed_error() {
+    let settings = RouteSettings {
+        rules: Vec::new(),
+        providers: vec![RuleProviderSetting {
+            name: "ads".to_owned(),
+            url: "not-a-url".to_owned(),
+            format: RuleProviderFormatSetting::Source,
+            outbound: DesktopRouteOutbound::Direct,
+            enabled: true,
+        }],
+        final_outbound: DesktopRouteOutbound::Proxy,
+    };
+
+    assert!(settings.profile(RoutingMode::Rule).is_err());
 }

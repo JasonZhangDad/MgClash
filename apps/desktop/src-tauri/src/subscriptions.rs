@@ -1,16 +1,33 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use std::str;
+
 use magies_domain::{Subscription, TimestampMillis};
 use magies_profiles::{
     SqliteSubscriptionStore, SubscriptionFetchError, SubscriptionFetchOptions, SubscriptionFetcher,
     SubscriptionManagementError, SubscriptionManagementService, SubscriptionRefreshError,
     SubscriptionRefreshService, SubscriptionTransactionError,
 };
-use magies_storage::SecretStore;
-use serde::Serialize;
+use magies_storage::{SecretStore, SecretStoreError};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionBackupEntry {
+    pub id: Uuid,
+    pub name: String,
+    pub url: String,
+    pub update_interval_minutes: u32,
+    pub auto_update: bool,
+    pub enabled: bool,
+    pub user_agent: Option<String>,
+    pub include_keywords: String,
+    pub exclude_keywords: String,
+    pub subconverter_url: Option<String>,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,6 +40,10 @@ pub struct DesktopSubscriptionSummary {
     pub enabled: bool,
     pub node_count: usize,
     pub last_error: Option<String>,
+    pub user_agent: Option<String>,
+    pub include_keywords: String,
+    pub exclude_keywords: String,
+    pub subconverter_url: Option<String>,
 }
 
 pub struct DesktopSubscriptionController<S: SecretStore> {
@@ -63,16 +84,33 @@ impl<S: SecretStore> DesktopSubscriptionController<S> {
     /// # Errors
     ///
     /// Returns a typed validation, secret-store, or database error.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "create mirrors the editable subscription fields one-for-one"
+    )]
     pub fn create(
         &self,
         name: &str,
         url: &str,
         update_interval_minutes: u32,
         auto_update: bool,
+        user_agent: Option<&str>,
+        include_keywords: &str,
+        exclude_keywords: &str,
+        subconverter_url: Option<&str>,
     ) -> Result<DesktopSubscriptionSummary, DesktopSubscriptionError> {
         let mut store = self.store();
         let subscription = SubscriptionManagementService::new(&mut store, &self.secret_store)
-            .create(name, url, update_interval_minutes, auto_update)?;
+            .create(
+                name,
+                url,
+                update_interval_minutes,
+                auto_update,
+                user_agent,
+                include_keywords,
+                exclude_keywords,
+                subconverter_url,
+            )?;
         summary(&store, &subscription, None)
     }
 
@@ -81,6 +119,10 @@ impl<S: SecretStore> DesktopSubscriptionController<S> {
     /// # Errors
     ///
     /// Returns a typed validation, secret-store, or database error.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "update mirrors the editable subscription fields one-for-one"
+    )]
     pub fn update(
         &self,
         id: Uuid,
@@ -89,10 +131,25 @@ impl<S: SecretStore> DesktopSubscriptionController<S> {
         auto_update: bool,
         enabled: bool,
         url: Option<&str>,
+        user_agent: Option<&str>,
+        include_keywords: &str,
+        exclude_keywords: &str,
+        subconverter_url: Option<&str>,
     ) -> Result<DesktopSubscriptionSummary, DesktopSubscriptionError> {
         let mut store = self.store();
         let subscription = SubscriptionManagementService::new(&mut store, &self.secret_store)
-            .update(id, name, update_interval_minutes, auto_update, enabled, url)?;
+            .update(
+                id,
+                name,
+                update_interval_minutes,
+                auto_update,
+                enabled,
+                url,
+                user_agent,
+                include_keywords,
+                exclude_keywords,
+                subconverter_url,
+            )?;
         summary(
             &store,
             &subscription,
@@ -108,6 +165,80 @@ impl<S: SecretStore> DesktopSubscriptionController<S> {
     pub fn delete(&self, id: Uuid) -> Result<(), DesktopSubscriptionError> {
         SubscriptionManagementService::new(&mut self.store(), &self.secret_store).delete(id)?;
         self.errors().remove(&id);
+        Ok(())
+    }
+
+    /// Exports every subscription with its URL secret for a full profile backup.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed store or secret-store error.
+    pub fn export_backup_entries(
+        &self,
+    ) -> Result<Vec<SubscriptionBackupEntry>, DesktopSubscriptionError> {
+        let store = self.store();
+        store
+            .subscriptions()?
+            .iter()
+            .map(|subscription| {
+                let secret = self
+                    .secret_store
+                    .get(&subscription.url_secret_ref)
+                    .map_err(|source| DesktopSubscriptionError::SecretRead { source })?;
+                let url = str::from_utf8(secret.expose_secret())
+                    .map_err(|source| DesktopSubscriptionError::InvalidUrlSecret { source })?
+                    .to_owned();
+                Ok(SubscriptionBackupEntry {
+                    id: subscription.id,
+                    name: subscription.name.as_str().to_owned(),
+                    url,
+                    update_interval_minutes: subscription.update_interval_minutes.get(),
+                    auto_update: subscription.auto_update,
+                    enabled: subscription.enabled,
+                    user_agent: subscription.user_agent.clone(),
+                    include_keywords: subscription.include_keywords.clone(),
+                    exclude_keywords: subscription.exclude_keywords.clone(),
+                    subconverter_url: subscription.subconverter_url.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// Replaces every subscription from a profile backup.
+    ///
+    /// Existing subscriptions and their node credentials are deleted first.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation, secret-store, or database error.
+    pub fn replace_from_backup(
+        &self,
+        entries: &[SubscriptionBackupEntry],
+    ) -> Result<(), DesktopSubscriptionError> {
+        let existing = self
+            .store()
+            .subscriptions()?
+            .into_iter()
+            .map(|subscription| subscription.id)
+            .collect::<Vec<_>>();
+        for id in existing {
+            self.delete(id)?;
+        }
+        for entry in entries {
+            SubscriptionManagementService::new(&mut self.store(), &self.secret_store).restore(
+                entry.id,
+                &entry.name,
+                &entry.url,
+                entry.update_interval_minutes,
+                entry.auto_update,
+                entry.enabled,
+                entry.user_agent.as_deref(),
+                &entry.include_keywords,
+                &entry.exclude_keywords,
+                entry.subconverter_url.as_deref(),
+            )?;
+        }
+        self.errors().clear();
         Ok(())
     }
 
@@ -229,6 +360,10 @@ fn summary(
         enabled: subscription.enabled,
         node_count: store.subscription_nodes(subscription.id)?.len(),
         last_error,
+        user_agent: subscription.user_agent.clone(),
+        include_keywords: subscription.include_keywords.clone(),
+        exclude_keywords: subscription.exclude_keywords.clone(),
+        subconverter_url: subscription.subconverter_url.clone(),
     })
 }
 
@@ -242,13 +377,22 @@ pub enum DesktopSubscriptionError {
     Fetcher(#[from] SubscriptionFetchError),
     #[error(transparent)]
     Refresh(#[from] SubscriptionRefreshError),
+    #[error("failed to read a subscription URL from the credential store")]
+    SecretRead { source: SecretStoreError },
+    #[error("stored subscription URL is not valid UTF-8")]
+    InvalidUrlSecret { source: std::str::Utf8Error },
 }
 
 impl DesktopSubscriptionError {
     #[must_use]
+    #[expect(
+        clippy::match_same_arms,
+        reason = "unrelated failures that share a code stay separate arms"
+    )]
     pub const fn code(&self) -> &'static str {
         match self {
             Self::Management(error) => management_error_code(error),
+            Self::SecretRead { .. } | Self::InvalidUrlSecret { .. } => "secret_store_failed",
             Self::Transaction(SubscriptionTransactionError::SubscriptionNotFound { .. })
             | Self::Refresh(SubscriptionRefreshError::Transaction(
                 SubscriptionTransactionError::SubscriptionNotFound { .. },
@@ -266,6 +410,7 @@ impl DesktopSubscriptionError {
                 | SubscriptionRefreshError::SecretStore { .. }
                 | SubscriptionRefreshError::Credential { .. },
             ) => "secret_store_failed",
+            Self::Refresh(SubscriptionRefreshError::Url(_)) => "invalid_subscription",
         }
     }
 }
@@ -278,8 +423,7 @@ impl From<SubscriptionManagementError> for DesktopSubscriptionError {
 
 const fn management_error_code(error: &SubscriptionManagementError) -> &'static str {
     match error {
-        SubscriptionManagementError::InvalidUrl { .. }
-        | SubscriptionManagementError::UnsupportedScheme { .. }
+        SubscriptionManagementError::Url(_)
         | SubscriptionManagementError::CredentialRef(_)
         | SubscriptionManagementError::Model(_) => "invalid_subscription",
         SubscriptionManagementError::Transaction(
@@ -314,6 +458,10 @@ mod tests {
                 "https://example.com/list?token=url-secret",
                 60,
                 true,
+                None,
+                "",
+                "",
+                None,
             )
             .unwrap();
         assert_eq!(created.name, "Primary");
@@ -330,6 +478,10 @@ mod tests {
                 false,
                 false,
                 Some("https://example.com/new?token=new-url-secret"),
+                None,
+                "",
+                "",
+                None,
             )
             .unwrap();
         assert_eq!(edited.name, "Edited");
@@ -366,13 +518,40 @@ mod tests {
         let store = SqliteSubscriptionStore::open_in_memory().unwrap();
         let controller = DesktopSubscriptionController::new(store, MemorySecretStore::default());
         let due = controller
-            .create("Due", "https://example.com/due", 60, true)
+            .create(
+                "Due",
+                "https://example.com/due",
+                60,
+                true,
+                None,
+                "",
+                "",
+                None,
+            )
             .unwrap();
         let manual = controller
-            .create("Manual", "https://example.com/manual", 60, false)
+            .create(
+                "Manual",
+                "https://example.com/manual",
+                60,
+                false,
+                None,
+                "",
+                "",
+                None,
+            )
             .unwrap();
         let future = controller
-            .create("Future", "https://example.com/future", 60, true)
+            .create(
+                "Future",
+                "https://example.com/future",
+                60,
+                true,
+                None,
+                "",
+                "",
+                None,
+            )
             .unwrap();
         controller
             .store()
@@ -410,6 +589,41 @@ mod tests {
     }
 
     #[test]
+    fn export_and_replace_backup_entries_preserve_subscription_ids() {
+        let store = SqliteSubscriptionStore::open_in_memory().unwrap();
+        let controller = DesktopSubscriptionController::new(store, MemorySecretStore::default());
+        let created = controller
+            .create(
+                "Primary",
+                "https://example.com/list?token=secret",
+                60,
+                true,
+                Some("custom-agent"),
+                "hk",
+                "ads",
+                Some("https://sub.example.com"),
+            )
+            .unwrap();
+
+        let exported = controller.export_backup_entries().unwrap();
+        assert_eq!(exported.len(), 1);
+        assert_eq!(exported[0].id, created.id);
+        assert!(exported[0].url.contains("secret"));
+        assert_eq!(exported[0].user_agent.as_deref(), Some("custom-agent"));
+        assert_eq!(exported[0].include_keywords, "hk");
+        assert_eq!(
+            exported[0].subconverter_url.as_deref(),
+            Some("https://sub.example.com")
+        );
+
+        controller.replace_from_backup(&exported).unwrap();
+        let listed = controller.list().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, created.id);
+        assert_eq!(listed[0].name, "Primary");
+    }
+
+    #[test]
     fn records_a_redacted_refresh_failure_for_the_ui() {
         let secrets = SharedSecretStore::default();
         let controller = DesktopSubscriptionController::new(
@@ -417,7 +631,16 @@ mod tests {
             secrets.clone(),
         );
         let created = controller
-            .create("Broken", "https://example.com/?token=url-secret", 60, true)
+            .create(
+                "Broken",
+                "https://example.com/?token=url-secret",
+                60,
+                true,
+                None,
+                "",
+                "",
+                None,
+            )
             .unwrap();
         let url_ref =
             magies_domain::CredentialRef::new(format!("subscription/{}/url", created.id)).unwrap();
@@ -442,16 +665,54 @@ mod tests {
             secrets.clone(),
         );
         let broken = controller
-            .create("Broken", "https://example.com/broken", 60, true)
+            .create(
+                "Broken",
+                "https://example.com/broken",
+                60,
+                true,
+                None,
+                "",
+                "",
+                None,
+            )
             .unwrap();
         let also_broken = controller
-            .create("Also broken", "https://example.com/also-broken", 60, true)
+            .create(
+                "Also broken",
+                "https://example.com/also-broken",
+                60,
+                true,
+                None,
+                "",
+                "",
+                None,
+            )
             .unwrap();
         let disabled = controller
-            .create("Disabled", "https://example.com/disabled", 60, true)
+            .create(
+                "Disabled",
+                "https://example.com/disabled",
+                60,
+                true,
+                None,
+                "",
+                "",
+                None,
+            )
             .unwrap();
         controller
-            .update(disabled.id, "Disabled", 60, true, false, None)
+            .update(
+                disabled.id,
+                "Disabled",
+                60,
+                true,
+                false,
+                None,
+                None,
+                "",
+                "",
+                None,
+            )
             .unwrap();
         for id in [broken.id, also_broken.id] {
             let url_ref =

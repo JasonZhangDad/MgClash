@@ -3,9 +3,11 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    Hysteria2ParseError, Hysteria2Parser, ShadowsocksParseError, ShadowsocksParser,
-    StoredNodeCredential, TrojanParseError, TrojanParser, VlessParseError, VlessParser,
-    VmessParseError, VmessParser,
+    AnyTlsParseError, AnyTlsParser, HttpProxyParseError, HttpProxyParser, Hysteria2ParseError,
+    Hysteria2Parser, NaiveParseError, NaiveParser, ShadowsocksParseError, ShadowsocksParser,
+    SocksParseError, SocksParser, StoredNodeCredential, TrojanParseError, TrojanParser,
+    TuicParseError, TuicParser, VlessParseError, VlessParser, VmessParseError, VmessParser,
+    WireGuardParseError, WireGuardParser,
 };
 
 /// A sharing URI resolved into the shared node model and its owned credential.
@@ -69,6 +71,12 @@ impl ShareLinkParser {
             TrojanParser => Trojan,
             ShadowsocksParser => Shadowsocks,
             Hysteria2Parser => Hysteria2,
+            TuicParser => Tuic,
+            SocksParser => Socks,
+            HttpProxyParser => Http,
+            WireGuardParser => WireGuard,
+            AnyTlsParser => AnyTls,
+            NaiveParser => Naive,
         }
         Err(ShareLinkParseError::UnsupportedScheme)
     }
@@ -88,6 +96,18 @@ pub enum ShareLinkParseError {
     Shadowsocks(#[source] ShadowsocksParseError),
     #[error("failed to parse Hysteria2 sharing URI")]
     Hysteria2(#[source] Hysteria2ParseError),
+    #[error("failed to parse TUIC sharing URI")]
+    Tuic(#[source] TuicParseError),
+    #[error("failed to parse SOCKS sharing URI")]
+    Socks(#[source] SocksParseError),
+    #[error("failed to parse HTTP proxy sharing URI")]
+    Http(#[source] HttpProxyParseError),
+    #[error("failed to parse WireGuard sharing URI")]
+    WireGuard(#[source] WireGuardParseError),
+    #[error("failed to parse AnyTLS sharing URI")]
+    AnyTls(#[source] AnyTlsParseError),
+    #[error("failed to parse Naive sharing URI")]
+    Naive(#[source] NaiveParseError),
     #[error("failed to build the shared node model")]
     Node(#[source] NodeModelError),
 }

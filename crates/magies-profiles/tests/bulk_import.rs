@@ -102,8 +102,9 @@ fn reports_the_line_number_of_the_original_body() {
 #[test]
 fn a_body_where_every_line_fails_is_not_an_error() {
     // Both lines carry a scheme, so the body reads as plain text and each line
-    // is rejected on its own.
-    let outcome = parse("http://example.com\nftp://example.com");
+    // is rejected on its own. Neither `naive` nor `ftp` is a supported P0/P1
+    // scheme.
+    let outcome = parse("ssr://example.com\nftp://example.com");
 
     assert!(outcome.nodes.is_empty());
     assert_eq!(outcome.failures.len(), 2);
@@ -176,7 +177,7 @@ fn rejects_non_utf8_content() {
 
 #[test]
 fn exposes_the_failing_line_through_the_error_source_chain() {
-    let outcome = parse("http://example.com");
+    let outcome = parse("ssr://example.com");
     let failure = &outcome.failures[0];
 
     assert_eq!(failure.to_string(), "line 1 could not be imported");

@@ -114,9 +114,83 @@ fn dispatches_both_hysteria2_schemes_to_the_hysteria2_parser() {
 }
 
 #[test]
+fn dispatches_a_tuic_link_to_the_tuic_parser() {
+    let parsed = parse(&format!(
+        "tuic://{USER_ID}:hunter2@edge.example.com:443#Tokyo"
+    ))
+    .unwrap();
+
+    assert_eq!(parsed.node().protocol_type, ProxyProtocol::Tuic);
+    assert!(matches!(parsed.credential(), StoredNodeCredential::Tuic(_)));
+}
+
+#[test]
+fn dispatches_an_anytls_link_to_the_anytls_parser() {
+    let parsed = parse("anytls://hunter2@edge.example.com:443?sni=cdn.example.com#Tokyo").unwrap();
+
+    assert_eq!(parsed.node().protocol_type, ProxyProtocol::AnyTls);
+    assert!(matches!(
+        parsed.credential(),
+        StoredNodeCredential::AnyTls(_)
+    ));
+    assert!(parsed.node().tls.is_some());
+}
+
+#[test]
+fn dispatches_a_naive_link_to_the_naive_parser() {
+    let parsed =
+        parse("naive+quic://alice:hunter2@edge.example.com?sni=cdn.example.com#Tokyo").unwrap();
+
+    assert_eq!(parsed.node().protocol_type, ProxyProtocol::Naive);
+    assert!(matches!(
+        parsed.credential(),
+        StoredNodeCredential::Naive(credential) if credential.quic()
+    ));
+    assert!(parsed.node().tls.is_some());
+}
+
+#[test]
+fn dispatches_socks_links_to_the_socks_parser() {
+    for uri in [
+        "socks://edge.example.com:1080#Default",
+        "socks5://alice:hunter2@edge.example.com:1080#Auth",
+        "socks5h://edge.example.com#DefaultPort",
+    ] {
+        let parsed = parse(uri).unwrap();
+
+        assert_eq!(parsed.node().protocol_type, ProxyProtocol::Socks);
+        assert!(matches!(
+            parsed.credential(),
+            StoredNodeCredential::Socks(_)
+        ));
+    }
+}
+
+#[test]
+fn dispatches_http_and_https_links_to_the_http_parser() {
+    let plain = parse("http://edge.example.com:8080#Plain").unwrap();
+    assert_eq!(plain.node().protocol_type, ProxyProtocol::Http);
+    assert!(matches!(plain.credential(), StoredNodeCredential::Http(_)));
+
+    let secure = parse("https://alice:hunter2@edge.example.com#Secure").unwrap();
+    assert_eq!(secure.node().protocol_type, ProxyProtocol::Http);
+    assert!(secure.node().tls.is_some());
+}
+
+#[test]
+fn a_subscription_style_https_uri_with_a_path_is_not_stolen_by_the_http_parser() {
+    // The HTTP proxy parser only claims an empty or root path; anything else
+    // (e.g. a subscription URL) must fall through to `UnsupportedScheme`.
+    assert!(matches!(
+        parse("https://sub.example.com/api/v1/subscribe?token=abc"),
+        Err(ShareLinkParseError::UnsupportedScheme)
+    ));
+}
+
+#[test]
 fn rejects_an_unknown_scheme_before_reaching_a_parser() {
     assert!(matches!(
-        parse("tuic://token@edge.example.com:443"),
+        parse("ssr://token@edge.example.com:443"),
         Err(ShareLinkParseError::UnsupportedScheme)
     ));
     assert!(matches!(

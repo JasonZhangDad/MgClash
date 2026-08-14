@@ -21,6 +21,15 @@ pub enum ProxyProtocol {
     Trojan,
     Shadowsocks,
     Hysteria2,
+    Tuic,
+    Socks,
+    Http,
+    WireGuard,
+    AnyTls,
+    /// `NaiveProxy`, since sing-box 1.13.0; Xray ships no `naive` outbound.
+    Naive,
+    /// Full Core JSON supplied by the user (v2rayN `AddServer2` style).
+    Custom,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -190,6 +199,18 @@ pub struct Subscription {
     pub etag: Option<String>,
     pub last_modified: Option<String>,
     pub enabled: bool,
+    /// Overrides the default `MgClash` User-Agent when non-empty.
+    #[serde(default)]
+    pub user_agent: Option<String>,
+    /// Keep only nodes whose names contain one of these keywords (`|`/`\n` separated).
+    #[serde(default)]
+    pub include_keywords: String,
+    /// Drop nodes whose names contain one of these keywords (`|`/`\n` separated).
+    #[serde(default)]
+    pub exclude_keywords: String,
+    /// When set, each source URL is fetched through this subconverter `/sub` base.
+    #[serde(default)]
+    pub subconverter_url: Option<String>,
 }
 
 impl Subscription {
@@ -220,8 +241,39 @@ impl Subscription {
             etag: None,
             last_modified: None,
             enabled: true,
+            user_agent: None,
+            include_keywords: String::new(),
+            exclude_keywords: String::new(),
+            subconverter_url: None,
         })
     }
+
+    /// Whether a node name survives this subscription's include/exclude filters.
+    ///
+    /// Keywords are separated by `|`, commas, or newlines. Exclude wins when
+    /// both lists match. An empty include list keeps every non-excluded name.
+    #[must_use]
+    pub fn accepts_node_name(&self, name: &str) -> bool {
+        accepts_subscription_node_name(name, &self.include_keywords, &self.exclude_keywords)
+    }
+}
+
+/// Shared include/exclude matching used by refresh and unit tests.
+#[must_use]
+pub fn accepts_subscription_node_name(name: &str, include: &str, exclude: &str) -> bool {
+    let excludes = split_subscription_keywords(exclude);
+    if excludes.iter().any(|keyword| name.contains(keyword)) {
+        return false;
+    }
+    let includes = split_subscription_keywords(include);
+    includes.is_empty() || includes.iter().any(|keyword| name.contains(keyword))
+}
+
+fn split_subscription_keywords(raw: &str) -> Vec<&str> {
+    raw.split(['|', ',', '\n'])
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -239,6 +291,12 @@ pub enum TransportConfig {
     Tcp,
     #[serde(rename = "websocket")]
     WebSocket { path: String, host: Option<String> },
+    /// `HTTPUpgrade` (Xray/`httpupgrade`, sing-box `httpupgrade`).
+    ///
+    /// Carries the same path/host shape as WebSocket so share links and the
+    /// manual form can reuse those fields; only the wire upgrade differs.
+    #[serde(rename = "httpupgrade")]
+    HttpUpgrade { path: String, host: Option<String> },
     #[serde(rename = "grpc")]
     Grpc {
         #[serde(rename = "serviceName")]
@@ -246,6 +304,59 @@ pub enum TransportConfig {
         mode: GrpcMode,
         authority: Option<String>,
     },
+    /// XHTTP (Xray's successor to `SplitHTTP`), Xray-only: the pinned sing-box
+    /// 1.13.18 has no XHTTP transport, so the sing-box outbound generator must
+    /// refuse this variant with a typed error rather than emit an unsupported
+    /// wire format.
+    #[serde(rename = "xhttp")]
+    XHttp {
+        path: String,
+        host: Option<String>,
+        #[serde(default)]
+        mode: XhttpMode,
+    },
+    /// mKCP (Xray's `kcp`/`mkcp` network), Xray-only: the pinned sing-box
+    /// 1.13.18 has no mKCP transport, so the sing-box outbound generator must
+    /// refuse this variant with a typed error rather than emit an unsupported
+    /// wire format.
+    ///
+    /// Modern Xray docs describe `header`/`seed` as superseded by `FinalMask`,
+    /// but older share links still carry them, so they are accepted and
+    /// emitted here for share-link parity; if a given Xray build rejects them
+    /// at runtime that is a server/version compatibility issue, not a bug in
+    /// this generator.
+    #[serde(rename = "kcp")]
+    Kcp {
+        #[serde(default)]
+        mtu: Option<u32>,
+        #[serde(default)]
+        tti: Option<u32>,
+        #[serde(default, rename = "uplinkCapacity")]
+        uplink_capacity: Option<u32>,
+        #[serde(default, rename = "downlinkCapacity")]
+        downlink_capacity: Option<u32>,
+        #[serde(default)]
+        congestion: bool,
+        #[serde(default, rename = "headerType")]
+        header_type: Option<String>,
+        #[serde(default)]
+        seed: Option<String>,
+    },
+}
+
+/// The XHTTP stream mode Xray negotiates with the server.
+///
+/// Defaults to `Auto`, which lets Xray pick between the packet-up and
+/// stream-up behaviors; this is also the only mode legacy `VMess` JSON
+/// payloads can express since they carry no `mode` field at all.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum XhttpMode {
+    #[default]
+    Auto,
+    PacketUp,
+    StreamUp,
+    StreamOne,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -368,6 +479,10 @@ pub struct ProxyNode {
     pub latency_ms: Option<u32>,
     pub last_tested_at: Option<TimestampMillis>,
     pub enabled: bool,
+    /// Per-node Xray finalmask JSON override (v2rayN advanced). Used only when
+    /// Final Fragment is enabled globally. Stores a mask entry or `{tcp:[...]}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xray_finalmask_json: Option<String>,
 }
 
 impl ProxyNode {
@@ -408,6 +523,7 @@ impl ProxyNode {
             latency_ms: None,
             last_tested_at: None,
             enabled: true,
+            xray_finalmask_json: None,
         })
     }
 }

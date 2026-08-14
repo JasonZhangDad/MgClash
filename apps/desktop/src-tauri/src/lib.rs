@@ -1,16 +1,22 @@
 //! `MgClash` Tauri desktop shell.
 
 pub mod app_settings;
+pub mod connections;
 pub mod core_control;
+pub mod core_install;
+pub mod core_update;
 pub mod diagnostics;
 pub mod dns_settings;
+pub mod geo_assets;
 pub mod logs;
 pub mod node_latency;
 pub mod platform_proxy;
+pub mod preferences_backup;
+pub mod profile_backup;
 pub mod route_settings;
 pub mod routing_mode;
 pub mod session;
-mod subscriptions;
+pub mod subscriptions;
 pub mod traffic;
 mod tray;
 pub mod url_test;
@@ -30,8 +36,8 @@ use magies_platform::release::{ReleaseVersion, UpdateStatus};
 use magies_platform::{TargetPlatform, TunAvailability};
 use magies_profiles::ensure_rustls_crypto_provider;
 use magies_profiles::{
-    ManualNodeDraft, ShareLinkQrScanError, ShareLinkQrScanner, SqliteManualNodeStore,
-    SqliteNodeGroupStore, SqliteNodeOrderStore, SqliteSubscriptionStore,
+    ManualNodeDraft, NodeGroupStrategy, ShareLinkQrScanError, ShareLinkQrScanner,
+    SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore, SqliteSubscriptionStore,
 };
 use magies_session::{DesktopSession, NetworkWatcher, RecoveryOutcome, TcpHealthProbe};
 use magies_storage::PlatformSecretStore;
@@ -40,14 +46,22 @@ use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
 use crate::app_settings::{AppSettings, SqliteAppSettingsStore, SystemProxyModeSetting};
+use crate::connections::{
+    ConnectionSnapshot, ConnectionsError, close_all_connections, close_connection, load_connections,
+};
 use crate::core_control::{HostCoreControl, describe};
+use crate::core_install::{CoreInstallStatus, CoreInstallStore, CoreKind};
+use crate::core_update::{CoreUpdateCheck, check_core_updates};
 use crate::diagnostics::DiagnosticBundle;
 use crate::dns_settings::{DnsSettings, SqliteDnsSettingsStore};
+use crate::geo_assets::{GeoAssetsStatus, GeoAssetsStore};
 use crate::logs::{
     LogBuffer, LogBufferLayer, LogEntry, LogLevel, LogSource, spawn_core_log_reader,
 };
 use crate::node_latency::{TcpLatencyError, probe_tcp};
 use crate::platform_proxy::{PlatformProxyControl, PlatformProxyError, SystemProxyStartupStatus};
+use crate::preferences_backup::PreferencesBundle;
+use crate::profile_backup::ProfileBundle;
 use crate::route_settings::{RouteSettings, SqliteRouteSettingsStore};
 use crate::routing_mode::{SqliteRoutingModeStore, parse_routing_mode};
 use crate::session::{
@@ -61,7 +75,7 @@ use crate::traffic::{
     NodeTraffic, SqliteTrafficCounter, TrafficCounterError, TrafficSnapshot, sample_traffic,
 };
 use crate::tray::{TrayAction, TrayUi, menu_model};
-use crate::url_test::{UrlTestError, probe_url};
+use crate::url_test::{SpeedTestOutcome, UrlTestError, probe_download_speed, probe_url};
 use magies_platform::pac::{PacScript, PacServer};
 
 /// How long a started Core has to accept connections on its local SOCKS port.
@@ -91,12 +105,18 @@ const NODE_TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A real URL test uses the same per-node timeout as TCP Connect.
 const URL_TEST_TIMEOUT: Duration = Duration::from_secs(5);
+const SPEED_TEST_TIMEOUT: Duration = Duration::from_secs(30);
+const SPEED_TEST_MAX_BYTES: u64 = 10_000_000;
 
 /// The Core emits a traffic sample every second; keep the PRD's bounded timeout.
 const TRAFFIC_SAMPLE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Avoid a hot retry loop while the session is stopped or the Core API fails.
 const TRAFFIC_RETRY_DELAY: Duration = Duration::from_secs(1);
+
+/// The connection list is polled while its tab is open; keep it short so a
+/// stalled Core cannot freeze the table.
+const CONNECTIONS_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -127,6 +147,16 @@ struct NodeTestResult {
     id: Uuid,
     status: NodeTestStatus,
     latency_ms: Option<u32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpeedTestResult {
+    id: Uuid,
+    status: NodeTestStatus,
+    bytes_per_second: Option<u64>,
+    bytes_read: Option<u64>,
+    elapsed_ms: Option<u32>,
 }
 
 fn node_test_result(id: Uuid, result: &Result<u32, TcpLatencyError>) -> NodeTestResult {
@@ -244,6 +274,8 @@ struct AppState {
     pac: Mutex<Option<PacServer>>,
     /// Where an exported diagnostic bundle is written.
     export_directory: PathBuf,
+    geo_assets: GeoAssetsStore,
+    core_install: CoreInstallStore,
     tray: TrayUi,
     allow_exit: AtomicBool,
     exit_in_progress: AtomicBool,
@@ -467,12 +499,21 @@ fn handle_background_tray_action(app: &AppHandle, action: TrayAction) {
             .set_routing_mode(mode)
             .map(|_| ())
             .map_err(|error| command_error(&error)),
-        TrayAction::SelectNode(id) => app
-            .state::<AppState>()
-            .service()
-            .select_node(id)
-            .map(|_| ())
-            .map_err(|error| command_error(&error)),
+        TrayAction::SelectNode(id) => {
+            let state = app.state::<AppState>();
+            let mut service = state.service();
+            if service.status().connected {
+                service
+                    .switch_node(id)
+                    .map(|_| ())
+                    .map_err(|error| command_error(&error))
+            } else {
+                service
+                    .select_node(id)
+                    .map(|_| ())
+                    .map_err(|error| command_error(&error))
+            }
+        }
     };
 
     match result {
@@ -669,6 +710,51 @@ fn session_set_route_settings(
     clippy::needless_pass_by_value,
     reason = "Tauri commands receive State and deserialized arguments by value"
 )]
+fn session_set_route_scheme(
+    scheme_id: String,
+    state: State<'_, AppState>,
+) -> Result<SessionStatus, CommandError> {
+    state
+        .service()
+        .set_route_scheme(&scheme_id)
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
+fn session_create_route_scheme(
+    name: String,
+    state: State<'_, AppState>,
+) -> Result<SessionStatus, CommandError> {
+    state
+        .service()
+        .create_route_scheme(&name)
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
+fn session_delete_route_scheme(
+    scheme_id: String,
+    state: State<'_, AppState>,
+) -> Result<SessionStatus, CommandError> {
+    state
+        .service()
+        .delete_route_scheme(&scheme_id)
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
 fn session_set_dns_settings(
     settings: DnsSettings,
     state: State<'_, AppState>,
@@ -800,6 +886,66 @@ async fn session_url_test(
     Ok(result)
 }
 
+fn speed_test_result(
+    id: Uuid,
+    result: &Result<SpeedTestOutcome, UrlTestError>,
+) -> Result<SpeedTestResult, CommandError> {
+    match result {
+        Ok(outcome) => Ok(SpeedTestResult {
+            id,
+            status: NodeTestStatus::Success,
+            bytes_per_second: Some(outcome.bytes_per_second),
+            bytes_read: Some(outcome.bytes_read),
+            elapsed_ms: Some(outcome.elapsed_ms),
+        }),
+        Err(UrlTestError::TimedOut) => Ok(SpeedTestResult {
+            id,
+            status: NodeTestStatus::Timeout,
+            bytes_per_second: None,
+            bytes_read: None,
+            elapsed_ms: None,
+        }),
+        Err(
+            error @ (UrlTestError::InvalidTimeout
+            | UrlTestError::InvalidUrl(_)
+            | UrlTestError::UnsupportedScheme { .. }),
+        ) => Err(CommandError {
+            code: "invalid_speed_test",
+            message: describe(error),
+        }),
+        Err(_) => Ok(SpeedTestResult {
+            id,
+            status: NodeTestStatus::Failed,
+            bytes_per_second: None,
+            bytes_read: None,
+            elapsed_ms: None,
+        }),
+    }
+}
+
+#[tauri::command]
+async fn session_speed_test(
+    url: String,
+    state: State<'_, AppState>,
+) -> Result<SpeedTestResult, CommandError> {
+    let target = state
+        .service()
+        .url_test_target()
+        .map_err(|error| command_error(&error))?;
+    let proxy_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), target.http_port);
+    let probe = probe_download_speed(
+        &url,
+        proxy_address,
+        SPEED_TEST_TIMEOUT,
+        SPEED_TEST_MAX_BYTES,
+    )
+    .await;
+    if let Err(error) = &probe {
+        tracing::debug!("speed test did not succeed: {}", describe(error));
+    }
+    speed_test_result(target.node_id, &probe)
+}
+
 #[tauri::command]
 #[expect(
     clippy::needless_pass_by_value,
@@ -807,6 +953,62 @@ async fn session_url_test(
 )]
 fn session_traffic(state: State<'_, AppState>) -> TrafficSnapshot {
     state.traffic().snapshot()
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State by value"
+)]
+fn session_clear_traffic(state: State<'_, AppState>) -> Result<TrafficSnapshot, CommandError> {
+    let mut traffic = state.traffic();
+    traffic
+        .clear(Local::now().date_naive(), Instant::now())
+        .map_err(|error| traffic_counter_command_error(&error))?;
+    Ok(traffic.snapshot())
+}
+
+fn connections_error(error: &ConnectionsError) -> CommandError {
+    CommandError {
+        code: "connections_unavailable",
+        message: describe(error),
+    }
+}
+
+/// The Clash API address of the running session, or the inactive-session error.
+fn connections_api_address(state: &AppState) -> Result<SocketAddr, CommandError> {
+    lock(&state.service)
+        .traffic_api_address()
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+async fn session_connections(
+    state: State<'_, AppState>,
+) -> Result<ConnectionSnapshot, CommandError> {
+    let api_address = connections_api_address(&state)?;
+    load_connections(api_address, CONNECTIONS_TIMEOUT)
+        .await
+        .map_err(|error| connections_error(&error))
+}
+
+#[tauri::command]
+async fn session_close_connection(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let api_address = connections_api_address(&state)?;
+    close_connection(api_address, &id, CONNECTIONS_TIMEOUT)
+        .await
+        .map_err(|error| connections_error(&error))
+}
+
+#[tauri::command]
+async fn session_close_connections(state: State<'_, AppState>) -> Result<(), CommandError> {
+    let api_address = connections_api_address(&state)?;
+    close_all_connections(api_address, CONNECTIONS_TIMEOUT)
+        .await
+        .map_err(|error| connections_error(&error))
 }
 
 fn parse_node_id(id: &str) -> Result<Uuid, CommandError> {
@@ -837,6 +1039,43 @@ fn session_select_node(
     clippy::needless_pass_by_value,
     reason = "Tauri commands receive State and deserialized arguments by value"
 )]
+fn session_switch_node(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<SessionStatus, CommandError> {
+    let id = parse_node_id(&id)?;
+    let status = state
+        .service()
+        .switch_node(id)
+        .map_err(|error| command_error(&error))?;
+    if status.connected {
+        tracing::info!(node_id = %id, "session switched node");
+    }
+    Ok(status)
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
+fn session_set_node_enabled(
+    id: String,
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::session::NodeSummary>, CommandError> {
+    let id = parse_node_id(&id)?;
+    state
+        .service()
+        .set_node_enabled(id, enabled)
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
 fn session_edit_node(
     id: String,
     name: String,
@@ -848,6 +1087,39 @@ fn session_edit_node(
     state
         .service()
         .edit_node(id, name, server, port)
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
+fn session_node_draft(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<ManualNodeDraft, CommandError> {
+    let id = parse_node_id(&id)?;
+    state
+        .service()
+        .node_draft(id)
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
+fn session_update_node(
+    id: String,
+    draft: ManualNodeDraft,
+    state: State<'_, AppState>,
+) -> Result<SessionStatus, CommandError> {
+    let id = parse_node_id(&id)?;
+    state
+        .service()
+        .update_node(id, draft)
         .map_err(|error| command_error(&error))
 }
 
@@ -873,6 +1145,25 @@ fn session_move_node(
     clippy::needless_pass_by_value,
     reason = "Tauri commands receive State and deserialized arguments by value"
 )]
+fn session_reorder_nodes(
+    ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::session::NodeSummary>, CommandError> {
+    let ids = ids
+        .iter()
+        .map(|id| parse_node_id(id))
+        .collect::<Result<Vec<_>, _>>()?;
+    state
+        .service()
+        .reorder_nodes(&ids)
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
 fn session_set_node_group(
     id: String,
     group_name: Option<String>,
@@ -882,6 +1173,23 @@ fn session_set_node_group(
     state
         .service()
         .set_node_group(id, group_name.as_deref())
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
+fn session_set_node_group_strategy(
+    id: String,
+    strategy: NodeGroupStrategy,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::session::NodeGroupSummary>, CommandError> {
+    let id = parse_node_id(&id)?;
+    state
+        .service()
+        .set_node_group_strategy(id, strategy)
         .map_err(|error| command_error(&error))
 }
 
@@ -997,6 +1305,71 @@ async fn session_check_update() -> Result<UpdateCheck, CommandError> {
         },
         update_available: current.compare(&latest) == UpdateStatus::UpdateAvailable,
     })
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State by value"
+)]
+fn geo_assets_status(state: State<'_, AppState>) -> GeoAssetsStatus {
+    state.geo_assets.status()
+}
+
+#[tauri::command]
+async fn geo_assets_update(state: State<'_, AppState>) -> Result<GeoAssetsStatus, CommandError> {
+    state
+        .geo_assets
+        .update()
+        .await
+        .map_err(|error| CommandError {
+            code: error.code(),
+            message: describe(&error),
+        })
+}
+
+/// Asks GitHub whether newer sing-box / Xray releases exist.
+///
+/// **Only ever called from the menu.** Downloads are triggered separately via
+/// [`core_download_update`].
+#[tauri::command]
+async fn core_check_update(state: State<'_, AppState>) -> Result<CoreUpdateCheck, CommandError> {
+    check_core_updates(Some(&state.core_install))
+        .await
+        .map_err(|error| CommandError {
+            code: error.code(),
+            message: describe(&error),
+        })
+}
+
+#[tauri::command]
+async fn core_download_update(
+    core: String,
+    state: State<'_, AppState>,
+) -> Result<CoreInstallStatus, CommandError> {
+    if state.service().session().is_running() {
+        return Err(CommandError {
+            code: "session_active",
+            message: "请先断开连接再更新 Core".to_owned(),
+        });
+    }
+    let kind = CoreKind::parse(&core).map_err(|error| CommandError {
+        code: error.code(),
+        message: describe(&error),
+    })?;
+    let status = state
+        .core_install
+        .download_latest(kind, Some(state.geo_assets.directory()))
+        .await
+        .map_err(|error| CommandError {
+            code: error.code(),
+            message: describe(&error),
+        })?;
+    state
+        .service()
+        .reload_core_install(&state.core_install)
+        .map_err(|error| command_error(&error))?;
+    Ok(status)
 }
 
 /// The page a user is sent to when there is no release to link.
@@ -1119,7 +1492,7 @@ fn session_connect(state: State<'_, AppState>) -> Result<SessionStatus, CommandE
     reason = "Tauri commands receive State by value"
 )]
 fn app_settings(state: State<'_, AppState>) -> AppSettings {
-    *lock(&state.settings)
+    lock(&state.settings).clone()
 }
 
 #[tauri::command]
@@ -1136,20 +1509,47 @@ fn set_app_settings(
     // as enabled, or the switch would lie after the next launch.
     apply_launch_at_login(&app, settings.launch_at_login)?;
     lock(&state.settings_store)
-        .save(settings)
+        .save(&settings)
         .map_err(|error| CommandError {
             code: "app_settings_store_failed",
             message: describe(&error),
         })?;
-    *lock(&state.settings) = settings;
-    let pac_url = apply_pac_mode(&state, settings)?;
+    *lock(&state.settings) = settings.clone();
+    let pac_url = apply_pac_mode(&state, &settings)?;
     // The running service keeps its own copy so status and connect do not have
     // to reach back into the settings on every call.
     {
         let mut service = state.service();
-        service.set_core_preference(settings.core_preference.preference());
-        service.set_tun_enabled(settings.tun_enabled);
-        service.set_system_proxy_mode(settings.system_proxy_mode.mode(pac_url.as_deref()));
+        // Rejected before anything stops: a bad port must not cost the user
+        // their connection.
+        service
+            .check_local_proxies(
+                settings.socks_port,
+                settings.http_port,
+                settings.clash_api_port,
+            )
+            .map_err(|error| command_error(&error))?;
+        // The Core reads all of this at startup, so a running session is
+        // restarted around the change rather than blocking it.
+        service
+            .restarting(|service| {
+                service.set_core_preference(settings.core_preference.preference());
+                service.set_tun_enabled(settings.tun_enabled);
+                service.set_mux_enabled(settings.mux_enabled);
+                service.set_fragment_enabled(settings.fragment_enabled);
+                service.set_final_fragment_enabled(settings.final_fragment_enabled);
+                service.set_udp_noise_enabled(settings.udp_noise_enabled);
+                service.set_url_test_address(settings.url_test_address.clone());
+                service.set_allow_lan(settings.allow_lan);
+                service.set_inbound_udp_enabled(settings.inbound_udp_enabled);
+                service.set_system_proxy_mode(settings.system_proxy_mode.mode(pac_url.as_deref()));
+                service.set_local_proxies(
+                    settings.socks_port,
+                    settings.http_port,
+                    settings.clash_api_port,
+                )
+            })
+            .map_err(|error| command_error(&error))?;
     }
     tracing::info!("application settings updated");
     Ok(settings)
@@ -1158,7 +1558,10 @@ fn set_app_settings(
 /// Starts or stops the PAC server to match the selected mode.
 ///
 /// Returns the URL to point the host at, or `None` when PAC is not selected.
-fn apply_pac_mode(state: &AppState, settings: AppSettings) -> Result<Option<String>, CommandError> {
+fn apply_pac_mode(
+    state: &AppState,
+    settings: &AppSettings,
+) -> Result<Option<String>, CommandError> {
     let mut server = lock(&state.pac);
     if settings.system_proxy_mode != SystemProxyModeSetting::Pac {
         // Dropping it releases the port and joins the accept thread.
@@ -1301,6 +1704,131 @@ fn export_diagnostics(state: State<'_, AppState>) -> Result<PathBuf, CommandErro
     clippy::needless_pass_by_value,
     reason = "Tauri commands receive State by value"
 )]
+fn export_preferences(state: State<'_, AppState>) -> Result<PathBuf, CommandError> {
+    let app = lock(&state.settings).clone();
+    let status = state.service().status();
+    PreferencesBundle::new(app, status.route, status.dns)
+        .write_to(&state.export_directory)
+        .map_err(|error| CommandError {
+            code: error.code(),
+            message: describe(&error),
+        })
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
+fn import_preferences(
+    app: AppHandle,
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<AppSettings, CommandError> {
+    let bundle = PreferencesBundle::read_from(std::path::Path::new(&path)).map_err(|error| {
+        CommandError {
+            code: error.code(),
+            message: describe(&error),
+        }
+    })?;
+    // Route/DNS refuse while connected; apply them first so a running session
+    // blocks the whole import instead of leaving app settings half-written.
+    state
+        .service()
+        .set_route_settings(bundle.route)
+        .map_err(|error| command_error(&error))?;
+    state
+        .service()
+        .set_dns_settings(bundle.dns)
+        .map_err(|error| command_error(&error))?;
+    set_app_settings(app, bundle.app, state)
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProfileImportResult {
+    app: AppSettings,
+    manual_node_count: usize,
+    subscription_count: usize,
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State by value"
+)]
+fn export_profile(state: State<'_, AppState>) -> Result<PathBuf, CommandError> {
+    let app = lock(&state.settings).clone();
+    let status = state.service().status();
+    let nodes = state
+        .service()
+        .export_profile_nodes()
+        .map_err(|error| CommandError {
+            code: error.code(),
+            message: describe(&error),
+        })?;
+    let subscriptions = state
+        .subscriptions
+        .export_backup_entries()
+        .map_err(|error| subscription_error(&error))?;
+    ProfileBundle::new(app, status.route, status.dns, nodes, subscriptions)
+        .write_to(&state.export_directory)
+        .map_err(|error| CommandError {
+            code: error.code(),
+            message: describe(&error),
+        })
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and deserialized arguments by value"
+)]
+fn import_profile(
+    app: AppHandle,
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<ProfileImportResult, CommandError> {
+    let bundle =
+        ProfileBundle::read_from(std::path::Path::new(&path)).map_err(|error| CommandError {
+            code: error.code(),
+            message: describe(&error),
+        })?;
+    if state.service().status().connected {
+        return Err(CommandError {
+            code: "session_active",
+            message: "断开连接后才能导入完整配置".to_owned(),
+        });
+    }
+    state
+        .subscriptions
+        .replace_from_backup(&bundle.subscriptions)
+        .map_err(|error| subscription_error(&error))?;
+    state
+        .service()
+        .import_profile_nodes(bundle.nodes_data())
+        .map_err(|error| command_error(&error))?;
+    state
+        .service()
+        .set_route_settings(bundle.route)
+        .map_err(|error| command_error(&error))?;
+    state
+        .service()
+        .set_dns_settings(bundle.dns)
+        .map_err(|error| command_error(&error))?;
+    let app_settings = set_app_settings(app, bundle.app, state)?;
+    Ok(ProfileImportResult {
+        app: app_settings,
+        manual_node_count: bundle.manual_nodes.len(),
+        subscription_count: bundle.subscriptions.len(),
+    })
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State by value"
+)]
 fn subscription_list(
     state: State<'_, AppState>,
 ) -> Result<Vec<DesktopSubscriptionSummary>, CommandError> {
@@ -1315,16 +1843,33 @@ fn subscription_list(
     clippy::needless_pass_by_value,
     reason = "Tauri commands receive State and deserialized arguments by value"
 )]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "create mirrors the editable subscription fields one-for-one"
+)]
 fn subscription_create(
     name: String,
     url: String,
     update_interval_minutes: u32,
     auto_update: bool,
+    user_agent: Option<String>,
+    include_keywords: String,
+    exclude_keywords: String,
+    subconverter_url: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<DesktopSubscriptionSummary, CommandError> {
     state
         .subscriptions
-        .create(&name, &url, update_interval_minutes, auto_update)
+        .create(
+            &name,
+            &url,
+            update_interval_minutes,
+            auto_update,
+            user_agent.as_deref(),
+            &include_keywords,
+            &exclude_keywords,
+            subconverter_url.as_deref(),
+        )
         .map_err(|error| subscription_error(&error))
 }
 
@@ -1333,6 +1878,10 @@ fn subscription_create(
     clippy::needless_pass_by_value,
     reason = "Tauri commands receive State and deserialized arguments by value"
 )]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "update mirrors the editable subscription fields one-for-one"
+)]
 fn subscription_update(
     id: String,
     name: String,
@@ -1340,6 +1889,10 @@ fn subscription_update(
     auto_update: bool,
     enabled: bool,
     url: Option<String>,
+    user_agent: Option<String>,
+    include_keywords: String,
+    exclude_keywords: String,
+    subconverter_url: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<DesktopSubscriptionSummary, CommandError> {
     ensure_subscription_mutation_ready(state.service().status().connected)?;
@@ -1353,6 +1906,10 @@ fn subscription_update(
             auto_update,
             enabled,
             url.as_deref(),
+            user_agent.as_deref(),
+            &include_keywords,
+            &exclude_keywords,
+            subconverter_url.as_deref(),
         )
         .map_err(|error| subscription_error(&error))?;
     state
@@ -1446,6 +2003,10 @@ fn handle_run_event(app: &AppHandle, event: tauri::RunEvent) {
 
 /// Opens the on-disk stores, wires the session service into Tauri state, and
 /// starts the background loops.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one linear wiring sequence; splitting it would hide the startup order"
+)]
 fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let logs = Arc::new(LogBuffer::default());
     install_log_subscriber(logs.clone());
@@ -1456,9 +2017,12 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let health_address = SocketAddr::from(([127, 0, 0, 1], defaults.socks.port().get()));
     let system_proxy =
         PlatformProxyControl::for_host(data_directory.join("system-proxy-recovery.json"));
+    let geo_assets = GeoAssetsStore::open(data_directory.join("geo"))?;
+    let core_install = CoreInstallStore::open(data_directory.join("cores"))?;
     let session = DesktopSession::new(
         PlatformSecretStore,
-        HostCoreControl::from_env(health_address, HEALTH_TIMEOUT),
+        HostCoreControl::from_install(Some(&core_install), health_address, HEALTH_TIMEOUT)
+            .with_xray_asset_directory(geo_assets.directory()),
         system_proxy.clone(),
         runtime_directory,
     );
@@ -1484,6 +2048,25 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     )?));
     let settings_store = SqliteAppSettingsStore::open(&node_database)?;
     let settings = settings_store.load()?;
+    {
+        let mut service = lock(&service);
+        service.set_core_preference(settings.core_preference.preference());
+        service.set_tun_enabled(settings.tun_enabled);
+        service.set_mux_enabled(settings.mux_enabled);
+        service.set_fragment_enabled(settings.fragment_enabled);
+        service.set_final_fragment_enabled(settings.final_fragment_enabled);
+        service.set_udp_noise_enabled(settings.udp_noise_enabled);
+        service.set_url_test_address(settings.url_test_address.clone());
+        service.set_allow_lan(settings.allow_lan);
+        service.set_inbound_udp_enabled(settings.inbound_udp_enabled);
+        service
+            .set_local_proxies(
+                settings.socks_port,
+                settings.http_port,
+                settings.clash_api_port,
+            )
+            .map_err(|error| -> Box<dyn std::error::Error> { describe(&error).into() })?;
+    }
     // Restored before the service reads the mode, so a session started on launch
     // points at a script that is already being served.
     let pac = if settings.system_proxy_mode == SystemProxyModeSetting::Pac {
@@ -1497,8 +2080,6 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     };
     {
         let mut service = lock(&service);
-        service.set_core_preference(settings.core_preference.preference());
-        service.set_tun_enabled(settings.tun_enabled);
         service.set_system_proxy_mode(
             settings
                 .system_proxy_mode
@@ -1517,9 +2098,11 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         system_proxy,
         logs: logs.clone(),
         settings_store: Mutex::new(settings_store),
-        settings: Mutex::new(settings),
+        settings: Mutex::new(settings.clone()),
         pac: Mutex::new(pac),
         export_directory: data_directory,
+        geo_assets,
+        core_install,
         tray,
         allow_exit: AtomicBool::new(false),
         exit_in_progress: AtomicBool::new(false),
@@ -1605,6 +2188,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(setup_app)
         .on_window_event(|window, event| {
             if window.label() == "main" {
@@ -1626,6 +2210,9 @@ pub fn run() {
             session_status,
             session_set_routing_mode,
             session_set_route_settings,
+            session_set_route_scheme,
+            session_create_route_scheme,
+            session_delete_route_scheme,
             session_set_dns_settings,
             session_import_node,
             session_import_nodes,
@@ -1634,17 +2221,32 @@ pub fn run() {
             session_node_groups,
             session_test_node,
             session_url_test,
+            session_speed_test,
             session_traffic,
+            session_connections,
+            session_close_connection,
+            session_close_connections,
+            session_clear_traffic,
             session_select_node,
+            session_switch_node,
+            session_set_node_enabled,
             session_edit_node,
+            session_node_draft,
+            session_update_node,
             session_move_node,
+            session_reorder_nodes,
             session_set_node_group,
+            session_set_node_group_strategy,
             session_delete_node,
             session_export_node_link,
             session_clone_node,
             session_node_qr_code,
             session_read_qr_code,
             session_check_update,
+            geo_assets_status,
+            geo_assets_update,
+            core_check_update,
+            core_download_update,
             session_node_traffic,
             session_remove_duplicate_nodes,
             session_connect,
@@ -1657,6 +2259,10 @@ pub fn run() {
             system_proxy_recover,
             system_proxy_dismiss,
             export_diagnostics,
+            export_preferences,
+            import_preferences,
+            export_profile,
+            import_profile,
             subscription_list,
             subscription_create,
             subscription_update,

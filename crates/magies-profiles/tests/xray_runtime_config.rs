@@ -11,7 +11,7 @@ use magies_profiles::{
     XrayRuntimeConfigGenerator, XrayRuntimeProfile,
 };
 use magies_routing::{RouteOutbound, RouteProfile, RoutingMode};
-use serde_json::Value;
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 const USER_ID: &str = "b0dd64e4-0fbd-4038-9139-d1f32a68a0dc";
@@ -24,6 +24,7 @@ fn node() -> (ProxyNode, StoredNodeCredential) {
         udp_enabled: true,
         transport: None,
         tls: None,
+        xray_finalmask_json: None,
         credential: ManualCredentialDraft::Vless {
             user_id: Uuid::parse_str(USER_ID).unwrap(),
             flow: None,
@@ -155,6 +156,189 @@ fn both_local_listeners_appear_with_sniffing() {
 }
 
 #[test]
+fn enables_outbound_mux_when_requested() {
+    let (node, credential) = node();
+    let dns = dns(false);
+    let route = global_route();
+
+    let config = generate(
+        &XrayRuntimeProfile::new(&node, credential.as_node_credential(), &dns, &route)
+            .with_mux(true),
+    );
+    let proxy = config["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert_eq!(
+        proxy["mux"],
+        serde_json::json!({ "enabled": true, "concurrency": 8 })
+    );
+}
+
+#[test]
+fn enables_fragment_dialer_and_adds_the_freedom_outbound_when_requested() {
+    let (node, credential) = node();
+    let dns = dns(false);
+    let route = global_route();
+
+    let config = generate(
+        &XrayRuntimeProfile::new(&node, credential.as_node_credential(), &dns, &route)
+            .with_fragment(true),
+    );
+    let outbounds = config["outbounds"].as_array().unwrap();
+    let proxy = outbounds
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert_eq!(
+        proxy["streamSettings"]["sockopt"]["dialerProxy"],
+        "fragment"
+    );
+
+    let fragment = outbounds
+        .iter()
+        .find(|outbound| outbound["tag"] == "fragment")
+        .unwrap();
+    assert_eq!(fragment["protocol"], "freedom");
+    assert_eq!(fragment["settings"]["fragment"]["packets"], "tlshello");
+    assert_eq!(fragment["settings"]["fragment"]["length"], "100-200");
+    assert_eq!(fragment["settings"]["fragment"]["interval"], "10-20");
+}
+
+#[test]
+fn enables_udp_noise_on_the_freedom_outbound_when_requested() {
+    let (node, credential) = node();
+    let dns = dns(false);
+    let route = global_route();
+
+    let config = generate(
+        &XrayRuntimeProfile::new(&node, credential.as_node_credential(), &dns, &route)
+            .with_udp_noise(true),
+    );
+    let outbounds = config["outbounds"].as_array().unwrap();
+    let proxy = outbounds
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert_eq!(
+        proxy["streamSettings"]["sockopt"]["dialerProxy"],
+        "fragment"
+    );
+
+    let fragment = outbounds
+        .iter()
+        .find(|outbound| outbound["tag"] == "fragment")
+        .unwrap();
+    assert_eq!(fragment["protocol"], "freedom");
+    assert!(fragment["settings"]["fragment"].is_null());
+    assert_eq!(
+        fragment["settings"]["noises"],
+        serde_json::json!([{
+            "type": "rand",
+            "packet": "10-20",
+            "delay": "10-16"
+        }])
+    );
+}
+
+#[test]
+fn combines_fragment_and_udp_noise_on_one_freedom_outbound() {
+    let (node, credential) = node();
+    let dns = dns(false);
+    let route = global_route();
+
+    let config = generate(
+        &XrayRuntimeProfile::new(&node, credential.as_node_credential(), &dns, &route)
+            .with_fragment(true)
+            .with_udp_noise(true),
+    );
+    let fragment = config["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["tag"] == "fragment")
+        .unwrap();
+    assert_eq!(fragment["settings"]["fragment"]["packets"], "tlshello");
+    assert_eq!(fragment["settings"]["noises"][0]["type"], "rand");
+}
+
+#[test]
+fn no_fragment_outbound_appears_when_fragment_is_off() {
+    let (node, credential) = node();
+    let dns = dns(false);
+    let route = global_route();
+
+    let config = generate(&XrayRuntimeProfile::new(
+        &node,
+        credential.as_node_credential(),
+        &dns,
+        &route,
+    ));
+
+    let outbounds = config["outbounds"].as_array().unwrap();
+    assert!(
+        !outbounds
+            .iter()
+            .any(|outbound| outbound["tag"] == "fragment")
+    );
+    let proxy = outbounds
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert!(proxy["streamSettings"]["sockopt"].is_null());
+}
+
+#[test]
+fn wraps_the_proxy_outbound_with_finalmask_when_final_fragment_is_on() {
+    let (node, credential) = node();
+    let dns = dns(false);
+    let route = global_route();
+
+    let config = generate(
+        &XrayRuntimeProfile::new(&node, credential.as_node_credential(), &dns, &route)
+            .with_final_fragment(true),
+    );
+    let outbounds = config["outbounds"].as_array().unwrap();
+    let wrapper = outbounds
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert_eq!(wrapper["protocol"], "freedom");
+    assert_eq!(
+        wrapper["streamSettings"]["finalmask"]["tcp"][0]["settings"]["lengths"],
+        json!(["50-100"])
+    );
+}
+
+#[test]
+fn uses_a_per_node_finalmask_override_when_present() {
+    let (mut node, credential) = node();
+    node.xray_finalmask_json = Some(
+        r#"{"type":"fragment","settings":{"packets":"tlshello","lengths":["80-120"],"delays":["5-10"],"maxSplit":0}}"#
+            .to_owned(),
+    );
+    let dns = dns(false);
+    let route = global_route();
+
+    let config = generate(
+        &XrayRuntimeProfile::new(&node, credential.as_node_credential(), &dns, &route)
+            .with_final_fragment(true),
+    );
+    let wrapper = config["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert_eq!(
+        wrapper["streamSettings"]["finalmask"]["tcp"][0]["settings"]["lengths"],
+        json!(["80-120"])
+    );
+}
+
+#[test]
 fn duplicate_local_ports_are_refused() {
     let dns = dns(false);
     let route = direct_route();
@@ -280,4 +464,62 @@ fn the_generated_config_never_mentions_the_credential() {
     // outbound needs it and nowhere else.
     let text = config.to_string();
     assert_eq!(text.matches(USER_ID).count(), 1);
+}
+
+#[test]
+fn urltest_group_uses_a_leastping_balancer_instead_of_a_proxy_outbound() {
+    let (node, credential) = node();
+    let (other, other_credential) = ManualNodeDraft {
+        name: "Osaka".to_owned(),
+        server: "other.example.com".to_owned(),
+        port: 443,
+        udp_enabled: true,
+        transport: None,
+        tls: None,
+        xray_finalmask_json: None,
+        credential: ManualCredentialDraft::Vless {
+            user_id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
+            flow: None,
+        },
+    }
+    .build(
+        Uuid::parse_str("018f78b5-08ee-7caa-94f3-1d5d781aba23").unwrap(),
+        CredentialRef::new("node/other").unwrap(),
+    )
+    .unwrap();
+    let dns = dns(false);
+    let route = global_route();
+    let profile = XrayRuntimeProfile::new(&node, credential.as_node_credential(), &dns, &route)
+        .with_urltest(
+            vec![
+                (&node, credential.as_node_credential()),
+                (&other, other_credential.as_node_credential()),
+            ],
+            "https://www.gstatic.com/generate_204",
+        );
+
+    let config = generate(&profile);
+    let tags: Vec<_> = config["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|outbound| outbound["tag"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(tags.contains(&format!("node-{}", node.id)));
+    assert!(tags.contains(&format!("node-{}", other.id)));
+    assert!(!tags.contains(&"proxy".to_owned()));
+    assert_eq!(config["routing"]["balancers"][0]["tag"], "proxy");
+    assert_eq!(
+        config["routing"]["balancers"][0]["strategy"]["type"],
+        "leastPing"
+    );
+    assert_eq!(config["observatory"]["subjectSelector"], json!(["node-"]));
+    let catch_all = config["routing"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|rule| rule.get("balancerTag").is_some())
+        .unwrap();
+    assert_eq!(catch_all["balancerTag"], "proxy");
+    assert!(catch_all.get("outboundTag").is_none());
 }

@@ -11,6 +11,10 @@
 以本增补为准；未冲突的协议、领域模型、Core Adapter、路由、DNS、日志、
 安全与隐私要求继续有效。
 
+关于桌面壳层 UI / 信息架构：V1.0 §3.3 第 2 条「不以 v2rayN 界面为模板」
+由 [ADR 0004](adr/0004-v2rayn-ui-template.md) 取代——Tauri 桌面壳以 v2rayN
+Avalonia 为交互与视觉模板（不拷贝其 GPL 源码）。
+
 ## 2. 目标平台
 
 | 平台 | 最低版本 | CPU | V0.1 状态 |

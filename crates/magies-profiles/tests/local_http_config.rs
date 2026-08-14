@@ -75,3 +75,12 @@ fn generates_a_loopback_sing_box_http_inbound() {
         })
     );
 }
+
+#[test]
+fn allow_lan_binds_sing_box_http_on_all_interfaces() {
+    let profile = LocalHttpProfile::new(18_092).unwrap().with_allow_lan(true);
+    let generated = LocalHttpConfigGenerator::generate(CoreType::SingBox, &profile);
+
+    assert_eq!(generated.json()["inbounds"][0]["listen"], "0.0.0.0");
+    assert!(profile.allow_lan());
+}

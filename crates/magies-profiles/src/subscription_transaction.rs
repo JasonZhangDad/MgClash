@@ -115,8 +115,9 @@ impl SqliteSubscriptionStore {
         self.connection.execute(
             "INSERT INTO subscriptions (
                 id, name, url_secret_ref, auto_update, update_interval,
-                etag, last_modified, last_updated_at, enabled
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                etag, last_modified, last_updated_at, enabled,
+                user_agent, include_keywords, exclude_keywords, subconverter_url
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 subscription.id.to_string(),
                 subscription.name.as_str(),
@@ -127,6 +128,10 @@ impl SqliteSubscriptionStore {
                 subscription.last_modified,
                 subscription.last_updated_at.map(TimestampMillis::get),
                 subscription.enabled,
+                subscription.user_agent,
+                subscription.include_keywords,
+                subscription.exclude_keywords,
+                subscription.subconverter_url,
             ],
         )?;
         Ok(())
@@ -140,7 +145,8 @@ impl SqliteSubscriptionStore {
     pub fn subscriptions(&self) -> Result<Vec<Subscription>, SubscriptionTransactionError> {
         let mut statement = self.connection.prepare(
             "SELECT id, name, url_secret_ref, auto_update, update_interval,
-                    etag, last_modified, last_updated_at, enabled
+                    etag, last_modified, last_updated_at, enabled,
+                    user_agent, include_keywords, exclude_keywords, subconverter_url
              FROM subscriptions ORDER BY rowid",
         )?;
         let mut rows = statement.query([])?;
@@ -162,7 +168,8 @@ impl SqliteSubscriptionStore {
     ) -> Result<Option<Subscription>, SubscriptionTransactionError> {
         let mut statement = self.connection.prepare(
             "SELECT id, name, url_secret_ref, auto_update, update_interval,
-                    etag, last_modified, last_updated_at, enabled
+                    etag, last_modified, last_updated_at, enabled,
+                    user_agent, include_keywords, exclude_keywords, subconverter_url
              FROM subscriptions WHERE id = ?1",
         )?;
         let mut rows = statement.query([id.to_string()])?;
@@ -181,13 +188,19 @@ impl SqliteSubscriptionStore {
     ) -> Result<(), SubscriptionTransactionError> {
         let updated = self.connection.execute(
             "UPDATE subscriptions
-             SET name = ?1, auto_update = ?2, update_interval = ?3, enabled = ?4
-             WHERE id = ?5",
+             SET name = ?1, auto_update = ?2, update_interval = ?3, enabled = ?4,
+                 user_agent = ?5, include_keywords = ?6, exclude_keywords = ?7,
+                 subconverter_url = ?8
+             WHERE id = ?9",
             params![
                 subscription.name.as_str(),
                 subscription.auto_update,
                 i64::from(subscription.update_interval_minutes.get()),
                 subscription.enabled,
+                subscription.user_agent,
+                subscription.include_keywords,
+                subscription.exclude_keywords,
+                subscription.subconverter_url,
                 subscription.id.to_string(),
             ],
         )?;
@@ -236,7 +249,8 @@ impl SqliteSubscriptionStore {
         let subscription = {
             let mut statement = transaction.prepare(
                 "SELECT id, name, url_secret_ref, auto_update, update_interval,
-                        etag, last_modified, last_updated_at, enabled
+                        etag, last_modified, last_updated_at, enabled,
+                        user_agent, include_keywords, exclude_keywords, subconverter_url
                  FROM subscriptions WHERE id = ?1",
             )?;
             let mut rows = statement.query([id.to_string()])?;
@@ -373,6 +387,30 @@ impl SqliteSubscriptionStore {
         Ok(nodes)
     }
 
+    /// Loads every node owned by an enabled subscription, including disabled
+    /// nodes so the UI can show and re-enable them.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when a database row is unreadable or corrupt.
+    pub fn listed_nodes(&self) -> Result<Vec<ProxyNode>, SubscriptionTransactionError> {
+        let mut statement = self.connection.prepare(
+            "SELECT n.id, n.name, n.protocol, n.server, n.port, n.credential_ref,
+                    n.transport_json, n.tls_json, n.udp_enabled, n.subscription_id,
+                    n.group_id, n.latency_ms, n.last_tested_at, n.enabled
+             FROM nodes n
+             JOIN subscriptions s ON s.id = n.subscription_id
+             WHERE s.enabled = 1
+             ORDER BY s.rowid, n.rowid",
+        )?;
+        let mut rows = statement.query([])?;
+        let mut nodes = Vec::new();
+        while let Some(row) = rows.next()? {
+            nodes.push(decode_node(row)?);
+        }
+        Ok(nodes)
+    }
+
     /// Loads every enabled node owned by an enabled subscription.
     ///
     /// # Errors
@@ -394,6 +432,38 @@ impl SqliteSubscriptionStore {
             nodes.push(decode_node(row)?);
         }
         Ok(nodes)
+    }
+
+    /// Sets whether a subscription-owned node may be selected or connected.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SubscriptionTransactionError::NodeNotFound`] when `id` is
+    /// absent, or a typed database error when the update cannot be stored.
+    pub fn set_node_enabled(
+        &self,
+        id: Uuid,
+        enabled: bool,
+    ) -> Result<ProxyNode, SubscriptionTransactionError> {
+        let mut node = {
+            let mut statement = self.connection.prepare(
+                "SELECT id, name, protocol, server, port, credential_ref,
+                        transport_json, tls_json, udp_enabled, subscription_id,
+                        group_id, latency_ms, last_tested_at, enabled
+                 FROM nodes WHERE id = ?1",
+            )?;
+            let mut rows = statement.query([id.to_string()])?;
+            rows.next()?
+                .map(decode_node)
+                .transpose()?
+                .ok_or(SubscriptionTransactionError::NodeNotFound { id })?
+        };
+        self.connection.execute(
+            "UPDATE nodes SET enabled = ?1 WHERE id = ?2",
+            params![i64::from(enabled), id.to_string()],
+        )?;
+        node.enabled = enabled;
+        Ok(node)
     }
 
     /// Records the latest endpoint test without changing subscription
@@ -533,7 +603,11 @@ impl SqliteSubscriptionStore {
                 etag TEXT,
                 last_modified TEXT,
                 last_updated_at INTEGER,
-                enabled INTEGER NOT NULL CHECK (enabled IN (0, 1))
+                enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+                user_agent TEXT,
+                include_keywords TEXT NOT NULL DEFAULT '',
+                exclude_keywords TEXT NOT NULL DEFAULT '',
+                subconverter_url TEXT
              );
              CREATE TABLE IF NOT EXISTS nodes (
                 id TEXT PRIMARY KEY NOT NULL,
@@ -560,6 +634,20 @@ impl SqliteSubscriptionStore {
                 node_id TEXT NOT NULL
              );",
         )?;
+        // Existing installs keep the older column list; only a duplicate column
+        // is tolerated so a second open after upgrade is a no-op.
+        for migration in [
+            "ALTER TABLE subscriptions ADD COLUMN user_agent TEXT;",
+            "ALTER TABLE subscriptions ADD COLUMN include_keywords TEXT NOT NULL DEFAULT '';",
+            "ALTER TABLE subscriptions ADD COLUMN exclude_keywords TEXT NOT NULL DEFAULT '';",
+            "ALTER TABLE subscriptions ADD COLUMN subconverter_url TEXT;",
+        ] {
+            if let Err(error) = connection.execute_batch(migration)
+                && !error.to_string().contains("duplicate column")
+            {
+                return Err(error.into());
+            }
+        }
         Ok(Self { connection })
     }
 }
@@ -632,6 +720,10 @@ fn decode_subscription(row: &Row<'_>) -> Result<Subscription, SubscriptionTransa
     subscription.last_modified = row.get(6)?;
     subscription.last_updated_at = row.get::<_, Option<i64>>(7)?.map(TimestampMillis::new);
     subscription.enabled = row.get(8)?;
+    subscription.user_agent = row.get(9)?;
+    subscription.include_keywords = row.get::<_, Option<String>>(10)?.unwrap_or_default();
+    subscription.exclude_keywords = row.get::<_, Option<String>>(11)?.unwrap_or_default();
+    subscription.subconverter_url = row.get(12)?;
     Ok(subscription)
 }
 
@@ -696,6 +788,13 @@ fn protocol_name(protocol: ProxyProtocol) -> &'static str {
         ProxyProtocol::Trojan => "trojan",
         ProxyProtocol::Shadowsocks => "shadowsocks",
         ProxyProtocol::Hysteria2 => "hysteria2",
+        ProxyProtocol::Tuic => "tuic",
+        ProxyProtocol::Socks => "socks",
+        ProxyProtocol::Http => "http",
+        ProxyProtocol::WireGuard => "wireguard",
+        ProxyProtocol::AnyTls => "anytls",
+        ProxyProtocol::Naive => "naive",
+        ProxyProtocol::Custom => "custom",
     }
 }
 
@@ -706,6 +805,13 @@ fn decode_protocol(value: &str) -> Result<ProxyProtocol, SubscriptionTransaction
         "trojan" => Ok(ProxyProtocol::Trojan),
         "shadowsocks" => Ok(ProxyProtocol::Shadowsocks),
         "hysteria2" => Ok(ProxyProtocol::Hysteria2),
+        "tuic" => Ok(ProxyProtocol::Tuic),
+        "socks" => Ok(ProxyProtocol::Socks),
+        "http" => Ok(ProxyProtocol::Http),
+        "wireguard" => Ok(ProxyProtocol::WireGuard),
+        "anytls" => Ok(ProxyProtocol::AnyTls),
+        "naive" => Ok(ProxyProtocol::Naive),
+        "custom" => Ok(ProxyProtocol::Custom),
         _ => Err(SubscriptionTransactionError::InvalidStoredProtocol {
             value: value.to_owned(),
         }),

@@ -35,6 +35,7 @@ fn draft(credential: ManualCredentialDraft) -> ManualNodeDraft {
         udp_enabled: true,
         transport: None,
         tls: None,
+        xray_finalmask_json: None,
         credential,
     }
 }
@@ -58,6 +59,30 @@ fn hysteria2_draft() -> ManualNodeDraft {
     let mut value = draft(hysteria2());
     value.tls = Some(plain_tls());
     value
+}
+
+fn anytls() -> ManualCredentialDraft {
+    ManualCredentialDraft::AnyTls {
+        password: "hunter2".to_owned(),
+    }
+}
+
+/// `AnyTLS` is the other protocol that requires TLS (or Reality) up front.
+fn anytls_draft() -> ManualNodeDraft {
+    let mut value = draft(anytls());
+    value.tls = Some(plain_tls());
+    value
+}
+
+fn wireguard() -> ManualCredentialDraft {
+    ManualCredentialDraft::WireGuard {
+        private_key: "private-key".to_owned(),
+        peer_public_key: "peer-public-key".to_owned(),
+        pre_shared_key: None,
+        local_address: vec!["10.0.0.2/32".to_owned()],
+        mtu: None,
+        reserved: None,
+    }
 }
 
 fn plain_tls() -> TlsConfig {
@@ -179,6 +204,401 @@ fn builds_a_hysteria2_node_with_obfuscation() {
     assert_eq!(obfuscation.max_packet_size(), None);
 }
 
+#[test]
+fn builds_a_socks_node() {
+    let (node, credential) = build(draft(ManualCredentialDraft::Socks {
+        username: Some("alice".to_owned()),
+        password: Some("hunter2".to_owned()),
+    }))
+    .unwrap();
+
+    assert_eq!(node.protocol_type, ProxyProtocol::Socks);
+    assert_eq!(node.transport, Some(TransportConfig::Tcp));
+    assert!(node.tls.is_none());
+    let StoredNodeCredential::Socks(credential) = credential else {
+        panic!("expected a SOCKS credential");
+    };
+    assert_eq!(credential.username(), Some("alice"));
+    assert_eq!(credential.password(), Some("hunter2"));
+}
+
+#[test]
+fn builds_an_anonymous_socks_node() {
+    let (_, credential) = build(draft(ManualCredentialDraft::Socks {
+        username: None,
+        password: None,
+    }))
+    .unwrap();
+
+    let StoredNodeCredential::Socks(credential) = credential else {
+        panic!("expected a SOCKS credential");
+    };
+    assert_eq!(credential.username(), None);
+    assert_eq!(credential.password(), None);
+}
+
+#[test]
+fn builds_an_http_node_with_tls() {
+    let mut value = draft(ManualCredentialDraft::Http {
+        username: Some("alice".to_owned()),
+        password: Some("hunter2".to_owned()),
+    });
+    value.tls = Some(plain_tls());
+
+    let (node, credential) = build(value).unwrap();
+
+    assert_eq!(node.protocol_type, ProxyProtocol::Http);
+    assert_eq!(node.transport, Some(TransportConfig::Tcp));
+    assert!(matches!(node.tls, Some(TlsConfig::Tls { .. })));
+    let StoredNodeCredential::Http(credential) = credential else {
+        panic!("expected an HTTP credential");
+    };
+    assert_eq!(credential.username(), Some("alice"));
+}
+
+#[test]
+fn builds_a_wireguard_node() {
+    let (node, credential) = build(draft(ManualCredentialDraft::WireGuard {
+        private_key: "private-key".to_owned(),
+        peer_public_key: "peer-public-key".to_owned(),
+        pre_shared_key: Some("psk".to_owned()),
+        local_address: vec!["10.0.0.2/32".to_owned(), "fd00::1/128".to_owned()],
+        mtu: Some(1420),
+        reserved: Some([1, 2, 3]),
+    }))
+    .unwrap();
+
+    assert_eq!(node.protocol_type, ProxyProtocol::WireGuard);
+    // WireGuard is its own tunnel: no stream transport, no TLS.
+    assert!(node.transport.is_none());
+    assert!(node.tls.is_none());
+    let StoredNodeCredential::WireGuard(credential) = credential else {
+        panic!("expected a WireGuard credential");
+    };
+    assert_eq!(credential.private_key(), "private-key");
+    assert_eq!(credential.peer_public_key(), "peer-public-key");
+    assert_eq!(credential.pre_shared_key(), Some("psk"));
+    assert_eq!(
+        credential.local_address(),
+        &["10.0.0.2/32".to_owned(), "fd00::1/128".to_owned()]
+    );
+    assert_eq!(credential.mtu(), Some(1420));
+    assert_eq!(credential.reserved(), Some([1, 2, 3]));
+}
+
+#[test]
+fn builds_an_anytls_node_with_tls() {
+    let (node, credential) = build(anytls_draft()).unwrap();
+
+    assert_eq!(node.protocol_type, ProxyProtocol::AnyTls);
+    // AnyTLS is TLS from the first byte: no stream transport of its own.
+    assert!(node.transport.is_none());
+    assert!(matches!(node.tls, Some(TlsConfig::Tls { .. })));
+    let StoredNodeCredential::AnyTls(credential) = credential else {
+        panic!("expected an AnyTLS credential");
+    };
+    assert_eq!(credential.password(), "hunter2");
+}
+
+#[test]
+fn builds_an_anytls_node_with_reality() {
+    let mut value = draft(anytls());
+    value.tls = Some(TlsConfig::Reality {
+        server_name: "edge.example.com".to_owned(),
+        public_key: "key".to_owned(),
+        short_id: None,
+        fingerprint: None,
+        alpn: Vec::new(),
+        spider_x: None,
+    });
+
+    let (node, _) = build(value).unwrap();
+
+    assert!(matches!(node.tls, Some(TlsConfig::Reality { .. })));
+}
+
+#[test]
+fn rejects_a_transport_for_anytls() {
+    let mut value = anytls_draft();
+    value.transport = Some(TransportConfig::Tcp);
+
+    assert_eq!(
+        build(value).unwrap_err(),
+        ManualNodeDraftError::AnyTlsRejectsTransport
+    );
+}
+
+#[test]
+fn rejects_anytls_without_tls_or_reality() {
+    let mut value = anytls_draft();
+    value.tls = None;
+
+    assert_eq!(
+        build(value).unwrap_err(),
+        ManualNodeDraftError::AnyTlsRequiresTls
+    );
+}
+
+#[test]
+fn rejects_an_empty_anytls_password() {
+    let mut value = anytls_draft();
+    value.credential = ManualCredentialDraft::AnyTls {
+        password: "  ".to_owned(),
+    };
+
+    assert_eq!(
+        build(value).unwrap_err(),
+        ManualNodeDraftError::MissingAnyTlsPassword
+    );
+}
+
+fn naive() -> ManualCredentialDraft {
+    ManualCredentialDraft::Naive {
+        username: Some("alice".to_owned()),
+        password: Some("hunter2".to_owned()),
+        quic: false,
+        quic_congestion_control: None,
+    }
+}
+
+fn naive_draft() -> ManualNodeDraft {
+    let mut value = draft(naive());
+    value.transport = None;
+    value.tls = Some(TlsConfig::Tls {
+        server_name: Some("cdn.example.com".to_owned()),
+        allow_insecure: false,
+        alpn: Vec::new(),
+        fingerprint: None,
+        pinned_sha256: None,
+    });
+    value
+}
+
+#[test]
+fn builds_a_naive_node_with_quic() {
+    let mut value = naive_draft();
+    value.credential = ManualCredentialDraft::Naive {
+        username: Some("alice".to_owned()),
+        password: Some("hunter2".to_owned()),
+        quic: true,
+        quic_congestion_control: Some(magies_profiles::NaiveCongestionControl::Bbr),
+    };
+    let (node, credential) = build(value).unwrap();
+
+    assert_eq!(node.protocol_type, ProxyProtocol::Naive);
+    assert!(node.transport.is_none());
+    assert!(matches!(node.tls, Some(TlsConfig::Tls { .. })));
+    let StoredNodeCredential::Naive(credential) = credential else {
+        panic!("expected a Naive credential");
+    };
+    assert!(credential.quic());
+    assert_eq!(
+        credential.quic_congestion_control(),
+        Some(magies_profiles::NaiveCongestionControl::Bbr)
+    );
+}
+
+#[test]
+fn rejects_a_transport_for_naive() {
+    let mut value = naive_draft();
+    value.transport = Some(TransportConfig::Tcp);
+
+    assert_eq!(
+        build(value).unwrap_err(),
+        ManualNodeDraftError::NaiveRejectsTransport
+    );
+}
+
+#[test]
+fn rejects_naive_without_tls() {
+    let mut value = naive_draft();
+    value.tls = None;
+
+    assert_eq!(
+        build(value).unwrap_err(),
+        ManualNodeDraftError::NaiveRequiresTls
+    );
+}
+
+#[test]
+fn rejects_naive_reality_and_tls_extras() {
+    let mut reality = naive_draft();
+    reality.tls = Some(TlsConfig::Reality {
+        server_name: "edge.example.com".to_owned(),
+        public_key: "key".to_owned(),
+        short_id: None,
+        fingerprint: None,
+        alpn: Vec::new(),
+        spider_x: None,
+    });
+    assert_eq!(
+        build(reality).unwrap_err(),
+        ManualNodeDraftError::NaiveRejectsReality
+    );
+
+    let mut extras = naive_draft();
+    extras.tls = Some(TlsConfig::Tls {
+        server_name: None,
+        allow_insecure: true,
+        alpn: Vec::new(),
+        fingerprint: None,
+        pinned_sha256: None,
+    });
+    assert_eq!(
+        build(extras).unwrap_err(),
+        ManualNodeDraftError::NaiveRejectsTlsExtras
+    );
+}
+
+#[test]
+fn rejects_a_transport_for_wireguard() {
+    let mut value = draft(wireguard());
+    value.transport = Some(TransportConfig::Tcp);
+
+    assert_eq!(
+        build(value).unwrap_err(),
+        ManualNodeDraftError::WireGuardRejectsTransport
+    );
+}
+
+#[test]
+fn rejects_tls_for_wireguard() {
+    let mut value = draft(wireguard());
+    value.tls = Some(plain_tls());
+
+    assert_eq!(
+        build(value).unwrap_err(),
+        ManualNodeDraftError::WireGuardRejectsTls
+    );
+}
+
+#[test]
+fn rejects_empty_wireguard_fields() {
+    let missing_private_key = draft(ManualCredentialDraft::WireGuard {
+        private_key: "  ".to_owned(),
+        peer_public_key: "peer-public-key".to_owned(),
+        pre_shared_key: None,
+        local_address: vec!["10.0.0.2/32".to_owned()],
+        mtu: None,
+        reserved: None,
+    });
+    assert_eq!(
+        build(missing_private_key).unwrap_err(),
+        ManualNodeDraftError::MissingWireGuardPrivateKey
+    );
+
+    let missing_peer_key = draft(ManualCredentialDraft::WireGuard {
+        private_key: "private-key".to_owned(),
+        peer_public_key: String::new(),
+        pre_shared_key: None,
+        local_address: vec!["10.0.0.2/32".to_owned()],
+        mtu: None,
+        reserved: None,
+    });
+    assert_eq!(
+        build(missing_peer_key).unwrap_err(),
+        ManualNodeDraftError::MissingWireGuardPeerPublicKey
+    );
+
+    let missing_address = draft(ManualCredentialDraft::WireGuard {
+        private_key: "private-key".to_owned(),
+        peer_public_key: "peer-public-key".to_owned(),
+        pre_shared_key: None,
+        local_address: vec!["  ".to_owned()],
+        mtu: None,
+        reserved: None,
+    });
+    assert_eq!(
+        build(missing_address).unwrap_err(),
+        ManualNodeDraftError::MissingWireGuardLocalAddress
+    );
+}
+
+#[test]
+fn rejects_socks_tls() {
+    let mut value = draft(ManualCredentialDraft::Socks {
+        username: None,
+        password: None,
+    });
+    value.tls = Some(plain_tls());
+
+    assert_eq!(
+        build(value).unwrap_err(),
+        ManualNodeDraftError::SocksRejectsTls
+    );
+}
+
+#[test]
+fn rejects_a_non_tcp_transport_for_socks_and_http() {
+    let mut socks = draft(ManualCredentialDraft::Socks {
+        username: None,
+        password: None,
+    });
+    socks.transport = Some(TransportConfig::WebSocket {
+        path: "/ray".to_owned(),
+        host: None,
+    });
+    assert_eq!(
+        build(socks).unwrap_err(),
+        ManualNodeDraftError::SocksRequiresTcpTransport
+    );
+
+    let mut http = draft(ManualCredentialDraft::Http {
+        username: None,
+        password: None,
+    });
+    http.transport = Some(TransportConfig::WebSocket {
+        path: "/ray".to_owned(),
+        host: None,
+    });
+    assert_eq!(
+        build(http).unwrap_err(),
+        ManualNodeDraftError::HttpRequiresTcpTransport
+    );
+}
+
+#[test]
+fn rejects_reality_for_http() {
+    let mut value = draft(ManualCredentialDraft::Http {
+        username: None,
+        password: None,
+    });
+    value.tls = Some(TlsConfig::Reality {
+        server_name: "edge.example.com".to_owned(),
+        public_key: "key".to_owned(),
+        short_id: None,
+        fingerprint: None,
+        alpn: Vec::new(),
+        spider_x: None,
+    });
+
+    assert_eq!(
+        build(value).unwrap_err(),
+        ManualNodeDraftError::HttpRejectsReality
+    );
+}
+
+#[test]
+fn rejects_a_password_without_a_username_for_socks_and_http() {
+    let socks = draft(ManualCredentialDraft::Socks {
+        username: None,
+        password: Some("hunter2".to_owned()),
+    });
+    assert_eq!(
+        build(socks).unwrap_err(),
+        ManualNodeDraftError::SocksPasswordRequiresUsername
+    );
+
+    let http = draft(ManualCredentialDraft::Http {
+        username: None,
+        password: Some("hunter2".to_owned()),
+    });
+    assert_eq!(
+        build(http).unwrap_err(),
+        ManualNodeDraftError::HttpPasswordRequiresUsername
+    );
+}
+
 /// The guarantee that matters: anything the form accepts must survive outbound
 /// generation, otherwise the node only fails once the user hits connect.
 #[test]
@@ -198,6 +618,17 @@ fn every_accepted_draft_generates_a_sing_box_outbound() {
             password: "hunter2".to_owned(),
         }),
         hysteria2_draft(),
+        anytls_draft(),
+        naive_draft(),
+        draft(ManualCredentialDraft::Socks {
+            username: Some("alice".to_owned()),
+            password: Some("hunter2".to_owned()),
+        }),
+        draft(ManualCredentialDraft::Http {
+            username: None,
+            password: None,
+        }),
+        draft(wireguard()),
     ];
 
     for value in drafts {
@@ -237,6 +668,42 @@ fn generates_an_outbound_for_a_grpc_node() {
 
     assert!(
         SingBoxOutboundConfigGenerator::generate(&node, credential.as_node_credential()).is_ok()
+    );
+}
+
+#[test]
+fn builds_a_vless_node_with_kcp_transport() {
+    let mut value = draft(vless());
+    value.transport = Some(TransportConfig::Kcp {
+        mtu: Some(1350),
+        tti: Some(50),
+        uplink_capacity: None,
+        downlink_capacity: None,
+        congestion: false,
+        header_type: Some("none".to_owned()),
+        seed: Some("s3cr3t".to_owned()),
+    });
+
+    let (node, credential) = build(value).unwrap();
+
+    assert_eq!(
+        node.transport,
+        Some(TransportConfig::Kcp {
+            mtu: Some(1350),
+            tti: Some(50),
+            uplink_capacity: None,
+            downlink_capacity: None,
+            congestion: false,
+            header_type: Some("none".to_owned()),
+            seed: Some("s3cr3t".to_owned()),
+        })
+    );
+
+    // The pinned sing-box build has no mKCP transport at all; the capability
+    // matrix (covered separately) is what routes this node to Xray instead.
+    assert_eq!(
+        SingBoxOutboundConfigGenerator::generate(&node, credential.as_node_credential()),
+        Err(magies_profiles::OutboundConfigError::KcpUnsupported)
     );
 }
 
@@ -498,6 +965,149 @@ fn defaults_optional_json_fields_when_omitted() {
     assert!(node.udp_enabled);
     assert_eq!(node.transport, Some(TransportConfig::Tcp));
     assert!(node.tls.is_none());
+}
+
+#[test]
+fn builds_a_custom_node_with_placeholder_endpoint() {
+    let document = r#"{"inbounds":[],"outbounds":[{"type":"direct"}]}"#;
+    let value = ManualNodeDraft {
+        name: "My JSON".to_owned(),
+        server: "ignored.example.com".to_owned(),
+        port: 8443,
+        udp_enabled: true,
+        transport: None,
+        tls: None,
+        xray_finalmask_json: None,
+        credential: ManualCredentialDraft::Custom {
+            core: magies_domain::CoreType::SingBox,
+            document: document.to_owned(),
+        },
+    };
+    let (node, credential) = value.build(node_id(), credential_ref()).unwrap();
+    assert_eq!(node.protocol_type, ProxyProtocol::Custom);
+    assert_eq!(node.server.as_str(), "127.0.0.1");
+    assert_eq!(node.port.get(), 443);
+    assert!(node.transport.is_none());
+    assert!(node.tls.is_none());
+    let StoredNodeCredential::Custom(stored) = credential else {
+        panic!("expected a Custom credential");
+    };
+    assert_eq!(stored.core(), magies_domain::CoreType::SingBox);
+    assert_eq!(stored.document(), document);
+}
+
+#[test]
+fn rejects_custom_without_document() {
+    let value = ManualNodeDraft {
+        name: "Empty".to_owned(),
+        server: "127.0.0.1".to_owned(),
+        port: 443,
+        udp_enabled: false,
+        transport: None,
+        tls: None,
+        xray_finalmask_json: None,
+        credential: ManualCredentialDraft::Custom {
+            core: magies_domain::CoreType::Xray,
+            document: "   ".to_owned(),
+        },
+    };
+    assert_eq!(
+        value.build(node_id(), credential_ref()).unwrap_err(),
+        ManualNodeDraftError::MissingCustomDocument
+    );
+}
+
+#[test]
+fn rejects_custom_with_invalid_json() {
+    let value = ManualNodeDraft {
+        name: "Bad".to_owned(),
+        server: "127.0.0.1".to_owned(),
+        port: 443,
+        udp_enabled: false,
+        transport: None,
+        tls: None,
+        xray_finalmask_json: None,
+        credential: ManualCredentialDraft::Custom {
+            core: magies_domain::CoreType::SingBox,
+            document: "{not json".to_owned(),
+        },
+    };
+    assert!(matches!(
+        value.build(node_id(), credential_ref()).unwrap_err(),
+        ManualNodeDraftError::InvalidCustomDocument { .. }
+    ));
+}
+
+#[test]
+fn rejects_custom_with_non_object_json() {
+    let value = ManualNodeDraft {
+        name: "Array".to_owned(),
+        server: "127.0.0.1".to_owned(),
+        port: 443,
+        udp_enabled: false,
+        transport: None,
+        tls: None,
+        xray_finalmask_json: None,
+        credential: ManualCredentialDraft::Custom {
+            core: magies_domain::CoreType::SingBox,
+            document: "[]".to_owned(),
+        },
+    };
+    assert_eq!(
+        value.build(node_id(), credential_ref()).unwrap_err(),
+        ManualNodeDraftError::InvalidCustomDocumentNotObject
+    );
+}
+
+#[test]
+fn rejects_transport_and_tls_for_custom() {
+    let mut value = ManualNodeDraft {
+        name: "Custom".to_owned(),
+        server: "127.0.0.1".to_owned(),
+        port: 443,
+        udp_enabled: false,
+        transport: None,
+        tls: None,
+        xray_finalmask_json: None,
+        credential: ManualCredentialDraft::Custom {
+            core: magies_domain::CoreType::SingBox,
+            document: r#"{"outbounds":[]}"#.to_owned(),
+        },
+    };
+    value.transport = Some(TransportConfig::Tcp);
+    assert_eq!(
+        value
+            .clone()
+            .build(node_id(), credential_ref())
+            .unwrap_err(),
+        ManualNodeDraftError::CustomRejectsTransport
+    );
+    value.transport = None;
+    value.tls = Some(plain_tls());
+    assert_eq!(
+        value.build(node_id(), credential_ref()).unwrap_err(),
+        ManualNodeDraftError::CustomRejectsTls
+    );
+}
+
+#[test]
+fn accepts_and_persists_a_valid_xray_finalmask_json_override() {
+    let mut value = draft(vless());
+    value.xray_finalmask_json = Some(
+        r#"{"type":"fragment","settings":{"packets":"tlshello","lengths":["80-120"]}}"#.to_owned(),
+    );
+    let (node, _) = value.build(node_id(), credential_ref()).unwrap();
+    assert!(node.xray_finalmask_json.is_some());
+}
+
+#[test]
+fn rejects_malformed_xray_finalmask_json() {
+    let mut value = draft(vless());
+    value.xray_finalmask_json = Some("{not json".to_owned());
+    assert!(matches!(
+        value.build(node_id(), credential_ref()).unwrap_err(),
+        ManualNodeDraftError::InvalidXrayFinalmaskJson { .. }
+    ));
 }
 
 #[test]

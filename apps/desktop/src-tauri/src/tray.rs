@@ -2,7 +2,7 @@ use std::sync::{Mutex, PoisonError};
 
 use magies_routing::RoutingMode;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::tray::TrayIconBuilder;
+use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::{App, AppHandle, Wry};
 use uuid::Uuid;
 
@@ -33,6 +33,7 @@ pub struct TrayMenuModel {
 pub struct TrayNodeItem {
     pub id: Uuid,
     pub name: String,
+    pub latency_ms: Option<u32>,
     pub selected: bool,
     pub enabled: bool,
 }
@@ -46,7 +47,10 @@ pub enum TrayAction {
     Quit,
 }
 
+const TRAY_ICON_ID: &str = "main";
+
 pub struct TrayUi {
+    icon: TrayIcon<Wry>,
     status: MenuItem<Wry>,
     node: MenuItem<Wry>,
     traffic: MenuItem<Wry>,
@@ -101,9 +105,9 @@ impl TrayUi {
                 &quit,
             ],
         )?;
-        let mut builder = TrayIconBuilder::with_id("main")
+        let mut builder = TrayIconBuilder::with_id(TRAY_ICON_ID)
             .menu(&menu)
-            .tooltip("MgClash")
+            .tooltip(tray_tooltip(&initial))
             .on_menu_event(move |app, event| {
                 if let Some(action) = action_for_menu_id(event.id().as_ref()) {
                     on_action(app, action);
@@ -112,9 +116,10 @@ impl TrayUi {
         if let Some(icon) = app.default_window_icon().cloned() {
             builder = builder.icon(icon);
         }
-        builder.build(app)?;
+        let icon = builder.build(app)?;
 
         Ok(Self {
+            icon,
             status,
             node,
             traffic,
@@ -147,6 +152,7 @@ impl TrayUi {
         self.toggle.set_enabled(model.toggle_enabled)?;
         replace_mode_items(app, &self.modes, model.mode, model.mode_enabled)?;
         replace_node_items(app, &self.nodes, &model.nodes)?;
+        self.icon.set_tooltip(Some(tray_tooltip(&model)))?;
         *last_model = Some(model);
         Ok(())
     }
@@ -202,7 +208,7 @@ fn replace_node_items(
             submenu.append(&CheckMenuItem::with_id(
                 app,
                 node_menu_id(node.id),
-                &node.name,
+                format_tray_node_label(&node.name, node.latency_ms),
                 node.enabled,
                 node.selected,
                 None::<&str>,
@@ -247,6 +253,7 @@ pub fn menu_model(
         format_rate(traffic.download_bytes_per_second),
         format_rate(traffic.upload_bytes_per_second)
     );
+    let ordered_nodes = sort_nodes_for_tray(nodes);
 
     TrayMenuModel {
         status_text,
@@ -255,19 +262,47 @@ pub fn menu_model(
         toggle_text: if status.connected { "断开" } else { "连接" },
         toggle_enabled: status.connected || selected_id.is_some(),
         mode,
-        mode_enabled: !status.connected,
-        nodes: nodes
+        // The session restarts around a routing-mode change, so the tray offers
+        // it while connected exactly as the window does.
+        mode_enabled: true,
+        nodes: ordered_nodes
             .iter()
             .map(|node| {
                 let selected = selected_id == Some(node.id);
                 TrayNodeItem {
                     id: node.id,
                     name: node.name.clone(),
+                    latency_ms: node.latency_ms,
                     selected,
-                    enabled: !status.connected && !selected,
+                    enabled: !selected && node.enabled,
                 }
             })
             .collect(),
+    }
+}
+
+fn tray_tooltip(model: &TrayMenuModel) -> String {
+    format!(
+        "MgClash\n{}\n{}\n{}",
+        model.status_text, model.node_text, model.traffic_text
+    )
+}
+
+fn sort_nodes_for_tray(nodes: &[NodeSummary]) -> Vec<NodeSummary> {
+    let mut ordered = nodes.to_vec();
+    ordered.sort_by(|left, right| match (left.latency_ms, right.latency_ms) {
+        (Some(left_ms), Some(right_ms)) => left_ms.cmp(&right_ms),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => left.name.cmp(&right.name),
+    });
+    ordered
+}
+
+fn format_tray_node_label(name: &str, latency_ms: Option<u32>) -> String {
+    match latency_ms {
+        Some(latency_ms) => format!("{name} · {latency_ms} ms"),
+        None => format!("{name} · --"),
     }
 }
 
@@ -319,8 +354,11 @@ mod tests {
     use magies_routing::RoutingMode;
     use uuid::Uuid;
 
-    use super::{TrayAction, action_for_menu_id, menu_model, node_menu_id};
-    use crate::session::{NodeSummary, SessionStatus};
+    use super::{
+        TrayAction, action_for_menu_id, format_tray_node_label, menu_model, node_menu_id,
+        sort_nodes_for_tray, tray_tooltip,
+    };
+    use crate::session::{NodeSummary, RouteSchemeSummary, SessionStatus};
     use crate::traffic::TrafficSnapshot;
 
     #[test]
@@ -341,9 +379,19 @@ mod tests {
         assert_eq!(model.mode, RoutingMode::Global);
         assert!(model.mode_enabled);
         assert_eq!(model.nodes.len(), 2);
-        assert!(model.nodes[0].selected);
-        assert!(!model.nodes[0].enabled);
-        assert!(model.nodes[1].enabled);
+        let selected_entry = model
+            .nodes
+            .iter()
+            .find(|node| node.id == selected.id)
+            .expect("selected node should appear in the tray list");
+        assert!(selected_entry.selected);
+        assert!(!selected_entry.enabled);
+        assert!(
+            model
+                .nodes
+                .iter()
+                .any(|node| node.id == other.id && node.enabled)
+        );
         assert_eq!(
             action_for_menu_id(&node_menu_id(other.id)),
             Some(TrayAction::SelectNode(other.id))
@@ -351,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn connected_menu_disables_node_switching_and_can_disconnect() {
+    fn connected_menu_switches_nodes_and_modes_and_can_disconnect() {
         let mut selected = node(1, "Tokyo");
         selected.latency_ms = Some(32);
         let model = menu_model(
@@ -365,8 +413,13 @@ mod tests {
         assert_eq!(model.traffic_text, "↓ 2.0 KB/s    ↑ 1.0 MB/s");
         assert_eq!(model.toggle_text, "断开");
         assert!(model.toggle_enabled);
-        assert!(!model.mode_enabled);
+        assert!(model.mode_enabled);
+        // The running node is the one item that cannot be picked again.
         assert!(!model.nodes[0].enabled);
+        assert_eq!(
+            tray_tooltip(&model),
+            "MgClash\n已连接 · 全局\nTokyo · 32 ms\n↓ 2.0 KB/s    ↑ 1.0 MB/s"
+        );
         assert_eq!(action_for_menu_id("tray:toggle"), Some(TrayAction::Toggle));
         assert_eq!(action_for_menu_id("tray:open"), Some(TrayAction::Open));
         assert_eq!(action_for_menu_id("tray:quit"), Some(TrayAction::Quit));
@@ -400,6 +453,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn connected_tray_lets_the_user_switch_to_another_node() {
+        let mut selected = node(1, "Tokyo");
+        selected.latency_ms = Some(32);
+        let mut other = node(2, "Osaka");
+        other.latency_ms = Some(48);
+        let model = menu_model(
+            &status(true, Some(selected.clone())),
+            &[selected, other.clone()],
+            TrafficSnapshot::default(),
+        );
+        assert!(
+            model
+                .nodes
+                .iter()
+                .any(|entry| entry.id == other.id && entry.enabled)
+        );
+    }
+
+    #[test]
+    fn tray_node_labels_include_latency_when_measured() {
+        assert_eq!(format_tray_node_label("Tokyo", Some(32)), "Tokyo · 32 ms");
+        assert_eq!(format_tray_node_label("Tokyo", None), "Tokyo · --");
+    }
+
+    #[test]
+    fn tray_nodes_are_sorted_by_latency_with_untested_last() {
+        let mut fast = node(1, "Fast");
+        fast.latency_ms = Some(20);
+        let mut slow = node(2, "Slow");
+        slow.latency_ms = Some(80);
+        let untested = node(3, "Untested");
+        let ordered = sort_nodes_for_tray(&[untested.clone(), slow.clone(), fast.clone()]);
+        assert_eq!(ordered[0].id, fast.id);
+        assert_eq!(ordered[1].id, slow.id);
+        assert_eq!(ordered[2].id, untested.id);
+    }
+
     fn node(value: u128, name: &str) -> NodeSummary {
         NodeSummary {
             id: Uuid::from_u128(value),
@@ -411,6 +502,7 @@ mod tests {
             transport: "tcp",
             tls: None,
             deletable: true,
+            enabled: true,
             latency_ms: None,
             last_tested_at: None,
         }
@@ -434,10 +526,16 @@ mod tests {
             dns: DnsSettings::default(),
             mode: "global",
             route: RouteSettings::default(),
+            route_scheme_id: "default".to_owned(),
+            route_schemes: vec![RouteSchemeSummary {
+                id: "default".to_owned(),
+                name: "默认".to_owned(),
+            }],
             system_proxy: connected,
             system_proxy_mode: "managed",
             socks_port: 1080,
             http_port: 1081,
+            clash_api_port: 9090,
         }
     }
 }

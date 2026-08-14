@@ -56,6 +56,25 @@ impl SqliteNodeOrderStore {
         Ok(nodes)
     }
 
+    /// Returns the persisted node order without applying it to a node list.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed database or identifier error for unreadable rows.
+    pub fn ordered_ids(&self) -> Result<Vec<Uuid>, NodeOrderStoreError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT node_id FROM node_order ORDER BY position")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .map(|row| {
+                let value = row?;
+                Uuid::parse_str(&value)
+                    .map_err(|source| NodeOrderStoreError::InvalidId { value, source })
+            })
+            .collect()
+    }
+
     /// Atomically replaces the complete saved order.
     ///
     /// # Errors
@@ -100,4 +119,12 @@ pub enum NodeOrderStoreError {
     Database(#[from] rusqlite::Error),
     #[error("node {id} appears more than once in the saved order")]
     DuplicateNode { id: Uuid },
+    #[error("node reorder expected {expected} ids but received {actual}")]
+    IncompleteReorder { expected: usize, actual: usize },
+    #[error("node order database contains invalid UUID {value}")]
+    InvalidId {
+        value: String,
+        #[source]
+        source: uuid::Error,
+    },
 }

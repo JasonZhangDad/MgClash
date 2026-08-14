@@ -10,6 +10,8 @@ pub const DEFAULT_HTTP_PORT: u16 = 10_809;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LocalSocksProfile {
     port: NonZeroU16,
+    allow_lan: bool,
+    udp_enabled: bool,
 }
 
 impl LocalSocksProfile {
@@ -19,7 +21,25 @@ impl LocalSocksProfile {
     ///
     /// Returns a typed error when `port` is outside `1..=65535`.
     pub fn new(port: u32) -> Result<Self, LocalProxyConfigError> {
-        parse_port(port).map(|port| Self { port })
+        parse_port(port).map(|port| Self {
+            port,
+            allow_lan: false,
+            udp_enabled: true,
+        })
+    }
+
+    /// Lets LAN peers reach this inbound (`0.0.0.0`) instead of loopback only.
+    #[must_use]
+    pub const fn with_allow_lan(mut self, allow_lan: bool) -> Self {
+        self.allow_lan = allow_lan;
+        self
+    }
+
+    /// Enables or disables SOCKS UDP associate (Xray inbound setting).
+    #[must_use]
+    pub const fn with_udp_enabled(mut self, udp_enabled: bool) -> Self {
+        self.udp_enabled = udp_enabled;
+        self
     }
 
     #[must_use]
@@ -28,14 +48,25 @@ impl LocalSocksProfile {
     }
 
     #[must_use]
+    pub const fn allow_lan(self) -> bool {
+        self.allow_lan
+    }
+
+    #[must_use]
     pub const fn udp_enabled(self) -> bool {
-        true
+        self.udp_enabled
+    }
+
+    #[must_use]
+    pub const fn listen_address(self) -> &'static str {
+        listen_address(self.allow_lan)
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LocalHttpProfile {
     port: NonZeroU16,
+    allow_lan: bool,
 }
 
 impl LocalHttpProfile {
@@ -45,12 +76,32 @@ impl LocalHttpProfile {
     ///
     /// Returns a typed error when `port` is outside `1..=65535`.
     pub fn new(port: u32) -> Result<Self, LocalProxyConfigError> {
-        parse_port(port).map(|port| Self { port })
+        parse_port(port).map(|port| Self {
+            port,
+            allow_lan: false,
+        })
+    }
+
+    /// Lets LAN peers reach this inbound (`0.0.0.0`) instead of loopback only.
+    #[must_use]
+    pub const fn with_allow_lan(mut self, allow_lan: bool) -> Self {
+        self.allow_lan = allow_lan;
+        self
     }
 
     #[must_use]
     pub const fn port(self) -> NonZeroU16 {
         self.port
+    }
+
+    #[must_use]
+    pub const fn allow_lan(self) -> bool {
+        self.allow_lan
+    }
+
+    #[must_use]
+    pub const fn listen_address(self) -> &'static str {
+        listen_address(self.allow_lan)
     }
 }
 
@@ -58,6 +109,7 @@ impl Default for LocalHttpProfile {
     fn default() -> Self {
         Self {
             port: NonZeroU16::new(DEFAULT_HTTP_PORT).expect("default HTTP port is non-zero"),
+            allow_lan: false,
         }
     }
 }
@@ -66,6 +118,8 @@ impl Default for LocalSocksProfile {
     fn default() -> Self {
         Self {
             port: NonZeroU16::new(DEFAULT_SOCKS_PORT).expect("default SOCKS port is non-zero"),
+            allow_lan: false,
+            udp_enabled: true,
         }
     }
 }
@@ -167,15 +221,16 @@ fn sing_box_config(inbound: &Value) -> Value {
 }
 
 fn xray_socks_inbound(profile: LocalSocksProfile) -> Value {
+    let listen = profile.listen_address();
     json!({
         "tag": "socks-in",
-        "listen": "127.0.0.1",
+        "listen": listen,
         "port": profile.port().get(),
         "protocol": "socks",
         "settings": {
             "auth": "noauth",
             "udp": profile.udp_enabled(),
-            "ip": "127.0.0.1"
+            "ip": listen
         }
     })
 }
@@ -184,7 +239,7 @@ fn sing_box_socks_inbound(profile: LocalSocksProfile) -> Value {
     json!({
         "type": "socks",
         "tag": "socks-in",
-        "listen": "127.0.0.1",
+        "listen": profile.listen_address(),
         "listen_port": profile.port().get()
     })
 }
@@ -192,7 +247,7 @@ fn sing_box_socks_inbound(profile: LocalSocksProfile) -> Value {
 fn xray_http_inbound(profile: LocalHttpProfile) -> Value {
     json!({
         "tag": "http-in",
-        "listen": "127.0.0.1",
+        "listen": profile.listen_address(),
         "port": profile.port().get(),
         "protocol": "http",
         "settings": {
@@ -205,8 +260,12 @@ fn sing_box_http_inbound(profile: LocalHttpProfile) -> Value {
     json!({
         "type": "http",
         "tag": "http-in",
-        "listen": "127.0.0.1",
+        "listen": profile.listen_address(),
         "listen_port": profile.port().get(),
         "set_system_proxy": false
     })
+}
+
+const fn listen_address(allow_lan: bool) -> &'static str {
+    if allow_lan { "0.0.0.0" } else { "127.0.0.1" }
 }

@@ -6,11 +6,14 @@
 //! `streamSettings`. This mirrors [`crate::SingBoxOutboundConfigGenerator`] in
 //! responsibility, and the capability matrix decides which of the two runs.
 
+use std::collections::HashMap;
+use std::hash::BuildHasher;
+
 use magies_domain::{GrpcMode, ProxyNode, ProxyProtocol, TlsConfig, TransportConfig};
 use serde_json::{Value, json};
 
 use crate::sing_box_outbound::NodeCredential;
-use crate::{VlessCredential, VmessCredential, VmessSecurity};
+use crate::{VlessCredential, VmessCredential, VmessSecurity, xhttp_mode_name};
 
 /// The tag every generator gives the proxy outbound, matching the route rules.
 const PROXY_TAG: &str = "proxy";
@@ -85,11 +88,241 @@ impl XrayOutboundConfigGenerator {
                     protocol: ProxyProtocol::Hysteria2,
                 });
             }
+            NodeCredential::Tuic(_) => {
+                // Unreachable through the matrix, but the generator is public.
+                return Err(XrayOutboundError::ProtocolUnsupported {
+                    protocol: ProxyProtocol::Tuic,
+                });
+            }
+            NodeCredential::WireGuard(_) => {
+                // Xray does ship a `wireguard` outbound, but nothing in this
+                // codebase's Xray patterns pins a verified field-for-field
+                // shape for it, so the capability matrix keeps WireGuard
+                // sing-box-only. Unreachable through the matrix, but the
+                // generator is public.
+                return Err(XrayOutboundError::ProtocolUnsupported {
+                    protocol: ProxyProtocol::WireGuard,
+                });
+            }
+            NodeCredential::AnyTls(_) => {
+                // Xray ships no AnyTLS outbound at all. Unreachable through
+                // the matrix, but the generator is public.
+                return Err(XrayOutboundError::ProtocolUnsupported {
+                    protocol: ProxyProtocol::AnyTls,
+                });
+            }
+            NodeCredential::Naive(_) => {
+                // Xray ships no Naive outbound at all. Unreachable through
+                // the matrix, but the generator is public.
+                return Err(XrayOutboundError::ProtocolUnsupported {
+                    protocol: ProxyProtocol::Naive,
+                });
+            }
+            NodeCredential::Custom(_) => {
+                // Custom nodes write the full runtime document directly.
+                return Err(XrayOutboundError::ProtocolUnsupported {
+                    protocol: ProxyProtocol::Custom,
+                });
+            }
+            NodeCredential::Socks(credential) => {
+                user_pass_settings(node, credential.username(), credential.password())
+            }
+            NodeCredential::Http(credential) => {
+                user_pass_settings(node, credential.username(), credential.password())
+            }
         };
         outbound["streamSettings"] = stream_settings(node)?;
 
         Ok(GeneratedXrayOutbound { json: outbound })
     }
+}
+
+/// Enables Xray mux on a generated outbound when the user asked for it.
+///
+/// VLESS with a flow (e.g. `xtls-rprx-vision`) cannot share a mux connection.
+pub fn apply_xray_mux(outbound: &mut Value, credential: NodeCredential<'_>) {
+    if let NodeCredential::Vless(credential) = credential
+        && credential.flow().is_some()
+    {
+        return;
+    }
+    if matches!(
+        credential.protocol(),
+        ProxyProtocol::Hysteria2
+            | ProxyProtocol::Tuic
+            | ProxyProtocol::WireGuard
+            | ProxyProtocol::AnyTls
+            | ProxyProtocol::Naive
+    ) {
+        return;
+    }
+    outbound["mux"] = json!({
+        "enabled": true,
+        "concurrency": 8,
+    });
+}
+
+/// The tag of the freedom outbound that fragments the TLS `ClientHello`,
+/// matching v2rayN's Fragment toggle.
+pub const FRAGMENT_OUTBOUND_TAG: &str = "fragment";
+
+/// Builds the freedom outbound that fragments the TLS `ClientHello`.
+///
+/// v2rayN's own values: split only the initial `tlshello` packet into pieces
+/// of 100-200 bytes, spaced 10-20ms apart.
+#[must_use]
+pub fn xray_fragment_outbound() -> Value {
+    xray_fragment_outbound_with_options(true, false)
+}
+
+/// Builds the freedom dialer outbound with optional Fragment and/or UDP noise.
+///
+/// Fragment uses Xray's `settings.fragment`; UDP noise uses `settings.noises`
+/// with v2rayN's defaults (`rand` length `10-20`, delay `10-16`). Either or both
+/// may be requested; at least one must be true for a useful outbound.
+#[must_use]
+pub fn xray_fragment_outbound_with_options(fragment: bool, udp_noise: bool) -> Value {
+    let mut settings = json!({});
+    if fragment {
+        settings["fragment"] = json!({
+            "packets": "tlshello",
+            "length": "100-200",
+            "interval": "10-20"
+        });
+    }
+    if udp_noise {
+        settings["noises"] = json!([{
+            "type": "rand",
+            "packet": "10-20",
+            "delay": "10-16"
+        }]);
+    }
+    json!({
+        "tag": FRAGMENT_OUTBOUND_TAG,
+        "protocol": "freedom",
+        "settings": settings
+    })
+}
+
+/// Routes the proxy outbound's dialer through the fragment outbound.
+///
+/// Unlike sing-box's TLS-field fragment, Xray's freedom fragment outbound
+/// only recognizes the `tlshello` packet marker regardless of the proxy
+/// outbound's own transport, so this applies unconditionally rather than
+/// checking for a TLS block first.
+///
+/// # Panics
+///
+/// Never panics: `streamSettings` is set to an object on the line right
+/// above the `expect`, so the object cast always succeeds.
+pub fn apply_xray_fragment(outbound: &mut Value) {
+    if !outbound["streamSettings"].is_object() {
+        outbound["streamSettings"] = json!({});
+    }
+    let stream = outbound["streamSettings"]
+        .as_object_mut()
+        .expect("streamSettings was just ensured to be an object");
+    if !stream.get("sockopt").is_some_and(Value::is_object) {
+        stream.insert("sockopt".to_owned(), json!({}));
+    }
+    stream["sockopt"]["dialerProxy"] = Value::String(FRAGMENT_OUTBOUND_TAG.to_owned());
+}
+
+/// v2rayN's default Final (tail) fragment mask for Xray `streamSettings.finalmask`.
+#[must_use]
+pub fn xray_finalmask_fragment_mask() -> Value {
+    json!({
+        "type": "fragment",
+        "settings": {
+            "packets": "tlshello",
+            "lengths": ["50-100"],
+            "delays": ["10-20"],
+            "maxSplit": 0
+        }
+    })
+}
+
+/// Wraps proxy and group-member outbounds with a freedom detour that applies
+/// `finalmask` TCP fragmentation, matching v2rayN's `ApplyFinalFragment`.
+///
+/// `overrides` maps outbound tag to a mask entry; tags without an entry use
+/// [`xray_finalmask_fragment_mask`].
+pub fn apply_xray_final_fragment<S: BuildHasher>(
+    outbounds: &mut Vec<Value>,
+    overrides: &HashMap<String, Value, S>,
+) {
+    let default_mask = xray_finalmask_fragment_mask();
+    let mut index = 0;
+    while index < outbounds.len() {
+        let Some(tag) = outbounds[index]["tag"].as_str() else {
+            index += 1;
+            continue;
+        };
+        if tag == "direct" || tag == FRAGMENT_OUTBOUND_TAG || tag == "api-in" {
+            index += 1;
+            continue;
+        }
+        if !tag.starts_with("proxy") && !tag.starts_with("node-") {
+            index += 1;
+            continue;
+        }
+        if outbounds[index]["protocol"].as_str() == Some("freedom") {
+            index += 1;
+            continue;
+        }
+        let wrapped_tag = format!("fragment-{tag}");
+        let mut proxy_outbound = outbounds[index].clone();
+        proxy_outbound["tag"] = Value::String(wrapped_tag.clone());
+        let mask = overrides
+            .get(tag)
+            .cloned()
+            .unwrap_or_else(|| default_mask.clone());
+        let freedom = json!({
+            "tag": tag,
+            "protocol": "freedom",
+            "streamSettings": {
+                "finalmask": {
+                    "tcp": [mask]
+                },
+                "sockopt": {
+                    "dialerProxy": wrapped_tag
+                }
+            }
+        });
+        outbounds[index] = freedom;
+        outbounds.insert(index + 1, proxy_outbound);
+        index += 2;
+    }
+}
+
+/// Normalizes v2rayN-style finalmask JSON to one `tcp` mask entry.
+///
+/// Accepts either a full `{ "tcp": [ ... ] }` object or a single mask entry
+/// with a top-level `"type"` field.
+///
+/// # Errors
+///
+/// Returns a typed error when the value is neither shape.
+pub fn normalize_xray_finalmask_tcp(value: &Value) -> Result<Value, XrayFinalmaskError> {
+    if let Some(array) = value.get("tcp").and_then(Value::as_array) {
+        let first = array
+            .first()
+            .ok_or(XrayFinalmaskError::EmptyTcpArray)?
+            .clone();
+        return Ok(first);
+    }
+    if value.get("type").is_some() {
+        return Ok(value.clone());
+    }
+    Err(XrayFinalmaskError::InvalidShape)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum XrayFinalmaskError {
+    #[error("Xray finalmask tcp array must not be empty")]
+    EmptyTcpArray,
+    #[error("Xray finalmask JSON must be a mask entry or an object with a tcp array")]
+    InvalidShape,
 }
 
 fn vless_settings(node: &ProxyNode, credential: &VlessCredential) -> Value {
@@ -123,6 +356,24 @@ fn vmess_settings(node: &ProxyNode, credential: &VmessCredential) -> Value {
     })
 }
 
+/// Builds the `servers` settings SOCKS and HTTP outbounds share: one endpoint,
+/// with a single `users` entry only when a username was supplied. Xray
+/// requires `pass` whenever `user` is present, so an absent password becomes
+/// an empty string rather than an omitted field.
+fn user_pass_settings(node: &ProxyNode, username: Option<&str>, password: Option<&str>) -> Value {
+    let mut server = json!({
+        "address": node.server.as_str(),
+        "port": node.port.get(),
+    });
+    if let Some(username) = username {
+        server["users"] = json!([{
+            "user": username,
+            "pass": password.unwrap_or(""),
+        }]);
+    }
+    json!({ "servers": [server] })
+}
+
 /// Builds `streamSettings` from the node's transport and TLS.
 fn stream_settings(node: &ProxyNode) -> Result<Value, XrayOutboundError> {
     let transport = node
@@ -142,6 +393,13 @@ fn stream_settings(node: &ProxyNode) -> Result<Value, XrayOutboundError> {
             }
             stream["wsSettings"] = settings;
         }
+        TransportConfig::HttpUpgrade { path, host } => {
+            let mut settings = json!({ "path": path });
+            if let Some(host) = host {
+                settings["host"] = Value::String(host.clone());
+            }
+            stream["httpupgradeSettings"] = settings;
+        }
         TransportConfig::Grpc {
             service_name,
             mode,
@@ -155,6 +413,49 @@ fn stream_settings(node: &ProxyNode) -> Result<Value, XrayOutboundError> {
                 settings["authority"] = Value::String(authority.clone());
             }
             stream["grpcSettings"] = settings;
+        }
+        TransportConfig::XHttp { path, host, mode } => {
+            let mut settings = json!({ "path": path });
+            if let Some(host) = host {
+                settings["host"] = Value::String(host.clone());
+            }
+            settings["mode"] = Value::String(xhttp_mode_name(*mode).to_owned());
+            stream["xhttpSettings"] = settings;
+        }
+        TransportConfig::Kcp {
+            mtu,
+            tti,
+            uplink_capacity,
+            downlink_capacity,
+            congestion,
+            header_type,
+            seed,
+        } => {
+            // Classic `kcpSettings` shape: widely accepted by Xray builds.
+            // Modern Xray docs mark `header`/`seed` as superseded by
+            // FinalMask, but older share links still carry them, so they are
+            // still emitted here for parity; a build that rejects them at
+            // runtime is a server/version mismatch, not a generator bug.
+            let mut settings = json!({ "congestion": congestion });
+            if let Some(mtu) = mtu {
+                settings["mtu"] = json!(mtu);
+            }
+            if let Some(tti) = tti {
+                settings["tti"] = json!(tti);
+            }
+            if let Some(uplink_capacity) = uplink_capacity {
+                settings["uplinkCapacity"] = json!(uplink_capacity);
+            }
+            if let Some(downlink_capacity) = downlink_capacity {
+                settings["downlinkCapacity"] = json!(downlink_capacity);
+            }
+            settings["header"] = json!({
+                "type": header_type.as_deref().unwrap_or("none"),
+            });
+            if let Some(seed) = seed {
+                settings["seed"] = Value::String(seed.clone());
+            }
+            stream["kcpSettings"] = settings;
         }
     }
 
@@ -236,7 +537,14 @@ fn protocol_name(protocol: ProxyProtocol) -> Result<&'static str, XrayOutboundEr
         ProxyProtocol::Vmess => Ok("vmess"),
         ProxyProtocol::Trojan => Ok("trojan"),
         ProxyProtocol::Shadowsocks => Ok("shadowsocks"),
-        ProxyProtocol::Hysteria2 => Err(XrayOutboundError::ProtocolUnsupported { protocol }),
+        ProxyProtocol::Socks => Ok("socks"),
+        ProxyProtocol::Http => Ok("http"),
+        ProxyProtocol::Hysteria2
+        | ProxyProtocol::Tuic
+        | ProxyProtocol::WireGuard
+        | ProxyProtocol::AnyTls
+        | ProxyProtocol::Naive
+        | ProxyProtocol::Custom => Err(XrayOutboundError::ProtocolUnsupported { protocol }),
     }
 }
 
@@ -244,7 +552,10 @@ const fn network_name(transport: &TransportConfig) -> &'static str {
     match transport {
         TransportConfig::Tcp => "tcp",
         TransportConfig::WebSocket { .. } => "ws",
+        TransportConfig::HttpUpgrade { .. } => "httpupgrade",
         TransportConfig::Grpc { .. } => "grpc",
+        TransportConfig::XHttp { .. } => "xhttp",
+        TransportConfig::Kcp { .. } => "kcp",
     }
 }
 

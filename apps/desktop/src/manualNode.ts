@@ -8,9 +8,27 @@ import type {
   VmessSecurity,
 } from "./session";
 
-export type TransportKind = "tcp" | "websocket" | "grpc";
+export type TransportKind =
+  | "tcp"
+  | "websocket"
+  | "httpupgrade"
+  | "xhttp"
+  | "grpc"
+  | "kcp";
 
 export type GrpcMode = "gun" | "multi" | "guna";
+
+export type XhttpMode = "auto" | "packet-up" | "stream-up" | "stream-one";
+
+/** mKCP obfuscation header types Xray recognizes; `""` means unset/default. */
+export type KcpHeaderType =
+  | ""
+  | "none"
+  | "srtp"
+  | "utp"
+  | "wechat-video"
+  | "dtls"
+  | "wireguard";
 
 /** Every field the manual creation form can collect, as raw strings. */
 export interface ManualNodeForm {
@@ -18,28 +36,60 @@ export interface ManualNodeForm {
   allowInsecure: boolean;
   alpn: string;
   authentication: string;
+  congestionControl: "" | "cubic" | "new_reno" | "bbr";
   fingerprint: string;
   flow: string;
   grpcAuthority: string;
   grpcMode: GrpcMode;
   grpcServiceName: string;
+  kcpCongestion: boolean;
+  kcpDownlinkCapacity: string;
+  kcpHeaderType: KcpHeaderType;
+  kcpMtu: string;
+  kcpSeed: string;
+  kcpTti: string;
+  kcpUplinkCapacity: string;
+  localAddress: string;
   method: string;
+  mtu: string;
   name: string;
   obfsEnabled: boolean;
   obfsMethod: ObfuscationMethod;
   obfsPassword: string;
   password: string;
+  peerPublicKey: string;
+  pinnedSha256: string;
   port: string;
+  preSharedKey: string;
+  privateKey: string;
   protocol: ProxyProtocol;
+  publicKey: string;
+  quic: boolean;
+  quicCongestionControl: "" | "bbr" | "bbr2" | "cubic" | "reno";
+  realityEnabled: boolean;
+  reserved: string;
   security: VmessSecurity;
   server: string;
   serverName: string;
+  shortId: string;
+  spiderX: string;
   tlsEnabled: boolean;
   transport: TransportKind;
   udpEnabled: boolean;
+  udpOverStream: boolean;
+  udpRelayMode: "" | "native" | "quic";
   userId: string;
+  username: string;
   wsHost: string;
   wsPath: string;
+  xhttpMode: XhttpMode;
+  zeroRttHandshake: boolean;
+  /** Which Core the custom JSON targets; only used when `protocol === "custom"`. */
+  customCore: "sing-box" | "xray";
+  /** Full sing-box or Xray runtime JSON; only used when `protocol === "custom"`. */
+  customDocument: string;
+  /** Optional Xray finalmask JSON; used with global Final Fragment (Xray only). */
+  xrayFinalmaskJson: string;
 }
 
 export const emptyManualNodeForm: ManualNodeForm = {
@@ -47,29 +97,70 @@ export const emptyManualNodeForm: ManualNodeForm = {
   allowInsecure: false,
   alpn: "",
   authentication: "",
+  congestionControl: "",
   fingerprint: "",
   flow: "",
   grpcAuthority: "",
   grpcMode: "gun",
   grpcServiceName: "",
+  kcpCongestion: false,
+  kcpDownlinkCapacity: "",
+  kcpHeaderType: "",
+  kcpMtu: "",
+  kcpSeed: "",
+  kcpTti: "",
+  kcpUplinkCapacity: "",
+  localAddress: "",
   method: "aes-256-gcm",
+  mtu: "",
   name: "",
   obfsEnabled: false,
   obfsMethod: "Salamander",
   obfsPassword: "",
   password: "",
+  peerPublicKey: "",
+  pinnedSha256: "",
   port: "",
+  preSharedKey: "",
+  privateKey: "",
   protocol: "vless",
+  publicKey: "",
+  quic: false,
+  quicCongestionControl: "",
+  realityEnabled: false,
+  reserved: "",
   security: "Auto",
   server: "",
   serverName: "",
+  shortId: "",
+  spiderX: "",
   tlsEnabled: false,
   transport: "tcp",
   udpEnabled: true,
+  udpOverStream: false,
+  udpRelayMode: "",
   userId: "",
+  username: "",
   wsHost: "",
   wsPath: "",
+  xhttpMode: "auto",
+  zeroRttHandshake: false,
+  customCore: "sing-box",
+  customDocument: "",
+  xrayFinalmaskJson: "",
 };
+
+/** Seeds a blank form, optionally applying saved create-node TLS defaults. */
+export function blankManualNodeForm(defaults?: {
+  allowInsecure?: boolean;
+  fingerprint?: string;
+}): ManualNodeForm {
+  return {
+    ...emptyManualNodeForm,
+    allowInsecure: defaults?.allowInsecure ?? false,
+    fingerprint: defaults?.fingerprint ?? "",
+  };
+}
 
 export type ManualNodeDraftResult =
   | { draft: ManualNodeDraft }
@@ -103,9 +194,19 @@ export const SHADOWSOCKS_METHODS = [
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
-/** Hysteria2 carries its own QUIC transport and always runs over TLS. */
+/**
+ * Hysteria2 / TUIC / WireGuard / AnyTLS / Naive / Custom carry their own tunnel
+ * and do not use a selectable stream transport.
+ */
 export function usesStreamTransport(protocol: ProxyProtocol): boolean {
-  return protocol !== "hysteria2";
+  return (
+    protocol !== "hysteria2" &&
+    protocol !== "tuic" &&
+    protocol !== "wireguard" &&
+    protocol !== "anytls" &&
+    protocol !== "naive" &&
+    protocol !== "custom"
+  );
 }
 
 function optional(value: string): string | null {
@@ -176,7 +277,134 @@ function buildCredential(
         protocol: "hysteria2",
       };
     }
+    case "tuic": {
+      if (!UUID_PATTERN.test(form.userId.trim())) {
+        return { error: "请填写合法的 UUID" };
+      }
+      if (form.udpRelayMode !== "" && form.udpOverStream) {
+        return { error: "不能同时设置 udp_relay_mode 与 udp_over_stream" };
+      }
+      return {
+        congestionControl:
+          form.congestionControl === "" ? null : form.congestionControl,
+        password: optional(form.password),
+        protocol: "tuic",
+        udpOverStream: form.udpOverStream,
+        udpRelayMode: form.udpRelayMode === "" ? null : form.udpRelayMode,
+        uuid: form.userId.trim(),
+        zeroRttHandshake: form.zeroRttHandshake,
+      };
+    }
+    case "socks":
+    case "http": {
+      const username = optional(form.username);
+      const password = optional(form.password);
+      if (password !== null && username === null) {
+        return { error: "填写密码时必须同时填写用户名" };
+      }
+      return {
+        password,
+        protocol: form.protocol,
+        username,
+      };
+    }
+    case "wireguard": {
+      const privateKey = form.privateKey.trim();
+      if (privateKey === "") {
+        return { error: "请填写 WireGuard 私钥" };
+      }
+      const peerPublicKey = form.peerPublicKey.trim();
+      if (peerPublicKey === "") {
+        return { error: "请填写 WireGuard 对端公钥" };
+      }
+      const localAddress = form.localAddress
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry !== "");
+      if (localAddress.length === 0) {
+        return { error: "请填写至少一个本地地址" };
+      }
+      let mtu: number | null = null;
+      if (form.mtu.trim() !== "") {
+        mtu = Number(form.mtu);
+        if (!Number.isInteger(mtu) || mtu < 0) {
+          return { error: "MTU 必须是不小于 0 的整数" };
+        }
+      }
+      const reserved = parseReserved(form.reserved);
+      if (hasError(reserved)) {
+        return reserved;
+      }
+      return {
+        localAddress,
+        mtu,
+        peerPublicKey,
+        preSharedKey: optional(form.preSharedKey),
+        privateKey,
+        protocol: "wireguard",
+        reserved,
+      };
+    }
+    case "anytls": {
+      if (form.password.trim() === "") {
+        return { error: "请填写 AnyTLS 密码" };
+      }
+      return { password: form.password.trim(), protocol: "anytls" };
+    }
+    case "naive": {
+      const username = optional(form.username);
+      const password = optional(form.password);
+      if (password !== null && username === null) {
+        return { error: "填写密码时必须同时填写用户名" };
+      }
+      return {
+        password,
+        protocol: "naive",
+        quic: form.quic,
+        quicCongestionControl:
+          form.quic && form.quicCongestionControl !== ""
+            ? form.quicCongestionControl
+            : null,
+        username,
+      };
+    }
+    case "custom": {
+      const document = form.customDocument.trim();
+      if (document === "") {
+        return { error: "请填写完整的 Core JSON 配置" };
+      }
+      try {
+        const parsed: unknown = JSON.parse(document);
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          return { error: "Core JSON 必须是 JSON 对象" };
+        }
+      } catch {
+        return { error: "Core JSON 格式无效" };
+      }
+      return {
+        core: form.customCore,
+        document,
+        protocol: "custom",
+      };
+    }
   }
+}
+
+/** Parses the `1,2,3` reserved-bytes field, or `null` when left blank. */
+function parseReserved(
+  value: string,
+): [number, number, number] | null | { error: string } {
+  if (value.trim() === "") {
+    return null;
+  }
+  const parts = value.split(",").map((entry) => Number(entry.trim()));
+  if (
+    parts.length !== 3 ||
+    parts.some((entry) => !Number.isInteger(entry) || entry < 0 || entry > 255)
+  ) {
+    return { error: "reserved 必须是 3 个 0-255 的整数，以逗号分隔" };
+  }
+  return [parts[0], parts[1], parts[2]];
 }
 
 function buildTransport(
@@ -185,9 +413,13 @@ function buildTransport(
   if (!usesStreamTransport(form.protocol)) {
     return null;
   }
-  // Shadowsocks accepts nothing but plain TCP, so a transport left over from a
-  // previously selected protocol must not leak into the payload.
-  if (form.protocol === "shadowsocks") {
+  // Shadowsocks / SOCKS / HTTP accept nothing but plain TCP, so a transport
+  // left over from a previously selected protocol must not leak into the payload.
+  if (
+    form.protocol === "shadowsocks" ||
+    form.protocol === "socks" ||
+    form.protocol === "http"
+  ) {
     return { type: "tcp" };
   }
   switch (form.transport) {
@@ -203,6 +435,27 @@ function buildTransport(
         type: "websocket",
       };
     }
+    case "httpupgrade": {
+      if (form.wsPath.trim() === "") {
+        return { error: "请填写 HTTPUpgrade 路径" };
+      }
+      return {
+        host: optional(form.wsHost),
+        path: form.wsPath.trim(),
+        type: "httpupgrade",
+      };
+    }
+    case "xhttp": {
+      if (form.wsPath.trim() === "") {
+        return { error: "请填写 XHTTP 路径" };
+      }
+      return {
+        host: optional(form.wsHost),
+        mode: form.xhttpMode,
+        path: form.wsPath.trim(),
+        type: "xhttp",
+      };
+    }
     case "grpc": {
       if (form.grpcServiceName.trim() === "") {
         return { error: "请填写 gRPC serviceName" };
@@ -214,13 +467,106 @@ function buildTransport(
         type: "grpc",
       };
     }
+    case "kcp": {
+      const mtu = parseOptionalUint(form.kcpMtu);
+      if (hasError(mtu)) {
+        return { error: "mKCP mtu 必须是不小于 0 的整数" };
+      }
+      const tti = parseOptionalUint(form.kcpTti);
+      if (hasError(tti)) {
+        return { error: "mKCP tti 必须是不小于 0 的整数" };
+      }
+      const uplinkCapacity = parseOptionalUint(form.kcpUplinkCapacity);
+      if (hasError(uplinkCapacity)) {
+        return { error: "mKCP uplinkCapacity 必须是不小于 0 的整数" };
+      }
+      const downlinkCapacity = parseOptionalUint(form.kcpDownlinkCapacity);
+      if (hasError(downlinkCapacity)) {
+        return { error: "mKCP downlinkCapacity 必须是不小于 0 的整数" };
+      }
+      return {
+        congestion: form.kcpCongestion,
+        downlinkCapacity,
+        headerType: form.kcpHeaderType === "" ? null : form.kcpHeaderType,
+        mtu,
+        seed: optional(form.kcpSeed),
+        tti,
+        type: "kcp",
+        uplinkCapacity,
+      };
+    }
   }
 }
 
-function buildTls(form: ManualNodeForm): TlsDraft | null {
-  // The Shadowsocks outbound has no TLS layer at all.
-  if (form.protocol === "shadowsocks") {
+/** Parses an optional non-negative integer field, or an error marker. */
+function parseOptionalUint(value: string): number | null | { error: string } {
+  if (value.trim() === "") {
     return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return { error: "invalid" };
+  }
+  return parsed;
+}
+
+function buildTls(form: ManualNodeForm): TlsDraft | null | { error: string } {
+  // Shadowsocks and SOCKS outbounds have no TLS layer at all, and WireGuard
+  // authenticates peers by key instead of certificate.
+  if (
+    form.protocol === "shadowsocks" ||
+    form.protocol === "socks" ||
+    form.protocol === "wireguard"
+  ) {
+    return null;
+  }
+  if (form.protocol === "naive") {
+    if (form.realityEnabled) {
+      return { error: "Naive 不支持 Reality" };
+    }
+    if (form.allowInsecure) {
+      return { error: "Naive 不支持跳过证书校验" };
+    }
+    if (form.alpn.trim() !== "") {
+      return { error: "Naive 不支持 ALPN" };
+    }
+    if (form.fingerprint.trim() !== "") {
+      return { error: "Naive 不支持 TLS 指纹" };
+    }
+    if (form.pinnedSha256.trim() !== "") {
+      return { error: "Naive 不支持证书固定" };
+    }
+    return {
+      allowInsecure: false,
+      alpn: [],
+      fingerprint: null,
+      pinnedSha256: null,
+      serverName: optional(form.serverName),
+      type: "tls",
+    };
+  }
+  if (form.realityEnabled) {
+    if (form.protocol === "http") {
+      return { error: "HTTP 代理不支持 Reality" };
+    }
+    if (form.serverName.trim() === "") {
+      return { error: "Reality 需要填写 SNI / serverName" };
+    }
+    if (form.publicKey.trim() === "") {
+      return { error: "Reality 需要填写 publicKey" };
+    }
+    return {
+      alpn: form.alpn
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry !== ""),
+      fingerprint: optional(form.fingerprint),
+      publicKey: form.publicKey.trim(),
+      serverName: form.serverName.trim(),
+      shortId: optional(form.shortId),
+      spiderX: optional(form.spiderX),
+      type: "reality",
+    };
   }
   // Hysteria2 has no plaintext mode, so the toggle does not apply to it.
   if (!form.tlsEnabled && usesStreamTransport(form.protocol)) {
@@ -233,6 +579,7 @@ function buildTls(form: ManualNodeForm): TlsDraft | null {
       .map((entry) => entry.trim())
       .filter((entry) => entry !== ""),
     fingerprint: optional(form.fingerprint),
+    pinnedSha256: optional(form.pinnedSha256),
     serverName: optional(form.serverName),
     type: "tls",
   };
@@ -251,8 +598,31 @@ export function buildManualNodeDraft(
   form: ManualNodeForm,
 ): ManualNodeDraftResult {
   const name = form.name.trim();
+  if (name === "") {
+    return { error: "请填写节点名称" };
+  }
+
+  if (form.protocol === "custom") {
+    const credential = buildCredential(form);
+    if (hasError(credential)) {
+      return credential;
+    }
+    return {
+      draft: {
+        credential,
+        name,
+        port: 443,
+        server: "127.0.0.1",
+        tls: null,
+        transport: null,
+        udpEnabled: false,
+        xrayFinalmaskJson: null,
+      },
+    };
+  }
+
   const server = form.server.trim();
-  if (name === "" || server === "") {
+  if (server === "") {
     return { error: "请填写节点名称和服务器" };
   }
   const port = Number(form.port);
@@ -268,6 +638,14 @@ export function buildManualNodeDraft(
   if (hasError(transport)) {
     return transport;
   }
+  const tls = buildTls(form);
+  if (hasError(tls)) {
+    return tls;
+  }
+  const xrayFinalmaskJson = parseXrayFinalmaskJson(form.xrayFinalmaskJson);
+  if (hasError(xrayFinalmaskJson)) {
+    return xrayFinalmaskJson;
+  }
 
   return {
     draft: {
@@ -275,9 +653,181 @@ export function buildManualNodeDraft(
       name,
       port,
       server,
-      tls: buildTls(form),
+      tls,
       transport,
       udpEnabled: form.udpEnabled,
+      xrayFinalmaskJson,
     },
   };
+}
+
+function parseXrayFinalmaskJson(
+  raw: string,
+): string | null | { error: string } {
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { error: "Xray finalmask 必须是 JSON 对象" };
+    }
+    const object = parsed as Record<string, unknown>;
+    if (!("type" in object) && !("tcp" in object)) {
+      return {
+        error: "Xray finalmask 需为 mask 条目（含 type）或 {tcp:[...]} 对象",
+      };
+    }
+    return trimmed;
+  } catch {
+    return { error: "Xray finalmask JSON 格式无效" };
+  }
+}
+
+/** Fills the editable form from a draft returned by `session_node_draft`. */
+export function formFromManualNodeDraft(draft: ManualNodeDraft): ManualNodeForm {
+  const form: ManualNodeForm = {
+    ...emptyManualNodeForm,
+    name: draft.name,
+    server: draft.server,
+    port: String(draft.port),
+    udpEnabled: draft.udpEnabled,
+  };
+
+  switch (draft.credential.protocol) {
+    case "vless":
+      form.protocol = "vless";
+      form.userId = draft.credential.userId;
+      form.flow = draft.credential.flow ?? "";
+      break;
+    case "vmess":
+      form.protocol = "vmess";
+      form.userId = draft.credential.userId;
+      form.security = draft.credential.security;
+      form.alterId = String(draft.credential.alterId);
+      break;
+    case "trojan":
+      form.protocol = "trojan";
+      form.password = draft.credential.password;
+      break;
+    case "shadowsocks":
+      form.protocol = "shadowsocks";
+      form.method = draft.credential.method;
+      form.password = draft.credential.password;
+      break;
+    case "hysteria2":
+      form.protocol = "hysteria2";
+      form.authentication = draft.credential.authentication ?? "";
+      form.obfsEnabled = draft.credential.obfuscation !== null;
+      form.obfsMethod = draft.credential.obfuscation?.method ?? "Salamander";
+      form.obfsPassword = draft.credential.obfuscation?.password ?? "";
+      break;
+    case "tuic":
+      form.protocol = "tuic";
+      form.userId = draft.credential.uuid;
+      form.password = draft.credential.password ?? "";
+      form.congestionControl = draft.credential.congestionControl ?? "";
+      form.udpRelayMode = draft.credential.udpRelayMode ?? "";
+      form.udpOverStream = draft.credential.udpOverStream;
+      form.zeroRttHandshake = draft.credential.zeroRttHandshake;
+      break;
+    case "socks":
+      form.protocol = "socks";
+      form.username = draft.credential.username ?? "";
+      form.password = draft.credential.password ?? "";
+      break;
+    case "http":
+      form.protocol = "http";
+      form.username = draft.credential.username ?? "";
+      form.password = draft.credential.password ?? "";
+      break;
+    case "wireguard":
+      form.protocol = "wireguard";
+      form.privateKey = draft.credential.privateKey;
+      form.peerPublicKey = draft.credential.peerPublicKey;
+      form.preSharedKey = draft.credential.preSharedKey ?? "";
+      form.localAddress = draft.credential.localAddress.join(",");
+      form.mtu = draft.credential.mtu === null ? "" : String(draft.credential.mtu);
+      form.reserved =
+        draft.credential.reserved === null
+          ? ""
+          : draft.credential.reserved.join(",");
+      break;
+    case "anytls":
+      form.protocol = "anytls";
+      form.password = draft.credential.password;
+      break;
+    case "naive":
+      form.protocol = "naive";
+      form.username = draft.credential.username ?? "";
+      form.password = draft.credential.password ?? "";
+      form.quic = draft.credential.quic;
+      form.quicCongestionControl = draft.credential.quicCongestionControl ?? "";
+      break;
+    case "custom":
+      form.protocol = "custom";
+      form.customCore = draft.credential.core;
+      form.customDocument = draft.credential.document;
+      break;
+  }
+
+  if (draft.transport?.type === "websocket") {
+    form.transport = "websocket";
+    form.wsPath = draft.transport.path;
+    form.wsHost = draft.transport.host ?? "";
+  } else if (draft.transport?.type === "httpupgrade") {
+    form.transport = "httpupgrade";
+    form.wsPath = draft.transport.path;
+    form.wsHost = draft.transport.host ?? "";
+  } else if (draft.transport?.type === "xhttp") {
+    form.transport = "xhttp";
+    form.wsPath = draft.transport.path;
+    form.wsHost = draft.transport.host ?? "";
+    form.xhttpMode = draft.transport.mode;
+  } else if (draft.transport?.type === "grpc") {
+    form.transport = "grpc";
+    form.grpcServiceName = draft.transport.serviceName;
+    form.grpcMode = draft.transport.mode;
+    form.grpcAuthority = draft.transport.authority ?? "";
+  } else if (draft.transport?.type === "kcp") {
+    form.transport = "kcp";
+    form.kcpMtu = draft.transport.mtu === null ? "" : String(draft.transport.mtu);
+    form.kcpTti = draft.transport.tti === null ? "" : String(draft.transport.tti);
+    form.kcpUplinkCapacity =
+      draft.transport.uplinkCapacity === null
+        ? ""
+        : String(draft.transport.uplinkCapacity);
+    form.kcpDownlinkCapacity =
+      draft.transport.downlinkCapacity === null
+        ? ""
+        : String(draft.transport.downlinkCapacity);
+    form.kcpCongestion = draft.transport.congestion;
+    form.kcpHeaderType = (draft.transport.headerType ?? "") as KcpHeaderType;
+    form.kcpSeed = draft.transport.seed ?? "";
+  } else if (draft.transport?.type === "tcp") {
+    form.transport = "tcp";
+  }
+
+  if (draft.tls?.type === "reality") {
+    form.realityEnabled = true;
+    form.tlsEnabled = true;
+    form.serverName = draft.tls.serverName;
+    form.publicKey = draft.tls.publicKey;
+    form.shortId = draft.tls.shortId ?? "";
+    form.spiderX = draft.tls.spiderX ?? "";
+    form.fingerprint = draft.tls.fingerprint ?? "";
+    form.alpn = draft.tls.alpn.join(",");
+  } else if (draft.tls?.type === "tls") {
+    form.tlsEnabled = true;
+    form.allowInsecure = draft.tls.allowInsecure;
+    form.serverName = draft.tls.serverName ?? "";
+    form.fingerprint = draft.tls.fingerprint ?? "";
+    form.pinnedSha256 = draft.tls.pinnedSha256 ?? "";
+    form.alpn = draft.tls.alpn.join(",");
+  }
+
+  form.xrayFinalmaskJson = draft.xrayFinalmaskJson ?? "";
+
+  return form;
 }

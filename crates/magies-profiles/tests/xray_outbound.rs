@@ -36,6 +36,7 @@ fn build_node(
         udp_enabled: true,
         transport: None,
         tls,
+        xray_finalmask_json: None,
         credential,
     }
     .build(Uuid::new_v4(), CredentialRef::new("node/test").unwrap())
@@ -166,6 +167,93 @@ fn a_websocket_transport_becomes_ws_settings() {
     assert_eq!(stream["network"], "ws");
     assert_eq!(stream["wsSettings"]["path"], "/ray");
     assert_eq!(stream["wsSettings"]["headers"]["Host"], "cdn.example.com");
+}
+
+#[test]
+fn an_httpupgrade_transport_becomes_httpupgrade_settings() {
+    let (mut node, credential) = build_node(vless(), None);
+    node.transport = Some(TransportConfig::HttpUpgrade {
+        path: "/upgrade".to_owned(),
+        host: Some("cdn.example.com".to_owned()),
+    });
+
+    let outbound = generate(&node, &credential);
+
+    let stream = &outbound["streamSettings"];
+    assert_eq!(stream["network"], "httpupgrade");
+    assert_eq!(stream["httpupgradeSettings"]["path"], "/upgrade");
+    assert_eq!(stream["httpupgradeSettings"]["host"], "cdn.example.com");
+}
+
+#[test]
+fn an_xhttp_transport_becomes_xhttp_settings() {
+    use magies_domain::XhttpMode;
+
+    let (mut node, credential) = build_node(vless(), None);
+    node.transport = Some(TransportConfig::XHttp {
+        path: "/xh".to_owned(),
+        host: Some("cdn.example.com".to_owned()),
+        mode: XhttpMode::StreamUp,
+    });
+
+    let outbound = generate(&node, &credential);
+
+    let stream = &outbound["streamSettings"];
+    assert_eq!(stream["network"], "xhttp");
+    assert_eq!(stream["xhttpSettings"]["path"], "/xh");
+    assert_eq!(stream["xhttpSettings"]["host"], "cdn.example.com");
+    assert_eq!(stream["xhttpSettings"]["mode"], "stream-up");
+}
+
+#[test]
+fn a_kcp_transport_becomes_kcp_settings() {
+    let (mut node, credential) = build_node(vless(), None);
+    node.transport = Some(TransportConfig::Kcp {
+        mtu: Some(1350),
+        tti: Some(50),
+        uplink_capacity: Some(5),
+        downlink_capacity: Some(20),
+        congestion: true,
+        header_type: Some("wechat-video".to_owned()),
+        seed: Some("s3cr3t".to_owned()),
+    });
+
+    let outbound = generate(&node, &credential);
+
+    let stream = &outbound["streamSettings"];
+    assert_eq!(stream["network"], "kcp");
+    assert_eq!(stream["kcpSettings"]["mtu"], 1350);
+    assert_eq!(stream["kcpSettings"]["tti"], 50);
+    assert_eq!(stream["kcpSettings"]["uplinkCapacity"], 5);
+    assert_eq!(stream["kcpSettings"]["downlinkCapacity"], 20);
+    assert_eq!(stream["kcpSettings"]["congestion"], true);
+    assert_eq!(stream["kcpSettings"]["header"]["type"], "wechat-video");
+    assert_eq!(stream["kcpSettings"]["seed"], "s3cr3t");
+}
+
+#[test]
+fn a_kcp_transport_with_no_optionals_omits_them_and_defaults_the_header() {
+    let (mut node, credential) = build_node(vless(), None);
+    node.transport = Some(TransportConfig::Kcp {
+        mtu: None,
+        tti: None,
+        uplink_capacity: None,
+        downlink_capacity: None,
+        congestion: false,
+        header_type: None,
+        seed: None,
+    });
+
+    let outbound = generate(&node, &credential);
+
+    let settings = &outbound["streamSettings"]["kcpSettings"];
+    assert!(settings["mtu"].is_null());
+    assert!(settings["tti"].is_null());
+    assert!(settings["uplinkCapacity"].is_null());
+    assert!(settings["downlinkCapacity"].is_null());
+    assert_eq!(settings["congestion"], false);
+    assert_eq!(settings["header"]["type"], "none");
+    assert!(settings["seed"].is_null());
 }
 
 #[test]
@@ -343,6 +431,52 @@ fn a_node_without_a_transport_is_refused() {
 }
 
 #[test]
+fn socks_and_http_use_the_servers_array_with_optional_users() {
+    let (socks_node, socks_credential) = build_node(
+        ManualCredentialDraft::Socks {
+            username: Some("alice".to_owned()),
+            password: Some("hunter2".to_owned()),
+        },
+        None,
+    );
+    let socks = generate(&socks_node, &socks_credential);
+    assert_eq!(socks["protocol"], "socks");
+    assert_eq!(
+        socks["settings"]["servers"][0]["address"],
+        "edge.example.com"
+    );
+    assert_eq!(socks["settings"]["servers"][0]["port"], 443);
+    assert_eq!(socks["settings"]["servers"][0]["users"][0]["user"], "alice");
+    assert_eq!(
+        socks["settings"]["servers"][0]["users"][0]["pass"],
+        "hunter2"
+    );
+    assert_eq!(socks["streamSettings"]["network"], "tcp");
+
+    let (anonymous_node, anonymous_credential) = build_node(
+        ManualCredentialDraft::Socks {
+            username: None,
+            password: None,
+        },
+        None,
+    );
+    let anonymous = generate(&anonymous_node, &anonymous_credential);
+    assert!(anonymous["settings"]["servers"][0]["users"].is_null());
+
+    let (http_node, http_credential) = build_node(
+        ManualCredentialDraft::Http {
+            username: Some("alice".to_owned()),
+            password: Some("hunter2".to_owned()),
+        },
+        Some(plain_tls()),
+    );
+    let http = generate(&http_node, &http_credential);
+    assert_eq!(http["protocol"], "http");
+    assert_eq!(http["settings"]["servers"][0]["users"][0]["user"], "alice");
+    assert_eq!(http["streamSettings"]["security"], "tls");
+}
+
+#[test]
 fn hysteria2_is_refused_the_same_way_the_matrix_refuses_it() {
     // The manual draft never produces a Hysteria2 node with a transport, so the
     // node is assembled directly to reach the generator's own guard.
@@ -360,6 +494,83 @@ fn hysteria2_is_refused_the_same_way_the_matrix_refuses_it() {
     );
 }
 
+#[test]
+fn anytls_is_refused_the_same_way_the_matrix_refuses_it() {
+    // The manual draft never produces an AnyTLS node with a transport, so the
+    // node is assembled directly to reach the generator's own guard.
+    let (mut node, _) = build_node(vless(), None);
+    node.protocol_type = ProxyProtocol::AnyTls;
+    node.port = NonZeroU16::new(8443).unwrap();
+
+    let (_, credential) = anytls_node();
+
+    assert_eq!(
+        XrayOutboundConfigGenerator::generate(&node, credential.as_node_credential()).unwrap_err(),
+        XrayOutboundError::ProtocolUnsupported {
+            protocol: ProxyProtocol::AnyTls,
+        }
+    );
+}
+
+#[test]
+fn naive_is_refused_the_same_way_the_matrix_refuses_it() {
+    let (mut node, _) = build_node(vless(), None);
+    node.protocol_type = ProxyProtocol::Naive;
+    node.port = NonZeroU16::new(443).unwrap();
+
+    let (_, credential) = naive_node();
+
+    assert_eq!(
+        XrayOutboundConfigGenerator::generate(&node, credential.as_node_credential()).unwrap_err(),
+        XrayOutboundError::ProtocolUnsupported {
+            protocol: ProxyProtocol::Naive,
+        }
+    );
+}
+
+fn anytls_node() -> (ProxyNode, StoredNodeCredential) {
+    ManualNodeDraft {
+        name: "Tokyo".to_owned(),
+        server: "edge.example.com".to_owned(),
+        port: 8443,
+        udp_enabled: true,
+        transport: None,
+        tls: Some(plain_tls()),
+        xray_finalmask_json: None,
+        credential: ManualCredentialDraft::AnyTls {
+            password: "hunter2".to_owned(),
+        },
+    }
+    .build(Uuid::new_v4(), CredentialRef::new("node/anytls").unwrap())
+    .unwrap()
+}
+
+fn naive_node() -> (ProxyNode, StoredNodeCredential) {
+    ManualNodeDraft {
+        name: "Tokyo".to_owned(),
+        server: "edge.example.com".to_owned(),
+        port: 443,
+        udp_enabled: true,
+        transport: None,
+        tls: Some(TlsConfig::Tls {
+            server_name: Some("sni.example.com".to_owned()),
+            allow_insecure: false,
+            alpn: Vec::new(),
+            fingerprint: None,
+            pinned_sha256: None,
+        }),
+        xray_finalmask_json: None,
+        credential: ManualCredentialDraft::Naive {
+            username: Some("alice".to_owned()),
+            password: Some("hunter2".to_owned()),
+            quic: true,
+            quic_congestion_control: None,
+        },
+    }
+    .build(Uuid::new_v4(), CredentialRef::new("node/naive").unwrap())
+    .unwrap()
+}
+
 fn hysteria2_node() -> (ProxyNode, StoredNodeCredential) {
     ManualNodeDraft {
         name: "Tokyo".to_owned(),
@@ -368,6 +579,7 @@ fn hysteria2_node() -> (ProxyNode, StoredNodeCredential) {
         udp_enabled: true,
         transport: None,
         tls: Some(plain_tls()),
+        xray_finalmask_json: None,
         credential: ManualCredentialDraft::Hysteria2 {
             authentication: Some("token".to_owned()),
             obfuscation: None,
@@ -404,6 +616,20 @@ fn the_generator_agrees_with_the_capability_matrix() {
                 password: "hunter2".to_owned(),
             },
         ),
+        (
+            ProxyProtocol::Socks,
+            ManualCredentialDraft::Socks {
+                username: None,
+                password: None,
+            },
+        ),
+        (
+            ProxyProtocol::Http,
+            ManualCredentialDraft::Http {
+                username: None,
+                password: None,
+            },
+        ),
     ];
 
     for (protocol, draft) in cases {
@@ -420,11 +646,17 @@ fn the_generator_agrees_with_the_capability_matrix() {
         );
     }
 
-    // The one protocol the matrix excludes.
-    assert!(!CoreCapabilityMatrix::supports(
-        CoreType::Xray,
-        CoreRequirements::new(ProxyProtocol::Hysteria2, false, CpuArchitecture::Aarch64)
-    ));
+    // Protocols the matrix excludes entirely.
+    for excluded in [
+        ProxyProtocol::Hysteria2,
+        ProxyProtocol::AnyTls,
+        ProxyProtocol::Naive,
+    ] {
+        assert!(!CoreCapabilityMatrix::supports(
+            CoreType::Xray,
+            CoreRequirements::new(excluded, false, CpuArchitecture::Aarch64)
+        ));
+    }
 }
 
 /// Both generators must accept the same node, so switching Cores never needs a

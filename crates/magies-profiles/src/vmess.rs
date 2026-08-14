@@ -3,13 +3,16 @@ use std::num::NonZeroU16;
 
 use base64::{Engine as _, engine::general_purpose};
 use magies_domain::{
-    CredentialRef, GrpcMode, NodeModelError, NodeName, ProxyNode, ProxyProtocol, ServerAddress,
-    TlsConfig, TransportConfig,
+    CertificatePin, CredentialRef, GrpcMode, NodeModelError, NodeName, ProxyNode, ProxyProtocol,
+    ServerAddress, TlsConfig, TransportConfig, XhttpMode,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{ParsedVlessNode, VlessCredential, VlessParseError, VlessParser, default_name};
+use super::{
+    ParsedVlessNode, VlessCredential, VlessParseError, VlessParser, default_name,
+    validate_kcp_header_type,
+};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct VmessParser;
@@ -191,10 +194,14 @@ pub enum VmessParseError {
     UnsupportedTransport { value: String },
     #[error("unsupported VMess TCP header: {value}")]
     UnsupportedTcpHeader { value: String },
+    #[error("unsupported VMess KCP header type: {value}")]
+    UnsupportedKcpHeaderType { value: String },
     #[error("unsupported VMess transport security: {value}")]
     UnsupportedSecurity { value: String },
     #[error("invalid VMess ALPN list")]
     InvalidAlpn,
+    #[error("invalid VMess certificate pin: {value}")]
+    InvalidCertificatePin { value: String },
     #[error("VMess field {name} cannot be represented by the node model")]
     UnsupportedField { name: &'static str },
     #[error("unsupported VMess parameter: {name}")]
@@ -316,7 +323,7 @@ impl TryFrom<LegacyVmess> for ParsedVmessNode {
     fn try_from(value: LegacyVmess) -> Result<Self, Self::Error> {
         validate_version(value.v.as_ref())?;
         reject_non_empty(value.vcn.as_deref(), "vcn")?;
-        reject_non_empty(value.pcs.as_deref(), "pcs")?;
+        let pinned_sha256 = parse_legacy_certificate_pin(value.pcs.as_deref())?;
 
         let server = required_non_empty(value.add, "add")?;
         let server =
@@ -352,6 +359,7 @@ impl TryFrom<LegacyVmess> for ParsedVmessNode {
             value.alpn.as_deref(),
             value.fp,
             value.insecure.as_ref(),
+            pinned_sha256,
         )?;
 
         let fallback_name = default_name(&server, port);
@@ -416,29 +424,79 @@ fn parse_legacy_transport(
     let header_type = header_type
         .filter(|value| !value.is_empty())
         .unwrap_or("none");
-    if header_type != "none" {
-        return Err(VmessParseError::UnsupportedTcpHeader {
-            value: header_type.to_owned(),
-        });
-    }
 
     match network {
-        "tcp" => Ok(TransportConfig::Tcp),
-        "ws" => Ok(TransportConfig::WebSocket {
+        "tcp" => {
+            if header_type == "none" {
+                Ok(TransportConfig::Tcp)
+            } else {
+                Err(VmessParseError::UnsupportedTcpHeader {
+                    value: header_type.to_owned(),
+                })
+            }
+        }
+        "ws" if header_type == "none" => Ok(TransportConfig::WebSocket {
             path: path
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| "/".to_owned()),
             host: host.filter(|value| !value.is_empty()),
         }),
-        "grpc" => Ok(TransportConfig::Grpc {
+        "httpupgrade" if header_type == "none" => Ok(TransportConfig::HttpUpgrade {
+            path: path
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "/".to_owned()),
+            host: host.filter(|value| !value.is_empty()),
+        }),
+        // The legacy VMess JSON document has no XHTTP mode field at all, so
+        // every node imported this way gets Xray's default behavior.
+        "xhttp" | "splithttp" if header_type == "none" => Ok(TransportConfig::XHttp {
+            path: path
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "/".to_owned()),
+            host: host.filter(|value| !value.is_empty()),
+            mode: XhttpMode::Auto,
+        }),
+        "grpc" if header_type == "none" => Ok(TransportConfig::Grpc {
             service_name: required_non_empty(path, "path")?,
             mode: GrpcMode::Gun,
             authority: None,
         }),
+        // The legacy VMess JSON document has no dedicated mKCP fields beyond
+        // `type` (obfuscation header) and `path` (seed), matching the
+        // convention v2rayN-style share links use; the numeric knobs
+        // (`mtu`/`tti`/capacities) are left unset.
+        "kcp" | "mkcp" => Ok(TransportConfig::Kcp {
+            mtu: None,
+            tti: None,
+            uplink_capacity: None,
+            downlink_capacity: None,
+            congestion: false,
+            header_type: legacy_kcp_header_type(header_type)?,
+            seed: path.filter(|value| !value.is_empty()),
+        }),
+        "ws" | "httpupgrade" | "xhttp" | "splithttp" | "grpc" => {
+            Err(VmessParseError::UnsupportedTcpHeader {
+                value: header_type.to_owned(),
+            })
+        }
         value => Err(VmessParseError::UnsupportedTransport {
             value: value.to_owned(),
         }),
     }
+}
+
+/// Maps the legacy `VMess` JSON `type` field to [`TransportConfig::Kcp`]'s
+/// `header_type`, keeping `None` when the header is the "none" default so a
+/// round-tripped share link does not gain a field it never had.
+fn legacy_kcp_header_type(header_type: &str) -> Result<Option<String>, VmessParseError> {
+    if header_type == "none" {
+        return Ok(None);
+    }
+    validate_kcp_header_type(header_type.to_owned())
+        .map(Some)
+        .map_err(|_| VmessParseError::UnsupportedKcpHeaderType {
+            value: header_type.to_owned(),
+        })
 }
 
 fn parse_legacy_tls(
@@ -447,6 +505,7 @@ fn parse_legacy_tls(
     alpn: Option<&str>,
     fingerprint: Option<String>,
     insecure: Option<&TextOrNumber>,
+    pinned_sha256: Option<CertificatePin>,
 ) -> Result<Option<TlsConfig>, VmessParseError> {
     match security.filter(|value| !value.is_empty()).unwrap_or("none") {
         "none" => Ok(None),
@@ -455,12 +514,25 @@ fn parse_legacy_tls(
             allow_insecure: parse_legacy_boolean(insecure, "insecure")?,
             alpn: parse_legacy_alpn(alpn)?,
             fingerprint: fingerprint.filter(|value| !value.is_empty()),
-            pinned_sha256: None,
+            pinned_sha256,
         })),
         value => Err(VmessParseError::UnsupportedSecurity {
             value: value.to_owned(),
         }),
     }
+}
+
+fn parse_legacy_certificate_pin(
+    value: Option<&str>,
+) -> Result<Option<CertificatePin>, VmessParseError> {
+    let Some(value) = value.filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    CertificatePin::new(value)
+        .map(Some)
+        .map_err(|_| VmessParseError::InvalidCertificatePin {
+            value: value.to_owned(),
+        })
 }
 
 fn parse_legacy_boolean(

@@ -2,11 +2,14 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::str;
 
-use magies_domain::{CredentialRef, ProxyNode, TimestampMillis};
+use magies_domain::{CredentialRef, ProxyNode, Subscription, TimestampMillis};
 use magies_storage::{SecretStore, SecretStoreError, SecretValue};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::subscription_url::{
+    SubscriptionUrlError, effective_fetch_urls, split_subscription_urls,
+};
 use crate::{
     CredentialCodec, CredentialCodecError, CredentialIdentity, NodeDedupCandidate,
     NodeDeduplicator, ParsedSubscriptionNode, SqliteSubscriptionStore, SubscriptionContentError,
@@ -74,32 +77,69 @@ impl<'a, S: SecretStore + ?Sized> SubscriptionRefreshService<'a, S> {
             })?;
         let url = str::from_utf8(url_secret.expose_secret())
             .map_err(|source| SubscriptionRefreshError::InvalidUrlSecret { source })?;
+        let sources = split_subscription_urls(url);
+        let fetch_urls = effective_fetch_urls(&sources, subscription.subconverter_url.as_deref())
+            .map_err(SubscriptionRefreshError::Url)?;
         let validators = SubscriptionValidators::new(
             subscription.etag.clone(),
             subscription.last_modified.clone(),
         );
+        let user_agent = subscription.user_agent.as_deref();
 
-        match self.fetcher.fetch(url, Some(&validators)).await? {
-            SubscriptionFetchResult::NotModified { validators } => {
-                self.store
-                    .touch_subscription(subscription_id, &validators, updated_at)?;
-                Ok(SubscriptionRefreshOutcome::NotModified)
-            }
-            SubscriptionFetchResult::Updated {
-                content,
-                validators,
-            } => self.commit_updated(subscription_id, &content, validators, updated_at),
+        if fetch_urls.len() == 1 {
+            return match self
+                .fetcher
+                .fetch(&fetch_urls[0], Some(&validators), user_agent)
+                .await?
+            {
+                SubscriptionFetchResult::NotModified { validators } => {
+                    self.store
+                        .touch_subscription(subscription_id, &validators, updated_at)?;
+                    Ok(SubscriptionRefreshOutcome::NotModified)
+                }
+                SubscriptionFetchResult::Updated {
+                    content,
+                    validators,
+                } => self.commit_updated(&subscription, &content, validators, updated_at),
+            };
         }
+
+        let mut parts = Vec::with_capacity(fetch_urls.len());
+        let mut last_validators = validators;
+        for fetch_url in fetch_urls {
+            match self.fetcher.fetch(&fetch_url, None, user_agent).await? {
+                SubscriptionFetchResult::NotModified { .. } => {}
+                SubscriptionFetchResult::Updated {
+                    content,
+                    validators,
+                } => {
+                    last_validators = validators;
+                    parts.push(content);
+                }
+            }
+        }
+        if parts.is_empty() {
+            self.store
+                .touch_subscription(subscription_id, &last_validators, updated_at)?;
+            return Ok(SubscriptionRefreshOutcome::NotModified);
+        }
+        let merged = merge_subscription_contents(&parts);
+        self.commit_updated(&subscription, &merged, last_validators, updated_at)
     }
 
     fn commit_updated(
         &mut self,
-        subscription_id: Uuid,
+        subscription: &Subscription,
         content: &[u8],
         validators: SubscriptionValidators,
         updated_at: TimestampMillis,
     ) -> Result<SubscriptionRefreshOutcome, SubscriptionRefreshError> {
-        let parsed = SubscriptionContentParser.parse(content, subscription_id)?;
+        let subscription_id = subscription.id;
+        let parsed = SubscriptionContentParser
+            .parse(content, subscription_id)?
+            .into_iter()
+            .filter(|parsed| subscription.accepts_node_name(parsed.node().name.as_str()))
+            .collect::<Vec<_>>();
         let existing_nodes = self.store.subscription_nodes(subscription_id)?;
         let existing = self.existing_candidates(&existing_nodes)?;
         let (incoming, mut pending_credentials) = incoming_candidates(parsed)?;
@@ -275,6 +315,8 @@ pub enum SubscriptionRefreshError {
     Transaction(#[from] SubscriptionTransactionError),
     #[error("subscription URL secret is not valid UTF-8")]
     InvalidUrlSecret { source: str::Utf8Error },
+    #[error(transparent)]
+    Url(#[from] SubscriptionUrlError),
     #[error("subscription credential store failed while attempting to {operation}")]
     SecretStore {
         operation: SubscriptionSecretOperation,
@@ -292,4 +334,17 @@ pub enum SubscriptionRefreshError {
         #[from]
         source: CredentialCodecError,
     },
+}
+
+fn merge_subscription_contents(parts: &[Vec<u8>]) -> Vec<u8> {
+    let separator_count = parts.len().saturating_sub(1);
+    let total = parts.iter().map(Vec::len).sum::<usize>() + separator_count;
+    let mut merged = Vec::with_capacity(total);
+    for (index, part) in parts.iter().enumerate() {
+        if index > 0 {
+            merged.push(b'\n');
+        }
+        merged.extend_from_slice(part);
+    }
+    merged
 }

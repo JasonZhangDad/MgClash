@@ -314,6 +314,26 @@ fn node_totals_survive_a_restart() {
     assert_eq!(totals[&node].total_download_bytes, 40);
 }
 
+#[test]
+fn clearing_zeros_aggregate_and_per_node_totals() {
+    let started_at = Instant::now();
+    let mut counter = SqliteTrafficCounter::open_in_memory(day(2026, 8, 11), started_at).unwrap();
+    let node = Uuid::from_u128(7);
+    counter
+        .record(day(2026, 8, 11), split_rate(12, 34), started_at, Some(node))
+        .unwrap();
+
+    counter.clear(day(2026, 8, 11), started_at).unwrap();
+
+    assert!(counter.node_totals().is_empty());
+    let snapshot = counter.snapshot();
+    assert_eq!(snapshot.today_bytes, 0);
+    assert_eq!(snapshot.month_bytes, 0);
+    assert_eq!(snapshot.total_bytes, 0);
+    assert_eq!(snapshot.upload_bytes_per_second, 0);
+    assert_eq!(snapshot.download_bytes_per_second, 0);
+}
+
 fn split_rate(upload: u64, download: u64) -> TrafficRate {
     TrafficRate {
         upload_bytes_per_second: upload,

@@ -176,6 +176,29 @@ fn updates_an_existing_manual_node_without_changing_the_selection() {
     ));
 }
 
+#[test]
+fn replace_all_swaps_every_manual_node_and_selection() {
+    let mut store = SqliteManualNodeStore::open_in_memory().unwrap();
+    let first = node("First", 1000);
+    let second = node("Second", 2000);
+    store.save_and_select(&first).unwrap();
+    store.save(&second).unwrap();
+
+    let third = node("Third", 3000);
+    store
+        .replace_all(&[(third.clone(), true), (second.clone(), false)])
+        .unwrap();
+
+    assert_eq!(store.nodes().unwrap(), vec![third.clone(), second]);
+    assert_eq!(store.selected_node().unwrap(), Some(third));
+
+    let duplicate = node("Duplicate", 4000);
+    assert!(matches!(
+        store.replace_all(&[(first.clone(), true), (duplicate, true)]),
+        Err(ManualNodeStoreError::MultipleSelected { count: 2 })
+    ));
+}
+
 fn node(name: &str, port: u32) -> ProxyNode {
     let id = uuid();
     ProxyNode::new(

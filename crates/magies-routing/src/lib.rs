@@ -9,7 +9,7 @@ use std::num::NonZeroU16;
 
 use ipnet::IpNet;
 use serde_json::{Value, json};
-use url::Host;
+use url::{Host, Url};
 
 const GEOIP_RULE_SET_BASE: &str = "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set";
 const GEOSITE_RULE_SET_BASE: &str =
@@ -82,12 +82,40 @@ enum RuleMatcher {
     IpCidr(IpNet),
     Port(NonZeroU16),
     Network(Network),
-    Geo { kind: GeoKind, code: String },
+    ProcessName(String),
+    ProcessPath(String),
+    Geo {
+        kind: GeoKind,
+        code: String,
+    },
+    RuleProvider {
+        tag: String,
+        url: String,
+        format: RuleProviderFormat,
+    },
 }
 
 impl RuleMatcher {
     const fn is_geo(&self) -> bool {
-        matches!(self, Self::Geo { .. })
+        matches!(self, Self::Geo { .. } | Self::RuleProvider { .. })
+    }
+}
+
+/// How a remote rule set is encoded, in sing-box's own words.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuleProviderFormat {
+    /// A compiled `.srs` rule set.
+    Binary,
+    /// A JSON source rule set.
+    Source,
+}
+
+impl RuleProviderFormat {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Binary => "binary",
+            Self::Source => "source",
+        }
     }
 }
 
@@ -245,6 +273,80 @@ impl RoutingRule {
         Self::new(RuleMatcher::Network(network), outbound, priority, enabled)
     }
 
+    /// Creates a process-name rule (sing-box `process_name`, Xray `process`).
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when `value` is empty.
+    pub fn process_name(
+        value: &str,
+        outbound: RouteOutbound,
+        priority: i32,
+        enabled: bool,
+    ) -> Result<Self, RouteConfigError> {
+        let value = value.trim();
+        if value.is_empty() {
+            return Err(RouteConfigError::EmptyValue);
+        }
+        Ok(Self::new(
+            RuleMatcher::ProcessName(value.to_owned()),
+            outbound,
+            priority,
+            enabled,
+        ))
+    }
+
+    /// Creates a process-path rule (sing-box `process_path`).
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when `value` is empty.
+    pub fn process_path(
+        value: &str,
+        outbound: RouteOutbound,
+        priority: i32,
+        enabled: bool,
+    ) -> Result<Self, RouteConfigError> {
+        let value = value.trim();
+        if value.is_empty() {
+            return Err(RouteConfigError::EmptyValue);
+        }
+        Ok(Self::new(
+            RuleMatcher::ProcessPath(value.to_owned()),
+            outbound,
+            priority,
+            enabled,
+        ))
+    }
+
+    /// Creates a rule backed by a user-supplied remote rule set.
+    ///
+    /// The tag names the downloaded set and is what the rule refers to, so it
+    /// has to stay a safe identifier; the URL is fetched by the Core over the
+    /// direct outbound.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when `tag` is not a safe identifier or `url` is
+    /// not an HTTP(S) source.
+    pub fn rule_provider(
+        tag: &str,
+        url: &str,
+        format: RuleProviderFormat,
+        outbound: RouteOutbound,
+        priority: i32,
+        enabled: bool,
+    ) -> Result<Self, RouteConfigError> {
+        let tag = validated_provider_tag(tag)?;
+        let url = validated_provider_url(url)?;
+        Ok(Self::new(
+            RuleMatcher::RuleProvider { tag, url, format },
+            outbound,
+            priority,
+            enabled,
+        ))
+    }
+
     /// Creates a `GeoIP` rule backed by the official binary rule set.
     ///
     /// # Errors
@@ -311,9 +413,12 @@ impl RoutingRule {
             RuleMatcher::IpCidr(network) => json!({ "ip_cidr": [network.to_string()] }),
             RuleMatcher::Port(port) => json!({ "port": [port.get()] }),
             RuleMatcher::Network(network) => json!({ "network": network.as_str() }),
+            RuleMatcher::ProcessName(name) => json!({ "process_name": [name] }),
+            RuleMatcher::ProcessPath(path) => json!({ "process_path": [path] }),
             RuleMatcher::Geo { kind, code } => {
                 json!({ "rule_set": [format!("{}-{code}", kind.prefix())] })
             }
+            RuleMatcher::RuleProvider { tag, .. } => json!({ "rule_set": [tag] }),
         };
         value["action"] = Value::String("route".to_owned());
         value["outbound"] = Value::String(self.outbound.as_str().to_owned());
@@ -423,20 +528,29 @@ fn generated_rule_sets(rules: &[&RoutingRule]) -> Vec<Value> {
     let mut seen = HashSet::new();
     rules
         .iter()
-        .filter_map(|rule| {
-            let RuleMatcher::Geo { kind, code } = &rule.matcher else {
-                return None;
-            };
-            let tag = format!("{}-{code}", kind.prefix());
-            seen.insert(tag.clone()).then(|| {
+        .filter_map(|rule| match &rule.matcher {
+            RuleMatcher::Geo { kind, code } => {
+                let tag = format!("{}-{code}", kind.prefix());
+                seen.insert(tag.clone()).then(|| {
+                    json!({
+                        "type": "remote",
+                        "tag": tag,
+                        "format": "binary",
+                        "url": format!("{}/{}-{code}.srs", kind.base_url(), kind.prefix()),
+                        "download_detour": "direct"
+                    })
+                })
+            }
+            RuleMatcher::RuleProvider { tag, url, format } => seen.insert(tag.clone()).then(|| {
                 json!({
                     "type": "remote",
                     "tag": tag,
-                    "format": "binary",
-                    "url": format!("{}/{}-{code}.srs", kind.base_url(), kind.prefix()),
+                    "format": format.as_str(),
+                    "url": url,
                     "download_detour": "direct"
                 })
-            })
+            }),
+            _ => None,
         })
         .collect()
 }
@@ -471,6 +585,33 @@ fn validated_geo_code(value: &str) -> Result<String, RouteConfigError> {
     Ok(normalized)
 }
 
+fn validated_provider_tag(value: &str) -> Result<String, RouteConfigError> {
+    let normalized = value.trim().to_ascii_lowercase();
+    let valid = !normalized.is_empty()
+        && normalized.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'
+        });
+    if !valid {
+        return Err(RouteConfigError::InvalidRuleProviderTag {
+            value: value.to_owned(),
+        });
+    }
+    Ok(normalized)
+}
+
+fn validated_provider_url(value: &str) -> Result<String, RouteConfigError> {
+    let value = value.trim();
+    let parsed = Url::parse(value).map_err(|_| RouteConfigError::InvalidRuleProviderUrl {
+        value: value.to_owned(),
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(RouteConfigError::InvalidRuleProviderUrl {
+            value: value.to_owned(),
+        });
+    }
+    Ok(parsed.to_string())
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum RouteConfigError {
     #[error("invalid route domain: {value}")]
@@ -487,6 +628,10 @@ pub enum RouteConfigError {
     InvalidPort { port: u32 },
     #[error("invalid GeoIP/GeoSite code: {value}")]
     InvalidGeoCode { value: String },
+    #[error("invalid rule provider tag: {value}")]
+    InvalidRuleProviderTag { value: String },
+    #[error("rule provider source must be an HTTP(S) URL: {value}")]
+    InvalidRuleProviderUrl { value: String },
     #[error("user routing rules require Rule mode")]
     RulesRequireRuleMode,
     #[error("Global mode must use the proxy final outbound")]

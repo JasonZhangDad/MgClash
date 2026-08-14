@@ -282,7 +282,7 @@ fn fetch(
         .enable_all()
         .build()
         .unwrap()
-        .block_on(fetcher.fetch(url, validators))
+        .block_on(fetcher.fetch(url, validators, None))
 }
 
 struct TestServer {

@@ -17,14 +17,14 @@ use magies_domain::{
 };
 use magies_platform::{CpuArchitecture, OperatingSystem};
 use magies_profiles::{
-    BulkImportError, BulkNodeImportParser, CoreCapabilityMatrix, CorePreference, CoreRequirements,
-    CoreSelectionError, CredentialCodec, CredentialCodecError, DnsConfigError, DnsProfile,
-    LocalHttpProfile, LocalSocksProfile, ManualNodeDraft, ManualNodeDraftError,
-    ManualNodeStoreError, NodeFingerprint, NodeGroup, NodeGroupStoreError, NodeOrderStoreError,
-    ShareLinkParseError, ShareLinkParser, ShareLinkQrCode, ShareLinkQrError, ShareLinkSerializer,
-    ShareLinkSerializerError, SqliteManualNodeStore, SqliteNodeGroupStore, SqliteNodeOrderStore,
-    SqliteSubscriptionStore, StoredNodeCredential, SubscriptionTransactionError, TunProfile,
-    TunProfileError, core_name, node_fingerprint,
+    BulkImportError, BulkNodeImportParser, CoreCapabilityMatrix, CorePreference, CoreRejection,
+    CoreRequirements, CoreSelectionError, CredentialCodec, CredentialCodecError, DnsConfigError,
+    DnsProfile, LocalHttpProfile, LocalProxyConfigError, LocalSocksProfile, ManualNodeDraft,
+    ManualNodeDraftError, ManualNodeStoreError, NodeFingerprint, NodeGroup, NodeGroupStoreError,
+    NodeGroupStrategy, NodeOrderStoreError, ShareLinkParseError, ShareLinkParser, ShareLinkQrCode,
+    ShareLinkQrError, ShareLinkSerializer, ShareLinkSerializerError, SqliteManualNodeStore,
+    SqliteNodeGroupStore, SqliteNodeOrderStore, SqliteSubscriptionStore, StoredNodeCredential,
+    SubscriptionTransactionError, TunProfile, TunProfileError, core_name, node_fingerprint,
 };
 use magies_routing::{RouteProfile, RoutingMode};
 use magies_session::{
@@ -37,10 +37,13 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::app_settings::DEFAULT_URL_TEST_ADDRESS;
 use crate::core_control::describe;
 use crate::dns_settings::{DnsSettings, DnsSettingsStoreError, SqliteDnsSettingsStore};
+use crate::profile_backup::{ManualNodeBackupEntry, ProfileNodesData};
 use crate::route_settings::{
-    RouteSettings, RouteSettingsError, RouteSettingsStoreError, SqliteRouteSettingsStore,
+    RouteSchemeBundle, RouteSettings, RouteSettingsError, RouteSettingsStoreError,
+    SqliteRouteSettingsStore,
 };
 use crate::routing_mode::{
     RoutingModeStoreError, SqliteRoutingModeStore, route_profile_for, routing_mode_name,
@@ -71,6 +74,10 @@ fn host_architecture() -> CpuArchitecture {
 
 /// Fixed session settings the V0.1 shell does not let the user edit yet.
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent Core toggles the UI exposes one by one"
+)]
 pub struct SessionDefaults {
     pub socks: LocalSocksProfile,
     pub http: LocalHttpProfile,
@@ -78,6 +85,18 @@ pub struct SessionDefaults {
     pub dns: DnsProfile,
     pub route: RouteProfile,
     pub system_proxy: SystemProxyMode,
+    /// When true the next connect asks the Core for multiplex / mux.
+    pub mux_enabled: bool,
+    /// When true the next connect fragments the TLS `ClientHello` (v2rayN's
+    /// Fragment anti-detection toggle).
+    pub fragment_enabled: bool,
+    /// When true the next connect applies Final (tail) TLS fragmentation
+    /// (v2rayN's `EnableFinalFragment`).
+    pub final_fragment_enabled: bool,
+    /// When true the next connect sends v2rayN-style UDP noise via Xray freedom
+    /// `noises` (Xray only).
+    pub udp_noise_enabled: bool,
+    pub url_test_address: String,
 }
 
 impl SessionDefaults {
@@ -99,6 +118,11 @@ impl SessionDefaults {
                 .expect("the default DNS settings are valid"),
             route: route_profile_for(RoutingMode::Global),
             system_proxy: SystemProxyMode::Managed,
+            mux_enabled: false,
+            fragment_enabled: false,
+            final_fragment_enabled: false,
+            udp_noise_enabled: false,
+            url_test_address: DEFAULT_URL_TEST_ADDRESS.to_owned(),
         }
     }
 
@@ -143,6 +167,8 @@ pub struct NodeSummary {
     /// Which TLS layer the node uses, or `None` for plaintext.
     pub tls: Option<&'static str>,
     pub deletable: bool,
+    /// When false the node stays listed but cannot be selected or connected.
+    pub enabled: bool,
     pub latency_ms: Option<u32>,
     pub last_tested_at: Option<i64>,
 }
@@ -156,9 +182,10 @@ impl From<&ProxyNode> for NodeSummary {
             server: node.server.as_str().to_owned(),
             port: node.port.get(),
             group_id: node.group_id,
-            transport: transport_name(node.transport.as_ref()),
+            transport: transport_name(node.protocol_type, node.transport.as_ref()),
             tls: node.tls.as_ref().map(tls_name),
             deletable: node.subscription_id.is_none(),
+            enabled: node.enabled,
             latency_ms: node.latency_ms,
             last_tested_at: node.last_tested_at.map(TimestampMillis::get),
         }
@@ -175,12 +202,25 @@ const fn system_proxy_mode_name(mode: &SystemProxyMode) -> &'static str {
     }
 }
 
-/// Hysteria2 carries its own QUIC transport, which the model stores as `None`.
-const fn transport_name(transport: Option<&TransportConfig>) -> &'static str {
+/// Hysteria2 and TUIC carry their own QUIC transport, `WireGuard` is its own
+/// tunnel, `AnyTLS` is TLS from the first byte, and `Naive` tunnels over HTTP/2
+/// or QUIC; the model stores `None` for all of them, so the protocol decides
+/// which label a missing transport gets.
+const fn transport_name(
+    protocol: ProxyProtocol,
+    transport: Option<&TransportConfig>,
+) -> &'static str {
     match transport {
         Some(TransportConfig::Tcp) => "tcp",
         Some(TransportConfig::WebSocket { .. }) => "ws",
+        Some(TransportConfig::HttpUpgrade { .. }) => "httpupgrade",
         Some(TransportConfig::Grpc { .. }) => "grpc",
+        Some(TransportConfig::XHttp { .. }) => "xhttp",
+        Some(TransportConfig::Kcp { .. }) => "kcp",
+        None if matches!(protocol, ProxyProtocol::WireGuard) => "wireguard",
+        None if matches!(protocol, ProxyProtocol::AnyTls) => "anytls",
+        None if matches!(protocol, ProxyProtocol::Naive) => "naive",
+        None if matches!(protocol, ProxyProtocol::Custom) => "custom",
         None => "quic",
     }
 }
@@ -219,6 +259,7 @@ const fn tls_name(tls: &TlsConfig) -> &'static str {
 pub struct NodeGroupSummary {
     pub id: Uuid,
     pub name: String,
+    pub strategy: NodeGroupStrategy,
 }
 
 impl From<NodeGroup> for NodeGroupSummary {
@@ -226,8 +267,17 @@ impl From<NodeGroup> for NodeGroupSummary {
         Self {
             id: group.id,
             name: group.name,
+            strategy: group.strategy,
         }
     }
+}
+
+/// One named routing scheme the desktop can switch between.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteSchemeSummary {
+    pub id: String,
+    pub name: String,
 }
 
 /// Everything the dashboard needs for one render.
@@ -240,11 +290,14 @@ pub struct SessionStatus {
     pub dns: DnsSettings,
     pub mode: &'static str,
     pub route: RouteSettings,
+    pub route_scheme_id: String,
+    pub route_schemes: Vec<RouteSchemeSummary>,
     pub system_proxy: bool,
     /// Which of the three System Proxy modes the next session will use.
     pub system_proxy_mode: &'static str,
     pub socks_port: u16,
     pub http_port: u16,
+    pub clash_api_port: u16,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -299,7 +352,7 @@ where
     node_groups: SqliteNodeGroupStore,
     routing_mode: SqliteRoutingModeStore,
     route_settings: SqliteRouteSettingsStore,
-    current_route_settings: RouteSettings,
+    current_route_bundle: RouteSchemeBundle,
     dns_settings: SqliteDnsSettingsStore,
     current_dns_settings: DnsSettings,
     recovery: NetworkRecoveryPolicy,
@@ -340,8 +393,8 @@ where
         }
         let mut defaults = defaults;
         let mode = routing_mode.load()?;
-        let current_route_settings = route_settings.load()?;
-        defaults.route = current_route_settings.profile(mode)?;
+        let current_route_bundle = route_settings.load_bundle()?;
+        defaults.route = current_route_bundle.profile(mode)?;
         let current_dns_settings = dns_settings.load()?;
         defaults.dns = current_dns_settings.profile()?;
         Ok(Self {
@@ -354,7 +407,7 @@ where
             node_groups: node_stores.groups,
             routing_mode,
             route_settings,
-            current_route_settings,
+            current_route_bundle,
             dns_settings,
             current_dns_settings,
             recovery: NetworkRecoveryPolicy::default(),
@@ -362,6 +415,11 @@ where
             tun_enabled: false,
             core_output: None,
         })
+    }
+
+    #[must_use]
+    pub fn session(&self) -> &DesktopSession<S, C, P> {
+        &self.session
     }
 
     /// Records a network change or wake so the next [`Self::recover`] pass can
@@ -414,9 +472,6 @@ where
         &mut self,
         uri: &str,
     ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
-        if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
-        }
         let id = Uuid::new_v4();
         let credential_ref =
             CredentialRef::new(format!("node/{id}")).map_err(SessionCommandError::CredentialRef)?;
@@ -437,9 +492,6 @@ where
         &mut self,
         draft: ManualNodeDraft,
     ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
-        if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
-        }
         let id = Uuid::new_v4();
         let credential_ref =
             CredentialRef::new(format!("node/{id}")).map_err(SessionCommandError::CredentialRef)?;
@@ -447,6 +499,106 @@ where
             .build(id, credential_ref)
             .map_err(SessionCommandError::ManualNodeDraft)?;
         self.store_new_node(node, &credential)
+    }
+
+    /// Returns the full form draft for a manual node, including its credential.
+    ///
+    /// Subscription nodes stay read-only: their next refresh owns those fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed read-only, not-found, secret, or credential error.
+    pub fn node_draft(
+        &self,
+        id: Uuid,
+    ) -> Result<ManualNodeDraft, SessionCommandError<C::Error, P::Error>> {
+        let node = self
+            .manual_nodes
+            .nodes()
+            .map_err(SessionCommandError::NodeStore)?
+            .into_iter()
+            .find(|node| node.id == id);
+        if node.is_none()
+            && self
+                .subscription_nodes
+                .active_nodes()
+                .map_err(SessionCommandError::SubscriptionNodeStore)?
+                .iter()
+                .any(|node| node.id == id)
+        {
+            return Err(SessionCommandError::SubscriptionNodeReadOnly { id });
+        }
+        let node = node.ok_or(SessionCommandError::NodeStore(
+            ManualNodeStoreError::NodeNotFound { id },
+        ))?;
+        let secret = self
+            .session
+            .secret_store()
+            .get(&node.credential_ref)
+            .map_err(SessionCommandError::Secret)?;
+        let credential =
+            CredentialCodec::decode(&secret).map_err(SessionCommandError::Credential)?;
+        Ok(ManualNodeDraft::from_stored(&node, &credential))
+    }
+
+    /// Replaces a manual node's endpoint, transport, TLS, and credential in place.
+    ///
+    /// Preserves id, group, latency history, and enabled flag. The secret is
+    /// overwritten under the same credential reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed active-session, validation, read-only, not-found, or
+    /// persistence error.
+    pub fn update_node(
+        &mut self,
+        id: Uuid,
+        draft: ManualNodeDraft,
+    ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
+        self.reject_running_node(id)?;
+        let existing = self
+            .manual_nodes
+            .nodes()
+            .map_err(SessionCommandError::NodeStore)?
+            .into_iter()
+            .find(|node| node.id == id);
+        if existing.is_none()
+            && self
+                .subscription_nodes
+                .active_nodes()
+                .map_err(SessionCommandError::SubscriptionNodeStore)?
+                .iter()
+                .any(|node| node.id == id)
+        {
+            return Err(SessionCommandError::SubscriptionNodeReadOnly { id });
+        }
+        let existing = existing.ok_or(SessionCommandError::NodeStore(
+            ManualNodeStoreError::NodeNotFound { id },
+        ))?;
+        let (mut node, credential) = draft
+            .build(id, existing.credential_ref.clone())
+            .map_err(SessionCommandError::ManualNodeDraft)?;
+        node.group_id = existing.group_id;
+        node.latency_ms = existing.latency_ms;
+        node.last_tested_at = existing.last_tested_at;
+        node.enabled = existing.enabled;
+        let secret =
+            CredentialCodec::encode(&credential).map_err(SessionCommandError::Credential)?;
+        self.session
+            .secret_store()
+            .put(&node.credential_ref, &secret)
+            .map_err(SessionCommandError::Secret)?;
+        let mut node = self
+            .manual_nodes
+            .update(&node)
+            .map_err(SessionCommandError::NodeStore)?;
+        self.node_groups
+            .apply(std::slice::from_mut(&mut node))
+            .map_err(SessionCommandError::NodeGroupStore)?;
+        if self.node.as_ref().is_some_and(|selected| selected.id == id) {
+            self.node = Some(node);
+        }
+        Ok(self.status())
     }
 
     /// Imports every sharing link in a pasted or opened body.
@@ -462,9 +614,6 @@ where
         &mut self,
         content: &[u8],
     ) -> Result<BulkImportReport, SessionCommandError<C::Error, P::Error>> {
-        if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
-        }
         let outcome = BulkNodeImportParser
             .parse(content)
             .map_err(SessionCommandError::BulkImport)?;
@@ -519,6 +668,141 @@ where
             failures,
             status: self.status(),
         })
+    }
+
+    /// Exports manual nodes with credentials, groups, order, and selection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed storage or credential error.
+    pub fn export_profile_nodes(
+        &self,
+    ) -> Result<ProfileNodesData, SessionCommandError<C::Error, P::Error>> {
+        let selected_node_id = self
+            .manual_nodes
+            .selected_node()
+            .map_err(SessionCommandError::NodeStore)?
+            .map(|node| node.id)
+            .or_else(|| {
+                self.subscription_nodes
+                    .selected_node()
+                    .ok()
+                    .flatten()
+                    .map(|node| node.id)
+            });
+        let mut manual_nodes = Vec::new();
+        for node in self
+            .manual_nodes
+            .nodes()
+            .map_err(SessionCommandError::NodeStore)?
+        {
+            let secret = self
+                .session
+                .secret_store()
+                .get(&node.credential_ref)
+                .map_err(SessionCommandError::Secret)?;
+            let credential =
+                CredentialCodec::decode(&secret).map_err(SessionCommandError::Credential)?;
+            manual_nodes.push(ManualNodeBackupEntry { node, credential });
+        }
+        let node_order = self.nodes()?.into_iter().map(|node| node.id).collect();
+        Ok(ProfileNodesData {
+            manual_nodes,
+            groups: self
+                .node_groups
+                .snapshot()
+                .map_err(SessionCommandError::NodeGroupStore)?,
+            node_order,
+            selected_node_id,
+        })
+    }
+
+    /// Replaces manual nodes, groups, order, and selection from a profile backup.
+    ///
+    /// Subscription metadata must already have been restored separately. This
+    /// clears every existing manual node and its credential before writing the
+    /// backup contents.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionCommandError::SessionActive`] while connected, or a
+    /// typed storage, credential, or order error.
+    pub fn import_profile_nodes(
+        &mut self,
+        data: ProfileNodesData,
+    ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
+        if self.session.is_running() {
+            return Err(SessionCommandError::SessionActive);
+        }
+        for node in self
+            .manual_nodes
+            .nodes()
+            .map_err(SessionCommandError::NodeStore)?
+        {
+            let () = self
+                .session
+                .secret_store()
+                .delete(&node.credential_ref)
+                .map_err(SessionCommandError::DeleteSecret)?;
+        }
+        self.manual_nodes
+            .replace_all(&[])
+            .map_err(SessionCommandError::NodeStore)?;
+        self.subscription_nodes
+            .clear_selected_node()
+            .map_err(SessionCommandError::SubscriptionNodeStore)?;
+
+        let selected_id = data.selected_node_id;
+        let mut rows = Vec::with_capacity(data.manual_nodes.len());
+        for entry in data.manual_nodes {
+            if entry.node.subscription_id.is_some() {
+                return Err(SessionCommandError::NodeStore(
+                    ManualNodeStoreError::SubscriptionNode { id: entry.node.id },
+                ));
+            }
+            let secret = CredentialCodec::encode(&entry.credential)
+                .map_err(SessionCommandError::Credential)?;
+            self.session
+                .secret_store()
+                .put(&entry.node.credential_ref, &secret)
+                .map_err(SessionCommandError::Secret)?;
+            let selected = selected_id == Some(entry.node.id);
+            rows.push((entry.node, selected));
+        }
+        self.manual_nodes
+            .replace_all(&rows)
+            .map_err(SessionCommandError::NodeStore)?;
+
+        self.node_groups
+            .replace_all(&data.groups)
+            .map_err(SessionCommandError::NodeGroupStore)?;
+        self.node_order
+            .save(&data.node_order)
+            .map_err(SessionCommandError::NodeOrderStore)?;
+
+        if selected_id.is_some_and(|id| rows.iter().any(|(node, _)| node.id == id)) {
+            self.subscription_nodes
+                .clear_selected_node()
+                .map_err(SessionCommandError::SubscriptionNodeStore)?;
+        } else if let Some(id) = selected_id {
+            let _ = self.subscription_nodes.select_node(id);
+        }
+
+        let mut node = self
+            .manual_nodes
+            .selected_node()
+            .map_err(SessionCommandError::NodeStore)?
+            .or(self
+                .subscription_nodes
+                .selected_node()
+                .map_err(SessionCommandError::SubscriptionNodeStore)?);
+        if let Some(node) = &mut node {
+            self.node_groups
+                .apply(std::slice::from_mut(node))
+                .map_err(SessionCommandError::NodeGroupStore)?;
+        }
+        self.node = node;
+        Ok(self.status())
     }
 
     /// Fingerprints every node already stored, so an import can skip repeats.
@@ -582,7 +866,15 @@ where
             .put(&node.credential_ref, &secret)
             .map_err(SessionCommandError::Secret)?;
 
-        if let Err(store) = self.manual_nodes.save_and_select(&node) {
+        // A running session keeps the server it started with: adding one is
+        // not a request to switch to it.
+        let running = self.session.is_running();
+        let saved = if running {
+            self.manual_nodes.save(&node)
+        } else {
+            self.manual_nodes.save_and_select(&node)
+        };
+        if let Err(store) = saved {
             return match self.session.secret_store().delete(&node.credential_ref) {
                 Ok(()) => Err(SessionCommandError::NodeStore(store)),
                 Err(secret) => {
@@ -590,11 +882,12 @@ where
                 }
             };
         }
-        self.subscription_nodes
-            .clear_selected_node()
-            .map_err(SessionCommandError::SubscriptionNodeStore)?;
-
-        self.node = Some(node);
+        if !running {
+            self.subscription_nodes
+                .clear_selected_node()
+                .map_err(SessionCommandError::SubscriptionNodeStore)?;
+            self.node = Some(node);
+        }
         Ok(self.status())
     }
 
@@ -611,7 +904,7 @@ where
             .map_err(SessionCommandError::NodeStore)?;
         nodes.extend(
             self.subscription_nodes
-                .active_nodes()
+                .listed_nodes()
                 .map_err(SessionCommandError::SubscriptionNodeStore)?,
         );
         let mut nodes = self
@@ -653,9 +946,6 @@ where
         &mut self,
         id: Uuid,
     ) -> Result<Vec<NodeSummary>, SessionCommandError<C::Error, P::Error>> {
-        if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
-        }
         let source = self
             .manual_nodes
             .nodes()
@@ -833,6 +1123,22 @@ where
         self.nodes()
     }
 
+    /// Changes how a named group selects a node when connecting.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed group-store error when the group cannot be updated.
+    pub fn set_node_group_strategy(
+        &mut self,
+        id: Uuid,
+        strategy: NodeGroupStrategy,
+    ) -> Result<Vec<NodeGroupSummary>, SessionCommandError<C::Error, P::Error>> {
+        self.node_groups
+            .set_strategy(id, strategy)
+            .map_err(SessionCommandError::NodeGroupStore)?;
+        self.node_groups()
+    }
+
     /// Moves a node one position in the unified manual/subscription list.
     ///
     /// Moving the first node up or the last node down is an idempotent no-op.
@@ -866,6 +1172,47 @@ where
                 .map_err(SessionCommandError::NodeOrderStore)?;
         }
         Ok(nodes)
+    }
+
+    /// Replaces the unified node order with an explicit id list.
+    ///
+    /// `ids` must be a permutation of the current list: every persisted node
+    /// exactly once. Used by "sort by latency" and any future drag-reorder.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed not-found or order-store error when the list is incomplete,
+    /// contains unknowns, or cannot be persisted.
+    pub fn reorder_nodes(
+        &mut self,
+        ids: &[Uuid],
+    ) -> Result<Vec<NodeSummary>, SessionCommandError<C::Error, P::Error>> {
+        let current = self.nodes()?;
+        if ids.len() != current.len() {
+            return Err(SessionCommandError::NodeOrderStore(
+                NodeOrderStoreError::IncompleteReorder {
+                    expected: current.len(),
+                    actual: ids.len(),
+                },
+            ));
+        }
+        let mut seen = HashSet::with_capacity(ids.len());
+        for id in ids {
+            if !seen.insert(*id) {
+                return Err(SessionCommandError::NodeOrderStore(
+                    NodeOrderStoreError::DuplicateNode { id: *id },
+                ));
+            }
+            if !current.iter().any(|node| node.id == *id) {
+                return Err(SessionCommandError::NodeStore(
+                    ManualNodeStoreError::NodeNotFound { id: *id },
+                ));
+            }
+        }
+        self.node_order
+            .save(ids)
+            .map_err(SessionCommandError::NodeOrderStore)?;
+        self.nodes()
     }
 
     /// Returns one active persisted node without exposing its credential.
@@ -924,6 +1271,73 @@ where
         if self.session.is_running() {
             return Err(SessionCommandError::SessionActive);
         }
+        self.select_node_while_stopped(id)
+    }
+
+    /// Selects a node and, when a session was running, reconnects through it.
+    ///
+    /// Used by previous/next navigation so an active connection is not a hard
+    /// block on changing servers.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when selection fails, or when disconnect/reconnect
+    /// fails. A failed reconnect leaves the new node selected but idle.
+    pub fn switch_node(
+        &mut self,
+        id: Uuid,
+    ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
+        let was_running = self.session.is_running();
+        if was_running {
+            self.session.stop().map_err(SessionCommandError::Session)?;
+        }
+        self.select_node_while_stopped(id)?;
+        if was_running {
+            self.connect()?;
+        }
+        Ok(self.status())
+    }
+
+    /// Rejects a change to the node the Core is currently running.
+    ///
+    /// Everything else in the list stays editable while connected: adding,
+    /// renaming or deleting some other server does not touch the running
+    /// config, and making the user disconnect for it is what v2rayN does not do.
+    fn reject_running_node(&self, id: Uuid) -> Result<(), SessionCommandError<C::Error, P::Error>> {
+        if self.session.is_running() && self.node.as_ref().is_some_and(|node| node.id == id) {
+            return Err(SessionCommandError::SessionActive);
+        }
+        Ok(())
+    }
+
+    /// Applies a change the Core only reads at startup, restarting it around
+    /// the change so the user does not have to disconnect by hand.
+    ///
+    /// The caller validates first: a change that is rejected must leave the
+    /// session running, not drop it for a setting that was never applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns the change's own error, or a typed stop/start error.
+    pub fn restarting(
+        &mut self,
+        change: impl FnOnce(&mut Self) -> Result<(), SessionCommandError<C::Error, P::Error>>,
+    ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
+        let was_running = self.session.is_running();
+        if was_running {
+            self.session.stop().map_err(SessionCommandError::Session)?;
+        }
+        change(self)?;
+        if was_running {
+            self.connect()?;
+        }
+        Ok(self.status())
+    }
+
+    fn select_node_while_stopped(
+        &mut self,
+        id: Uuid,
+    ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
         let mut node = match self.manual_nodes.select(id) {
             Ok(node) => {
                 self.subscription_nodes
@@ -937,11 +1351,63 @@ where
                 .map_err(SessionCommandError::SubscriptionNodeStore)?,
             Err(error) => return Err(SessionCommandError::NodeStore(error)),
         };
+        if !node.enabled {
+            return Err(SessionCommandError::NodeDisabled { id });
+        }
         self.node_groups
             .apply(std::slice::from_mut(&mut node))
             .map_err(SessionCommandError::NodeGroupStore)?;
         self.node = Some(node);
         Ok(self.status())
+    }
+
+    /// Enables or disables a persisted node without deleting it.
+    ///
+    /// Disabled nodes stay in the list (and keep their credentials) but cannot
+    /// be selected or connected. Disabling the current selection clears it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed active-session, not-found, or persistence error.
+    pub fn set_node_enabled(
+        &mut self,
+        id: Uuid,
+        enabled: bool,
+    ) -> Result<Vec<NodeSummary>, SessionCommandError<C::Error, P::Error>> {
+        self.reject_running_node(id)?;
+
+        let manual = self
+            .manual_nodes
+            .nodes()
+            .map_err(SessionCommandError::NodeStore)?
+            .into_iter()
+            .find(|node| node.id == id);
+        if let Some(mut node) = manual {
+            node.enabled = enabled;
+            self.manual_nodes
+                .update(&node)
+                .map_err(SessionCommandError::NodeStore)?;
+        } else {
+            self.subscription_nodes
+                .set_node_enabled(id, enabled)
+                .map_err(SessionCommandError::SubscriptionNodeStore)?;
+        }
+
+        if !enabled && self.node.as_ref().is_some_and(|node| node.id == id) {
+            self.node = None;
+            self.manual_nodes
+                .clear_selected()
+                .map_err(SessionCommandError::NodeStore)?;
+            self.subscription_nodes
+                .clear_selected_node()
+                .map_err(SessionCommandError::SubscriptionNodeStore)?;
+        } else if let Some(selected) = self.node.as_mut()
+            && selected.id == id
+        {
+            selected.enabled = enabled;
+        }
+
+        self.nodes()
     }
 
     /// Changes the editable endpoint fields of a persisted manual node.
@@ -961,9 +1427,7 @@ where
         server: impl Into<String>,
         port: u32,
     ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
-        if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
-        }
+        self.reject_running_node(id)?;
         let mut node = self
             .manual_nodes
             .nodes()
@@ -1001,52 +1465,131 @@ where
         Ok(self.status())
     }
 
-    /// Saves the routing mode used by the next connection.
+    /// Saves the routing mode, restarting a running Core so it takes effect now.
     ///
     /// # Errors
     ///
-    /// Returns a typed active-session or persistence error.
+    /// Returns a typed validation, persistence, or restart error.
     pub fn set_routing_mode(
         &mut self,
         mode: RoutingMode,
     ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
-        if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
-        }
         let profile = self
-            .current_route_settings
+            .current_route_bundle
             .profile(mode)
             .map_err(SessionCommandError::InvalidRouteSettings)?;
-        self.routing_mode
-            .save(mode)
-            .map_err(SessionCommandError::RoutingModeStore)?;
-        self.defaults.route = profile;
-        Ok(self.status())
+        self.restarting(move |session| {
+            session
+                .routing_mode
+                .save(mode)
+                .map_err(SessionCommandError::RoutingModeStore)?;
+            session.defaults.route = profile;
+            Ok(())
+        })
     }
 
-    /// Saves the ordered route rules used by the next connection.
+    /// Saves the ordered route rules, restarting a running Core so they take
+    /// effect now.
     ///
     /// # Errors
     ///
-    /// Returns a typed active-session, validation, or persistence error.
+    /// Returns a typed validation, persistence, or restart error.
     pub fn set_route_settings(
         &mut self,
         settings: RouteSettings,
     ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
-        if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
-        }
         settings
             .profile(RoutingMode::Rule)
             .map_err(SessionCommandError::InvalidRouteSettings)?;
         let profile = settings
             .profile(self.defaults.route.mode())
             .map_err(SessionCommandError::InvalidRouteSettings)?;
+        self.restarting(move |session| {
+            session
+                .current_route_bundle
+                .set_active_settings(settings)
+                .map_err(SessionCommandError::InvalidRouteSettings)?;
+            session
+                .route_settings
+                .save_bundle(&session.current_route_bundle)
+                .map_err(SessionCommandError::RouteSettingsStore)?;
+            session.defaults.route = profile;
+            Ok(())
+        })
+    }
+
+    /// Switches the active routing scheme, restarting a running Core so it
+    /// takes effect now.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation, persistence, or restart error.
+    pub fn set_route_scheme(
+        &mut self,
+        scheme_id: &str,
+    ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
+        self.current_route_bundle
+            .select_scheme(scheme_id)
+            .map_err(SessionCommandError::InvalidRouteSettings)?;
+        let profile = self
+            .current_route_bundle
+            .profile(self.defaults.route.mode())
+            .map_err(SessionCommandError::InvalidRouteSettings)?;
+        self.restarting(move |session| {
+            session
+                .route_settings
+                .save_bundle(&session.current_route_bundle)
+                .map_err(SessionCommandError::RouteSettingsStore)?;
+            session.defaults.route = profile;
+            Ok(())
+        })
+    }
+
+    /// Creates a routing scheme cloned from the active one.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed active-session, validation, or persistence error.
+    pub fn create_route_scheme(
+        &mut self,
+        name: &str,
+    ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
+        if self.session.is_running() {
+            return Err(SessionCommandError::SessionActive);
+        }
+        let scheme_id = Uuid::new_v4().to_string();
+        self.current_route_bundle
+            .add_scheme(scheme_id, name)
+            .map_err(SessionCommandError::InvalidRouteSettings)?;
         self.route_settings
-            .save(&settings)
+            .save_bundle(&self.current_route_bundle)
+            .map_err(SessionCommandError::RouteSettingsStore)?;
+        Ok(self.status())
+    }
+
+    /// Deletes one routing scheme when it is not the only entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed active-session, validation, or persistence error.
+    pub fn delete_route_scheme(
+        &mut self,
+        scheme_id: &str,
+    ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
+        if self.session.is_running() {
+            return Err(SessionCommandError::SessionActive);
+        }
+        self.current_route_bundle
+            .delete_scheme(scheme_id)
+            .map_err(SessionCommandError::InvalidRouteSettings)?;
+        let profile = self
+            .current_route_bundle
+            .profile(self.defaults.route.mode())
+            .map_err(SessionCommandError::InvalidRouteSettings)?;
+        self.route_settings
+            .save_bundle(&self.current_route_bundle)
             .map_err(SessionCommandError::RouteSettingsStore)?;
         self.defaults.route = profile;
-        self.current_route_settings = settings;
         Ok(self.status())
     }
 
@@ -1059,18 +1602,18 @@ where
         &mut self,
         settings: DnsSettings,
     ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
-        if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
-        }
         let profile = settings
             .profile()
             .map_err(SessionCommandError::InvalidDnsSettings)?;
-        self.dns_settings
-            .save(&settings)
-            .map_err(SessionCommandError::DnsSettingsStore)?;
-        self.defaults.dns = profile;
-        self.current_dns_settings = settings;
-        Ok(self.status())
+        self.restarting(move |session| {
+            session
+                .dns_settings
+                .save(&settings)
+                .map_err(SessionCommandError::DnsSettingsStore)?;
+            session.defaults.dns = profile;
+            session.current_dns_settings = settings;
+            Ok(())
+        })
     }
 
     /// Deletes a persisted node and its operating-system credential.
@@ -1083,9 +1626,7 @@ where
         &mut self,
         id: Uuid,
     ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
-        if self.session.is_running() {
-            return Err(SessionCommandError::SessionActive);
-        }
+        self.reject_running_node(id)?;
         let node = match self.manual_nodes.delete(id) {
             Ok(node) => node,
             Err(error @ ManualNodeStoreError::NodeNotFound { .. }) => {
@@ -1150,9 +1691,10 @@ where
         // Checked before anything is generated or spawned: another proxy client
         // holding a loopback port makes the Core exit on its own, and its exit
         // code names nothing the user can act on.
-        LocalProxyPortChecker::check(
+        LocalProxyPortChecker::check_with_allow_lan(
             self.defaults.socks.port().get(),
             self.defaults.http.port().get(),
+            self.defaults.socks.allow_lan(),
         )
         .map_err(SessionCommandError::LocalProxyPort)?;
         let node = self
@@ -1162,16 +1704,29 @@ where
         // Resolved before anything starts: a preference the node cannot satisfy
         // is an error the user sees, not a silent fallback to the other Core.
         let core = self
-            .selected_core()
+            .resolve_core()
             .map_err(SessionCommandError::CoreSelection)?;
-        let profile = DesktopSessionProfile::new(
-            node,
+        let mut profile = DesktopSessionProfile::new(
+            node.clone(),
             self.defaults.dns.clone(),
             self.defaults.route.clone(),
         )
         .with_core(core)
         .with_local_proxies(self.defaults.socks, self.defaults.http)
-        .with_clash_api_port(self.defaults.clash_api_port);
+        .with_clash_api_port(self.defaults.clash_api_port)
+        .with_mux(self.defaults.mux_enabled)
+        .with_fragment(self.defaults.fragment_enabled)
+        .with_final_fragment(self.defaults.final_fragment_enabled)
+        .with_udp_noise(self.defaults.udp_noise_enabled);
+        if node.protocol_type != ProxyProtocol::Custom
+            && let Some((strategy, members)) = self.group_members_for(&node, core)?
+        {
+            profile = profile.with_group_outbound(
+                strategy,
+                members,
+                self.defaults.url_test_address.clone(),
+            );
+        }
         // The two are mutually exclusive in DesktopSession, so TUN replaces
         // System Proxy rather than being layered on top of it.
         let profile = match self.tun_profile()? {
@@ -1231,6 +1786,13 @@ where
                 CorePreference::Auto => CoreType::SingBox,
             });
         };
+        if node.protocol_type == ProxyProtocol::Custom {
+            return self.selected_core_for_custom(node);
+        }
+        CoreCapabilityMatrix::select(self.core_preference, self.node_requirements(node))
+    }
+
+    fn node_requirements(&self, node: &ProxyNode) -> CoreRequirements {
         let requirements =
             CoreRequirements::new(node.protocol_type, self.tun_enabled, host_architecture());
         let requirements = if pins_a_certificate(node.tls.as_ref()) {
@@ -1238,7 +1800,149 @@ where
         } else {
             requirements
         };
-        CoreCapabilityMatrix::select(self.core_preference, requirements)
+        let requirements = if matches!(node.transport, Some(TransportConfig::XHttp { .. })) {
+            requirements.with_xhttp()
+        } else {
+            requirements
+        };
+        if matches!(node.transport, Some(TransportConfig::Kcp { .. })) {
+            requirements.with_kcp()
+        } else {
+            requirements
+        }
+    }
+
+    #[expect(
+        clippy::type_complexity,
+        reason = "one private helper's return; a type alias would hide the shape"
+    )]
+    fn group_members_for(
+        &self,
+        selected: &ProxyNode,
+        core: CoreType,
+    ) -> Result<Option<(NodeGroupStrategy, Vec<ProxyNode>)>, SessionCommandError<C::Error, P::Error>>
+    {
+        let Some(group_id) = selected.group_id else {
+            return Ok(None);
+        };
+        let Some(group) = self
+            .node_groups
+            .group(group_id)
+            .map_err(SessionCommandError::NodeGroupStore)?
+        else {
+            return Ok(None);
+        };
+        if !group.strategy.uses_group_outbound() {
+            return Ok(None);
+        }
+        let mut nodes = self.stored_nodes()?;
+        self.node_groups
+            .apply(&mut nodes)
+            .map_err(SessionCommandError::NodeGroupStore)?;
+        let members = nodes
+            .into_iter()
+            .filter(|node| {
+                node.enabled
+                    && node.group_id == Some(group_id)
+                    && node.protocol_type != ProxyProtocol::Custom
+                    && CoreCapabilityMatrix::supports(core, self.node_requirements(node))
+            })
+            .collect::<Vec<_>>();
+        if members.len() < 2 {
+            Ok(None)
+        } else {
+            Ok(Some((group.strategy, members)))
+        }
+    }
+
+    /// Resolves which Core a connect should run, including custom nodes whose
+    /// credential pins the Core type.
+    ///
+    /// # Errors
+    ///
+    /// Returns the matrix's reason when the preferred Core cannot serve the
+    /// node, when a custom credential disagrees with the preference, or when
+    /// the secret cannot be read.
+    fn resolve_core(&self) -> Result<CoreType, CoreSelectionError> {
+        let Some(node) = self.node.as_ref() else {
+            return self.selected_core();
+        };
+        if node.protocol_type != ProxyProtocol::Custom {
+            return self.selected_core();
+        }
+        let required = self.custom_required_core(node)?;
+        if self.tun_enabled && required == CoreType::Xray {
+            return Err(CoreSelectionError::ChosenCoreUnusable {
+                rejection: CoreRejection::TunUnsupported {
+                    core: CoreType::Xray,
+                },
+            });
+        }
+        match self.core_preference {
+            CorePreference::Auto => Ok(required),
+            CorePreference::Fixed(core) if core == required => Ok(core),
+            CorePreference::Fixed(core) => Err(CoreSelectionError::ChosenCoreUnusable {
+                rejection: CoreRejection::CustomCoreMismatch {
+                    chosen: core,
+                    required,
+                },
+            }),
+        }
+    }
+
+    /// Reads the Core type a custom node's credential requires.
+    fn custom_required_core(&self, node: &ProxyNode) -> Result<CoreType, CoreSelectionError> {
+        let secret = self
+            .session
+            .secret_store()
+            .get(&node.credential_ref)
+            .map_err(|_| CoreSelectionError::NoUsableCore {
+                protocol: ProxyProtocol::Custom,
+                tun: self.tun_enabled,
+                certificate_pin: false,
+                xhttp: false,
+                kcp: false,
+            })?;
+        let credential =
+            CredentialCodec::decode(&secret).map_err(|_| CoreSelectionError::NoUsableCore {
+                protocol: ProxyProtocol::Custom,
+                tun: self.tun_enabled,
+                certificate_pin: false,
+                xhttp: false,
+                kcp: false,
+            })?;
+        match credential {
+            StoredNodeCredential::Custom(custom) => Ok(custom.core()),
+            _ => Err(CoreSelectionError::NoUsableCore {
+                protocol: ProxyProtocol::Custom,
+                tun: self.tun_enabled,
+                certificate_pin: false,
+                xhttp: false,
+                kcp: false,
+            }),
+        }
+    }
+
+    /// Picks the Core for a custom node when its credential is already loaded.
+    fn selected_core_for_custom(&self, node: &ProxyNode) -> Result<CoreType, CoreSelectionError> {
+        let required = self.custom_required_core(node)?;
+        if self.tun_enabled && required == CoreType::Xray {
+            return Err(CoreSelectionError::ChosenCoreUnusable {
+                rejection: CoreRejection::TunUnsupported {
+                    core: CoreType::Xray,
+                },
+            });
+        }
+        match self.core_preference {
+            CorePreference::Auto => Ok(required),
+            CorePreference::Fixed(core) if core == required => Ok(core),
+            CorePreference::Fixed(core) => Err(CoreSelectionError::ChosenCoreUnusable {
+                rejection: CoreRejection::CustomCoreMismatch {
+                    chosen: core,
+                    required,
+                },
+            }),
+        }
     }
 
     /// Replaces the Core the session should run.
@@ -1249,6 +1953,102 @@ where
     /// Replaces what the next session does to the host's System Proxy.
     pub fn set_system_proxy_mode(&mut self, mode: SystemProxyMode) {
         self.defaults.system_proxy = mode;
+    }
+
+    /// Updates the local SOCKS/HTTP inbound ports and Clash API port.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed active-session or invalid-port error. All three ports
+    /// must differ so the Core can bind each one.
+    pub fn set_local_proxies(
+        &mut self,
+        socks_port: u16,
+        http_port: u16,
+        clash_api_port: u16,
+    ) -> Result<(), SessionCommandError<C::Error, P::Error>> {
+        self.check_local_proxies(socks_port, http_port, clash_api_port)?;
+        self.defaults.socks = LocalSocksProfile::new(u32::from(socks_port))
+            .map_err(SessionCommandError::LocalProxyConfig)?
+            .with_allow_lan(self.defaults.socks.allow_lan())
+            .with_udp_enabled(self.defaults.socks.udp_enabled());
+        self.defaults.http = LocalHttpProfile::new(u32::from(http_port))
+            .map_err(SessionCommandError::LocalProxyConfig)?
+            .with_allow_lan(self.defaults.http.allow_lan());
+        // Reuse the SOCKS constructor so a zero Clash API port fails the same
+        // way as a zero inbound port, instead of inventing a third error path.
+        self.defaults.clash_api_port = LocalSocksProfile::new(u32::from(clash_api_port))
+            .map_err(SessionCommandError::LocalProxyConfig)?
+            .port();
+        Ok(())
+    }
+
+    /// Validates a port triple without applying it.
+    ///
+    /// Split out of [`Self::set_local_proxies`] so a caller that restarts the
+    /// session around the change can reject bad ports while still connected.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed duplicate-port or invalid-port error.
+    pub fn check_local_proxies(
+        &self,
+        socks_port: u16,
+        http_port: u16,
+        clash_api_port: u16,
+    ) -> Result<(), SessionCommandError<C::Error, P::Error>> {
+        if socks_port == http_port || socks_port == clash_api_port || http_port == clash_api_port {
+            return Err(SessionCommandError::DuplicateLocalProxyPort {
+                port: if socks_port == http_port || socks_port == clash_api_port {
+                    socks_port
+                } else {
+                    http_port
+                },
+            });
+        }
+        LocalSocksProfile::new(u32::from(socks_port))
+            .map_err(SessionCommandError::LocalProxyConfig)?;
+        LocalHttpProfile::new(u32::from(http_port))
+            .map_err(SessionCommandError::LocalProxyConfig)?;
+        LocalSocksProfile::new(u32::from(clash_api_port))
+            .map_err(SessionCommandError::LocalProxyConfig)?;
+        Ok(())
+    }
+
+    /// Lets LAN peers reach the local SOCKS/HTTP inbounds on the next connect.
+    pub fn set_allow_lan(&mut self, enabled: bool) {
+        self.defaults.socks = self.defaults.socks.with_allow_lan(enabled);
+        self.defaults.http = self.defaults.http.with_allow_lan(enabled);
+    }
+
+    /// Enables SOCKS UDP associate for the next Xray session.
+    pub fn set_inbound_udp_enabled(&mut self, enabled: bool) {
+        self.defaults.socks = self.defaults.socks.with_udp_enabled(enabled);
+    }
+
+    /// Turns Core multiplex / mux on or off for the next session.
+    pub fn set_mux_enabled(&mut self, enabled: bool) {
+        self.defaults.mux_enabled = enabled;
+    }
+
+    /// Turns TLS `ClientHello` fragmentation on or off for the next session.
+    pub fn set_fragment_enabled(&mut self, enabled: bool) {
+        self.defaults.fragment_enabled = enabled;
+    }
+
+    /// Turns Final (tail) TLS fragmentation on or off for the next session.
+    pub fn set_final_fragment_enabled(&mut self, enabled: bool) {
+        self.defaults.final_fragment_enabled = enabled;
+    }
+
+    /// Turns Xray UDP noise on or off for the next session.
+    pub fn set_udp_noise_enabled(&mut self, enabled: bool) {
+        self.defaults.udp_noise_enabled = enabled;
+    }
+
+    /// Sets the URL-TEST probe used when a group runs as a Core balancer.
+    pub fn set_url_test_address(&mut self, address: impl Into<String>) {
+        self.defaults.url_test_address = address.into();
     }
 
     /// Turns TUN routing on or off for the next session.
@@ -1288,11 +2088,22 @@ where
             core: core_name(core),
             dns: self.current_dns_settings.clone(),
             mode: self.defaults.mode(),
-            route: self.current_route_settings.clone(),
+            route: self.current_route_bundle.active_settings(),
+            route_scheme_id: self.current_route_bundle.active_scheme_id.clone(),
+            route_schemes: self
+                .current_route_bundle
+                .schemes
+                .iter()
+                .map(|scheme| RouteSchemeSummary {
+                    id: scheme.id.clone(),
+                    name: scheme.name.clone(),
+                })
+                .collect(),
             system_proxy: self.defaults.system_proxy != SystemProxyMode::Unchanged,
             system_proxy_mode: system_proxy_mode_name(&self.defaults.system_proxy),
             socks_port: self.defaults.socks.port().get(),
             http_port: self.defaults.http.port().get(),
+            clash_api_port: self.defaults.clash_api_port.get(),
         }
     }
 
@@ -1378,6 +2189,10 @@ where
     CoreSelection(#[source] CoreSelectionError),
     #[error("a local proxy port is unavailable")]
     LocalProxyPort(#[source] LocalProxyPortError),
+    #[error("invalid local proxy port")]
+    LocalProxyConfig(#[source] LocalProxyConfigError),
+    #[error("local proxy ports cannot share port {port}")]
+    DuplicateLocalProxyPort { port: u16 },
     #[error("this node has no sharing link")]
     ShareLinkExport(#[source] ShareLinkSerializerError),
     #[error("the sharing link could not be drawn as a QR code")]
@@ -1410,6 +2225,8 @@ where
     DnsSettingsStore(#[source] DnsSettingsStoreError),
     #[error("subscription node {id} is managed by its subscription")]
     SubscriptionNodeReadOnly { id: Uuid },
+    #[error("node {id} is disabled")]
+    NodeDisabled { id: Uuid },
     #[error("failed to save the node and roll back its credential")]
     NodeStoreAndSecretRollback {
         store: ManualNodeStoreError,
@@ -1441,6 +2258,9 @@ where
             Self::ManualNodeDraft(_) => "invalid_manual_node",
             Self::CoreSelection(_) => "core_unavailable",
             Self::LocalProxyPort(_) => "local_proxy_port_unavailable",
+            Self::LocalProxyConfig(_) | Self::DuplicateLocalProxyPort { .. } => {
+                "invalid_local_proxy_port"
+            }
             Self::ShareLinkExport(_) => "share_link_unavailable",
             Self::ShareLinkQr(_) => "qr_code_unavailable",
             Self::TunUnavailable | Self::TunProfile(_) => "tun_unavailable",
@@ -1456,8 +2276,12 @@ where
             | Self::SubscriptionNodeStore(_) => "node_store_failed",
             Self::NodeOrderStore(_) => "node_order_store_failed",
             Self::NodeGroupStore(NodeGroupStoreError::EmptyName) => "invalid_node_group",
+            Self::NodeGroupStore(NodeGroupStoreError::GroupNotFound { .. }) => {
+                "node_group_not_found"
+            }
             Self::NodeGroupStore(_) => "node_group_store_failed",
             Self::SubscriptionNodeReadOnly { .. } => "subscription_node_read_only",
+            Self::NodeDisabled { .. } => "node_disabled",
             Self::RoutingModeStore(_) => "routing_mode_store_failed",
             Self::InvalidRouteSettings(_) => "invalid_route_settings",
             Self::RouteSettingsStore(_) => "route_settings_store_failed",
@@ -1467,5 +2291,27 @@ where
             Self::SessionInactive => "session_inactive",
             Self::Session(_) => "session_failed",
         }
+    }
+}
+
+impl<S, P> SessionService<S, crate::core_control::HostCoreControl, P>
+where
+    S: SecretStore,
+    P: SystemProxySessionControl,
+{
+    /// Reloads Core binaries after a user-triggered install.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionCommandError::SessionActive`] while connected.
+    pub fn reload_core_install(
+        &mut self,
+        store: &crate::core_install::CoreInstallStore,
+    ) -> Result<(), SessionCommandError<crate::core_control::HostCoreError, P::Error>> {
+        if self.session.is_running() {
+            return Err(SessionCommandError::SessionActive);
+        }
+        self.session.core_mut().apply_install_store(store);
+        Ok(())
     }
 }

@@ -40,15 +40,36 @@ const SING_BOX_CAPABILITIES: &[CoreCapability] = &[
     capability(ProxyProtocol::Trojan, true, false),
     capability(ProxyProtocol::Shadowsocks, true, false),
     capability(ProxyProtocol::Hysteria2, true, false),
+    capability(ProxyProtocol::Tuic, true, false),
+    capability(ProxyProtocol::Socks, true, false),
+    capability(ProxyProtocol::Http, true, false),
+    capability(ProxyProtocol::WireGuard, true, false),
+    // Added in sing-box 1.12.0, carried by the pinned 1.13.18. Xray ships no
+    // AnyTLS outbound at all, so this stays sing-box-only.
+    capability(ProxyProtocol::AnyTls, true, false),
+    // Added in sing-box 1.13.0, carried by the pinned 1.13.18. Xray ships no
+    // Naive outbound at all, so this stays sing-box-only.
+    capability(ProxyProtocol::Naive, true, false),
+    // User-supplied full document; sing-box can run TUN when the JSON includes it.
+    capability(ProxyProtocol::Custom, true, false),
 ];
 
-/// Xray covers the stream protocols but has no Hysteria2 outbound and no TUN
-/// inbound of its own — TUN there needs an external tun2socks.
+/// Xray covers the stream protocols but has no Hysteria2 or TUIC outbound and
+/// no TUN inbound of its own — TUN there needs an external tun2socks.
+///
+/// `WireGuard` is deliberately absent too: Xray does ship a `wireguard`
+/// outbound, but nothing in this codebase's Xray patterns pins a verified
+/// field-for-field shape for it the way the other outbounds are pinned
+/// against upstream, so it stays sing-box-only rather than guessing.
 const XRAY_CAPABILITIES: &[CoreCapability] = &[
     capability(ProxyProtocol::Vless, false, true),
     capability(ProxyProtocol::Vmess, false, true),
     capability(ProxyProtocol::Trojan, false, true),
     capability(ProxyProtocol::Shadowsocks, false, true),
+    capability(ProxyProtocol::Socks, false, true),
+    capability(ProxyProtocol::Http, false, true),
+    // User-supplied full document; Xray has no TUN inbound of its own.
+    capability(ProxyProtocol::Custom, false, false),
 ];
 
 const fn capability(
@@ -69,11 +90,19 @@ const fn capability(
 
 /// What a session needs from a Core before it can start.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent, orthogonal requirement the matrix checks; a bitset would hide the meaning"
+)]
 pub struct CoreRequirements {
     pub protocol: ProxyProtocol,
     pub tun: bool,
     /// Whether the node pins its server certificate by SHA-256.
     pub certificate_pin: bool,
+    /// Whether the node uses XHTTP (Xray-only on the pinned Core versions).
+    pub xhttp: bool,
+    /// Whether the node uses mKCP (Xray-only on the pinned Core versions).
+    pub kcp: bool,
     pub architecture: CpuArchitecture,
 }
 
@@ -84,6 +113,8 @@ impl CoreRequirements {
             protocol,
             tun,
             certificate_pin: false,
+            xhttp: false,
+            kcp: false,
             architecture,
         }
     }
@@ -95,6 +126,21 @@ impl CoreRequirements {
             certificate_pin: true,
             ..self
         }
+    }
+
+    /// The same requirements for a node that speaks XHTTP.
+    #[must_use]
+    pub const fn with_xhttp(self) -> Self {
+        Self {
+            xhttp: true,
+            ..self
+        }
+    }
+
+    /// The same requirements for a node that speaks mKCP.
+    #[must_use]
+    pub const fn with_kcp(self) -> Self {
+        Self { kcp: true, ..self }
     }
 }
 
@@ -154,6 +200,16 @@ impl CoreCapabilityMatrix {
         if requirements.certificate_pin && !capability.supports_certificate_pin {
             return Some(CoreRejection::CertificatePinUnsupported { core });
         }
+        // XHTTP lives outside the per-protocol capability table: every Xray
+        // stream protocol can carry it, and the pinned sing-box build cannot.
+        if requirements.xhttp && matches!(core, CoreType::SingBox) {
+            return Some(CoreRejection::XhttpUnsupported { core });
+        }
+        // mKCP is the same story: every Xray stream protocol can carry it,
+        // and the pinned sing-box build has no mKCP transport at all.
+        if requirements.kcp && matches!(core, CoreType::SingBox) {
+            return Some(CoreRejection::KcpUnsupported { core });
+        }
         if !capability
             .architectures
             .contains(&requirements.architecture)
@@ -193,6 +249,8 @@ impl CoreCapabilityMatrix {
                     protocol: requirements.protocol,
                     tun: requirements.tun,
                     certificate_pin: requirements.certificate_pin,
+                    xhttp: requirements.xhttp,
+                    kcp: requirements.kcp,
                 }),
         }
     }
@@ -211,9 +269,20 @@ pub enum CoreRejection {
     CertificatePinUnsupported {
         core: CoreType,
     },
+    XhttpUnsupported {
+        core: CoreType,
+    },
+    KcpUnsupported {
+        core: CoreType,
+    },
     ArchitectureUnsupported {
         core: CoreType,
         architecture: CpuArchitecture,
+    },
+    /// The user picked a Core that disagrees with the custom node's credential.
+    CustomCoreMismatch {
+        chosen: CoreType,
+        required: CoreType,
     },
 }
 
@@ -234,11 +303,27 @@ impl Display for CoreRejection {
                 "{} cannot verify a pinned certificate digest",
                 core_name(*core)
             ),
+            Self::XhttpUnsupported { core } => write!(
+                formatter,
+                "{} does not support XHTTP transport",
+                core_name(*core)
+            ),
+            Self::KcpUnsupported { core } => write!(
+                formatter,
+                "{} does not support mKCP transport",
+                core_name(*core)
+            ),
             Self::ArchitectureUnsupported { core, architecture } => write!(
                 formatter,
                 "{} has no build for {}",
                 core_name(*core),
                 architecture_name(*architecture)
+            ),
+            Self::CustomCoreMismatch { chosen, required } => write!(
+                formatter,
+                "custom node requires {}, not {}",
+                core_name(*required),
+                core_name(*chosen)
             ),
         }
     }
@@ -249,15 +334,19 @@ pub enum CoreSelectionError {
     #[error("the selected Core cannot run this node: {rejection}")]
     ChosenCoreUnusable { rejection: CoreRejection },
     #[error(
-        "no available Core supports {} with TUN {}{}",
+        "no available Core supports {} with TUN {}{}{}{}",
         protocol_name(*protocol),
         if *tun { "on" } else { "off" },
-        if *certificate_pin { " and a pinned certificate" } else { "" }
+        if *certificate_pin { " and a pinned certificate" } else { "" },
+        if *xhttp { " and XHTTP transport" } else { "" },
+        if *kcp { " and mKCP transport" } else { "" }
     )]
     NoUsableCore {
         protocol: ProxyProtocol,
         tun: bool,
         certificate_pin: bool,
+        xhttp: bool,
+        kcp: bool,
     },
 }
 
@@ -288,6 +377,13 @@ pub const fn protocol_name(protocol: ProxyProtocol) -> &'static str {
         ProxyProtocol::Trojan => "Trojan",
         ProxyProtocol::Shadowsocks => "Shadowsocks",
         ProxyProtocol::Hysteria2 => "Hysteria2",
+        ProxyProtocol::Tuic => "TUIC",
+        ProxyProtocol::Socks => "SOCKS5",
+        ProxyProtocol::Http => "HTTP",
+        ProxyProtocol::WireGuard => "WireGuard",
+        ProxyProtocol::AnyTls => "AnyTLS",
+        ProxyProtocol::Naive => "Naive",
+        ProxyProtocol::Custom => "Custom",
     }
 }
 

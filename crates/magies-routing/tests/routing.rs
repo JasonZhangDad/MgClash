@@ -1,6 +1,6 @@
 use magies_routing::{
     Network, RouteConfigError, RouteOutbound, RouteProfile, RoutingMode, RoutingRule,
-    SingBoxRouteConfigGenerator,
+    RuleProviderFormat, SingBoxRouteConfigGenerator,
 };
 use serde_json::json;
 
@@ -196,5 +196,73 @@ fn rejects_rules_outside_rule_mode_and_incompatible_mode_finals() {
     assert_eq!(
         RouteProfile::new(RoutingMode::Direct, Vec::new(), RouteOutbound::Proxy),
         Err(RouteConfigError::DirectModeRequiresDirectFinal)
+    );
+}
+
+#[test]
+fn declares_a_remote_rule_provider_and_the_rule_that_uses_it() {
+    let rules = vec![
+        RoutingRule::rule_provider(
+            "ads",
+            "https://example.com/ads.srs",
+            RuleProviderFormat::Binary,
+            RouteOutbound::Direct,
+            10,
+            true,
+        )
+        .unwrap(),
+        RoutingRule::rule_provider(
+            "ads",
+            "https://example.com/ads.srs",
+            RuleProviderFormat::Binary,
+            RouteOutbound::Direct,
+            20,
+            true,
+        )
+        .unwrap(),
+    ];
+    let profile = RouteProfile::new(RoutingMode::Rule, rules, RouteOutbound::Proxy).unwrap();
+    let config = SingBoxRouteConfigGenerator::generate(&profile);
+
+    assert_eq!(
+        config.json()["rules"][1],
+        json!({ "rule_set": ["ads"], "action": "route", "outbound": "direct" })
+    );
+    // The same provider used twice is still downloaded once.
+    assert_eq!(
+        config.json()["rule_set"],
+        json!([{
+            "type": "remote",
+            "tag": "ads",
+            "format": "binary",
+            "url": "https://example.com/ads.srs",
+            "download_detour": "direct"
+        }])
+    );
+}
+
+#[test]
+fn rejects_a_rule_provider_that_is_not_a_safe_tag_or_https_source() {
+    assert!(
+        RoutingRule::rule_provider(
+            "ads/../etc",
+            "https://example.com/ads.srs",
+            RuleProviderFormat::Binary,
+            RouteOutbound::Direct,
+            0,
+            true,
+        )
+        .is_err()
+    );
+    assert!(
+        RoutingRule::rule_provider(
+            "ads",
+            "file:///etc/passwd",
+            RuleProviderFormat::Binary,
+            RouteOutbound::Direct,
+            0,
+            true,
+        )
+        .is_err()
     );
 }

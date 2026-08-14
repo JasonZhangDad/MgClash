@@ -36,6 +36,7 @@ fn build_node(
         udp_enabled: true,
         transport,
         tls,
+        xray_finalmask_json: None,
         credential,
     }
     .build(Uuid::new_v4(), CredentialRef::new("node/smoke").unwrap())

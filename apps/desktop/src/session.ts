@@ -1,16 +1,26 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type ProxyProtocol =
+  | "anytls"
+  | "custom"
   | "hysteria2"
+  | "http"
+  | "naive"
   | "shadowsocks"
+  | "socks"
   | "trojan"
+  | "tuic"
   | "vless"
-  | "vmess";
+  | "vmess"
+  | "wireguard";
 
 export interface NodeSummary {
   deletable: boolean;
+  enabled: boolean;
   groupId: string | null;
-  /// The stream transport; Hysteria2 reports its own QUIC transport.
+  /// The stream transport; Hysteria2/TUIC report their own QUIC transport,
+  /// WireGuard its own tunnel, AnyTLS its TLS session, and Naive its HTTP/2 or
+  /// QUIC tunnel.
   transport: string;
   /// The TLS layer, or null for plaintext.
   tls: string | null;
@@ -23,9 +33,12 @@ export interface NodeSummary {
   server: string;
 }
 
+export type NodeGroupStrategy = "select" | "urlTest" | "fallback" | "loadBalance";
+
 export interface NodeGroupSummary {
   id: string;
   name: string;
+  strategy: NodeGroupStrategy;
 }
 
 export interface NodeEdit {
@@ -42,7 +55,21 @@ export type LogSource = "app" | "core";
 
 export type CorePreference = "auto" | "sing-box" | "xray";
 
-/** Three of v2rayN's four System Proxy choices; PAC has no counterpart yet. */
+/** Four System Proxy choices aligned with v2rayN, including PAC. */
+
+/** The language the window renders in. */
+export type Locale =
+  | "en"
+  | "zh-Hans"
+  | "zh-Hant"
+  | "de"
+  | "fr"
+  | "es"
+  | "it"
+  | "ru"
+  | "ja"
+  | "ko";
+
 export type SystemProxyMode = "managed" | "pac" | "cleared" | "unchanged";
 
 export interface AppSettings {
@@ -53,6 +80,24 @@ export interface AppSettings {
   tunEnabled: boolean;
   logLevel: LogLevel;
   systemProxyMode: SystemProxyMode;
+  locale: Locale;
+  socksPort: number;
+  httpPort: number;
+  clashApiPort: number;
+  muxEnabled: boolean;
+  fragmentEnabled: boolean;
+  finalFragmentEnabled: boolean;
+  udpNoiseEnabled: boolean;
+  autoSelectLowestLatency: boolean;
+  urlTestAddress: string;
+  allowLan: boolean;
+  speedTestUrl: string;
+  inboundUdpEnabled: boolean;
+  defAllowInsecure: boolean;
+  defFingerprint: string;
+  hotkeyConnect: string;
+  hotkeyPrevious: string;
+  hotkeyNext: string;
 }
 
 export interface LogEntry {
@@ -84,6 +129,10 @@ export type VmessSecurity =
 
 export type ObfuscationMethod = "Salamander" | "Gecko";
 
+export type TuicCongestionControl = "cubic" | "new_reno" | "bbr";
+
+export type TuicUdpRelayMode = "native" | "quic";
+
 export type ManualCredentialDraft =
   | { flow: string | null; protocol: "vless"; userId: string }
   | {
@@ -98,25 +147,94 @@ export type ManualCredentialDraft =
       authentication: string | null;
       obfuscation: { method: ObfuscationMethod; password: string } | null;
       protocol: "hysteria2";
+    }
+  | {
+      congestionControl: TuicCongestionControl | null;
+      password: string | null;
+      protocol: "tuic";
+      udpOverStream: boolean;
+      udpRelayMode: TuicUdpRelayMode | null;
+      uuid: string;
+      zeroRttHandshake: boolean;
+    }
+  | {
+      password: string | null;
+      protocol: "socks";
+      username: string | null;
+    }
+  | {
+      password: string | null;
+      protocol: "http";
+      username: string | null;
+    }
+  | {
+      localAddress: string[];
+      mtu: number | null;
+      peerPublicKey: string;
+      preSharedKey: string | null;
+      privateKey: string;
+      protocol: "wireguard";
+      reserved: [number, number, number] | null;
+    }
+  | { password: string; protocol: "anytls" }
+  | {
+      password: string | null;
+      protocol: "naive";
+      quic: boolean;
+      quicCongestionControl: "bbr" | "bbr2" | "cubic" | "reno" | null;
+      username: string | null;
+    }
+  | {
+      core: "sing-box" | "xray";
+      document: string;
+      protocol: "custom";
     };
 
 export type TransportDraft =
   | { type: "tcp" }
   | { host: string | null; path: string; type: "websocket" }
+  | { host: string | null; path: string; type: "httpupgrade" }
+  | {
+      host: string | null;
+      mode: "auto" | "packet-up" | "stream-up" | "stream-one";
+      path: string;
+      type: "xhttp";
+    }
   | {
       authority: string | null;
       mode: "gun" | "multi" | "guna";
       serviceName: string;
       type: "grpc";
+    }
+  | {
+      congestion: boolean;
+      downlinkCapacity: number | null;
+      headerType: string | null;
+      mtu: number | null;
+      seed: string | null;
+      tti: number | null;
+      type: "kcp";
+      uplinkCapacity: number | null;
     };
 
-export type TlsDraft = {
-  allowInsecure: boolean;
-  alpn: string[];
-  fingerprint: string | null;
-  serverName: string | null;
-  type: "tls";
-};
+export type TlsDraft =
+  | {
+      allowInsecure: boolean;
+      alpn: string[];
+      fingerprint: string | null;
+      pinnedSha256: string | null;
+      serverName: string | null;
+      type: "tls";
+    }
+  | {
+      alpn: string[];
+      fingerprint: string | null;
+      publicKey: string;
+      serverName: string;
+      shortId: string | null;
+      spiderX: string | null;
+      type: "reality";
+    };
 
 export interface ManualNodeDraft {
   credential: ManualCredentialDraft;
@@ -126,6 +244,8 @@ export interface ManualNodeDraft {
   tls: TlsDraft | null;
   transport: TransportDraft | null;
   udpEnabled: boolean;
+  /** Optional Xray finalmask JSON (mask entry or `{tcp:[...]}`). */
+  xrayFinalmaskJson?: string | null;
 }
 
 export type NodeTestStatus = "failed" | "success" | "timeout";
@@ -144,14 +264,22 @@ export interface TrafficSnapshot {
   uploadBytesPerSecond: number;
 }
 
+export interface RouteSchemeSummary {
+  id: string;
+  name: string;
+}
+
 export interface SessionStatus {
   connected: boolean;
   core: string;
   dns: DnsSettings;
+  clashApiPort: number;
   httpPort: number;
   mode: RoutingMode;
   node: NodeSummary | null;
   route: RouteSettings;
+  routeSchemeId: string;
+  routeSchemes: RouteSchemeSummary[];
   socksPort: number;
   systemProxy: boolean;
   systemProxyMode: SystemProxyMode;
@@ -167,15 +295,20 @@ export type DnsStrategy =
   | "ipv4Only"
   | "ipv6Only";
 
+export type DnsTemplate = "simple" | "advanced";
+
 export interface DnsSettings {
+  bootstrap: string;
   dohPath: string;
   fakeIpEnabled: boolean;
+  hosts: string;
   ipv6Enabled: boolean;
   mode: DnsMode;
   port: number;
   server: string;
   strategy: DnsStrategy;
   systemDomains: string[];
+  template: DnsTemplate;
 }
 
 export type RouteRuleKind =
@@ -187,7 +320,9 @@ export type RouteRuleKind =
   | "geoIp"
   | "geoSite"
   | "port"
-  | "network";
+  | "network"
+  | "processName"
+  | "processPath";
 
 export type RouteOutbound = "proxy" | "direct";
 
@@ -198,8 +333,20 @@ export interface RouteRuleSetting {
   value: string;
 }
 
+export type RuleProviderFormat = "binary" | "source";
+
+/** A remote rule set the Core downloads and routes by. */
+export interface RuleProviderSetting {
+  enabled: boolean;
+  format: RuleProviderFormat;
+  name: string;
+  outbound: RouteOutbound;
+  url: string;
+}
+
 export interface RouteSettings {
   finalOutbound: RouteOutbound;
+  providers: RuleProviderSetting[];
   rules: RouteRuleSetting[];
 }
 
@@ -230,6 +377,18 @@ export function setRoutingMode(mode: RoutingMode): Promise<SessionStatus> {
 
 export function setRouteSettings(settings: RouteSettings): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_set_route_settings", { settings });
+}
+
+export function setRouteScheme(schemeId: string): Promise<SessionStatus> {
+  return invoke<SessionStatus>("session_set_route_scheme", { schemeId });
+}
+
+export function createRouteScheme(name: string): Promise<SessionStatus> {
+  return invoke<SessionStatus>("session_create_route_scheme", { name });
+}
+
+export function deleteRouteScheme(schemeId: string): Promise<SessionStatus> {
+  return invoke<SessionStatus>("session_delete_route_scheme", { schemeId });
 }
 
 export function setDnsSettings(settings: DnsSettings): Promise<SessionStatus> {
@@ -267,6 +426,17 @@ export function createNode(draft: ManualNodeDraft): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_create_node", { draft });
 }
 
+export function loadNodeDraft(id: string): Promise<ManualNodeDraft> {
+  return invoke<ManualNodeDraft>("session_node_draft", { id });
+}
+
+export function updateNode(
+  id: string,
+  draft: ManualNodeDraft,
+): Promise<SessionStatus> {
+  return invoke<SessionStatus>("session_update_node", { id, draft });
+}
+
 export function loadNodes(): Promise<NodeSummary[]> {
   return invoke<NodeSummary[]>("session_nodes");
 }
@@ -283,8 +453,56 @@ export function testUrl(url: string): Promise<NodeTestResult> {
   return invoke<NodeTestResult>("session_url_test", { url });
 }
 
+export interface SpeedTestResult {
+  bytesPerSecond: number | null;
+  bytesRead: number | null;
+  elapsedMs: number | null;
+  id: string;
+  status: "failed" | "success" | "timeout";
+}
+
+export function testDownloadSpeed(url: string): Promise<SpeedTestResult> {
+  return invoke<SpeedTestResult>("session_speed_test", { url });
+}
+
 export function loadTraffic(): Promise<TrafficSnapshot> {
   return invoke<TrafficSnapshot>("session_traffic");
+}
+
+export function clearTraffic(): Promise<TrafficSnapshot> {
+  return invoke<TrafficSnapshot>("session_clear_traffic");
+}
+
+/** One live connection as the Core's API reports it. */
+export interface ConnectionSummary {
+  chain: string;
+  destination: string;
+  downloadBytes: number;
+  host: string;
+  id: string;
+  network: string;
+  process: string;
+  rule: string;
+  start: string;
+  uploadBytes: number;
+}
+
+export interface ConnectionSnapshot {
+  connections: ConnectionSummary[];
+  downloadTotalBytes: number;
+  uploadTotalBytes: number;
+}
+
+export function loadConnections(): Promise<ConnectionSnapshot> {
+  return invoke<ConnectionSnapshot>("session_connections");
+}
+
+export function closeConnection(id: string): Promise<void> {
+  return invoke<void>("session_close_connection", { id });
+}
+
+export function closeConnections(): Promise<void> {
+  return invoke<void>("session_close_connections");
 }
 
 export async function testAllNodes(
@@ -325,6 +543,18 @@ export function selectNode(id: string): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_select_node", { id });
 }
 
+/** Selects a node and reconnects when a session is already running. */
+export function switchNode(id: string): Promise<SessionStatus> {
+  return invoke<SessionStatus>("session_switch_node", { id });
+}
+
+export function setNodeEnabled(
+  id: string,
+  enabled: boolean,
+): Promise<NodeSummary[]> {
+  return invoke<NodeSummary[]>("session_set_node_enabled", { enabled, id });
+}
+
 export function editNode(id: string, edit: NodeEdit): Promise<SessionStatus> {
   return invoke<SessionStatus>("session_edit_node", { id, ...edit });
 }
@@ -336,11 +566,25 @@ export function moveNode(
   return invoke<NodeSummary[]>("session_move_node", { direction, id });
 }
 
+export function reorderNodes(ids: string[]): Promise<NodeSummary[]> {
+  return invoke<NodeSummary[]>("session_reorder_nodes", { ids });
+}
+
 export function setNodeGroup(
   id: string,
   groupName: string | null,
 ): Promise<NodeSummary[]> {
   return invoke<NodeSummary[]>("session_set_node_group", { groupName, id });
+}
+
+export function setNodeGroupStrategy(
+  id: string,
+  strategy: NodeGroupStrategy,
+): Promise<NodeGroupSummary[]> {
+  return invoke<NodeGroupSummary[]>("session_set_node_group_strategy", {
+    id,
+    strategy,
+  });
 }
 
 export function deleteNode(id: string): Promise<SessionStatus> {
@@ -372,6 +616,66 @@ export interface UpdateCheck {
  * the app contacts nothing on its own. */
 export function checkUpdate(): Promise<UpdateCheck> {
   return invoke<UpdateCheck>("session_check_update");
+}
+
+export interface CoreVersionCheck {
+  name: string;
+  current: string;
+  latest: string;
+  url: string;
+  updateAvailable: boolean;
+  fromBinary: boolean;
+}
+
+export interface CoreUpdateCheck {
+  singBox: CoreVersionCheck;
+  xray: CoreVersionCheck;
+  install: CoreInstallStatus;
+}
+
+/** Asks GitHub whether newer sing-box / Xray releases exist. Menu-only. */
+export function checkCoreUpdate(): Promise<CoreUpdateCheck> {
+  return invoke<CoreUpdateCheck>("core_check_update");
+}
+
+export interface InstalledCoreEntry {
+  version: string;
+  sha256: string;
+  binary: string;
+  previousVersion?: string;
+}
+
+export interface CoreInstallStatus {
+  directory: string;
+  singBox?: InstalledCoreEntry;
+  xray?: InstalledCoreEntry;
+}
+
+/** Downloads and installs one Core from GitHub. Requires disconnect first. */
+export function downloadCoreUpdate(core: "sing-box" | "xray"): Promise<CoreInstallStatus> {
+  return invoke<CoreInstallStatus>("core_download_update", { core });
+}
+
+export interface GeoFileStatus {
+  name: string;
+  present: boolean;
+  bytes: number;
+  modifiedAt: number | null;
+}
+
+export interface GeoAssetsStatus {
+  directory: string;
+  geoip: GeoFileStatus;
+  geosite: GeoFileStatus;
+  assetEnvApplied: boolean;
+}
+
+export function loadGeoAssetsStatus(): Promise<GeoAssetsStatus> {
+  return invoke<GeoAssetsStatus>("geo_assets_status");
+}
+
+export function updateGeoAssets(): Promise<GeoAssetsStatus> {
+  return invoke<GeoAssetsStatus>("geo_assets_update");
 }
 
 /** Reads a sharing link out of a QR code image the user picked. */
@@ -424,4 +728,26 @@ export function dismissSystemProxyRecovery(): Promise<SystemProxyStartupStatus> 
 /** Writes a redacted diagnostic bundle and resolves with its path. */
 export function exportDiagnostics(): Promise<string> {
   return invoke<string>("export_diagnostics");
+}
+
+export function exportPreferences(): Promise<string> {
+  return invoke<string>("export_preferences");
+}
+
+export function importPreferences(path: string): Promise<AppSettings> {
+  return invoke<AppSettings>("import_preferences", { path });
+}
+
+export interface ProfileImportResult {
+  app: AppSettings;
+  manualNodeCount: number;
+  subscriptionCount: number;
+}
+
+export function exportProfile(): Promise<string> {
+  return invoke<string>("export_profile");
+}
+
+export function importProfile(path: string): Promise<ProfileImportResult> {
+  return invoke<ProfileImportResult>("import_profile", { path });
 }

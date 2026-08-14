@@ -77,6 +77,170 @@ fn parses_percent_encoded_websocket_tls_fields() {
 }
 
 #[test]
+fn parses_httpupgrade_transport_with_path_and_host() {
+    let parsed = VlessParser
+        .parse(&format!(
+            "vless://{USER_ID}@edge.example.com:443?type=httpupgrade\
+             &path=%2Fupgrade&host=cdn.example.com&security=tls#HU"
+        ))
+        .unwrap();
+
+    assert_eq!(
+        parsed.transport(),
+        &TransportConfig::HttpUpgrade {
+            path: "/upgrade".to_owned(),
+            host: Some("cdn.example.com".to_owned()),
+        }
+    );
+}
+
+#[test]
+fn parses_xhttp_and_legacy_splithttp_transports() {
+    use magies_domain::XhttpMode;
+
+    let xhttp = VlessParser
+        .parse(&format!(
+            "vless://{USER_ID}@edge.example.com:443?type=xhttp\
+             &path=%2Fxh&host=cdn.example.com&mode=packet-up&security=tls#XH"
+        ))
+        .unwrap();
+    assert_eq!(
+        xhttp.transport(),
+        &TransportConfig::XHttp {
+            path: "/xh".to_owned(),
+            host: Some("cdn.example.com".to_owned()),
+            mode: XhttpMode::PacketUp,
+        }
+    );
+
+    let split = VlessParser
+        .parse(&format!(
+            "vless://{USER_ID}@edge.example.com:443?type=splithttp\
+             &path=%2Fsplit&security=tls#Split"
+        ))
+        .unwrap();
+    assert_eq!(
+        split.transport(),
+        &TransportConfig::XHttp {
+            path: "/split".to_owned(),
+            host: None,
+            mode: XhttpMode::Auto,
+        }
+    );
+}
+
+#[test]
+fn parses_kcp_and_mkcp_transports() {
+    let kcp = VlessParser
+        .parse(&format!(
+            "vless://{USER_ID}@edge.example.com:443?type=kcp\
+             &mtu=1350&tti=50&uplinkCapacity=5&downlinkCapacity=20\
+             &congestion=1&headerType=wechat-video&seed=s3cr3t#KCP"
+        ))
+        .unwrap();
+    assert_eq!(
+        kcp.transport(),
+        &TransportConfig::Kcp {
+            mtu: Some(1350),
+            tti: Some(50),
+            uplink_capacity: Some(5),
+            downlink_capacity: Some(20),
+            congestion: true,
+            header_type: Some("wechat-video".to_owned()),
+            seed: Some("s3cr3t".to_owned()),
+        }
+    );
+
+    let mkcp = VlessParser
+        .parse(&format!(
+            "vless://{USER_ID}@edge.example.com:443?type=mkcp#mKCP"
+        ))
+        .unwrap();
+    assert_eq!(
+        mkcp.transport(),
+        &TransportConfig::Kcp {
+            mtu: None,
+            tti: None,
+            uplink_capacity: None,
+            downlink_capacity: None,
+            congestion: false,
+            header_type: None,
+            seed: None,
+        }
+    );
+}
+
+#[test]
+fn rejects_an_invalid_kcp_header_type() {
+    let error = VlessParser
+        .parse(&format!(
+            "vless://{USER_ID}@edge.example.com:443?type=kcp&headerType=bogus"
+        ))
+        .unwrap_err();
+    assert_eq!(
+        error,
+        VlessParseError::UnsupportedKcpHeaderType {
+            value: "bogus".to_owned()
+        }
+    );
+}
+
+#[test]
+fn rejects_a_non_numeric_kcp_mtu() {
+    let error = VlessParser
+        .parse(&format!(
+            "vless://{USER_ID}@edge.example.com:443?type=kcp&mtu=not-a-number"
+        ))
+        .unwrap_err();
+    assert_eq!(
+        error,
+        VlessParseError::InvalidKcpParameter {
+            name: "mtu",
+            value: "not-a-number".to_owned()
+        }
+    );
+}
+
+#[test]
+fn parses_tls_certificate_pin_from_either_spelling() {
+    use magies_domain::CertificatePin;
+
+    let pin = "6ff212bbab490b686b06209c6074865f9340f4c0f9c4aa7d34d568c2a2cebe73";
+    let parsed = VlessParser
+        .parse(&format!(
+            "vless://{USER_ID}@edge.example.com:443?type=tcp&security=tls\
+             &pinSHA256={pin}#Pinned"
+        ))
+        .unwrap();
+    let Some(TlsConfig::Tls {
+        pinned_sha256: Some(value),
+        ..
+    }) = parsed.tls()
+    else {
+        panic!("expected a TLS pin");
+    };
+    assert_eq!(value, &CertificatePin::new(pin).unwrap());
+
+    let via_pcs = VlessParser
+        .parse(&format!(
+            "vless://{USER_ID}@edge.example.com:443?type=tcp&security=tls\
+             &pcs={pin}#Pinned"
+        ))
+        .unwrap();
+    assert_eq!(via_pcs.tls(), parsed.tls());
+
+    let conflict = VlessParser.parse(&format!(
+        "vless://{USER_ID}@edge.example.com:443?type=tcp&security=tls\
+         &pinSHA256={pin}&pcs=0000000000000000000000000000000000000000000000000000000000000000\
+         #Pinned"
+    ));
+    assert!(matches!(
+        conflict,
+        Err(VlessParseError::ConflictingCertificatePins)
+    ));
+}
+
+#[test]
 fn parses_ipv6_grpc_reality_without_exposing_the_user_id_in_debug() {
     let parsed = VlessParser
         .parse(&format!(
@@ -225,9 +389,9 @@ fn rejects_duplicate_unsupported_and_unmappable_parameters() {
             },
         ),
         (
-            format!("vless://{USER_ID}@example.com:443?type=kcp"),
+            format!("vless://{USER_ID}@example.com:443?type=quic"),
             VlessParseError::UnsupportedTransport {
-                value: "kcp".to_owned(),
+                value: "quic".to_owned(),
             },
         ),
         (

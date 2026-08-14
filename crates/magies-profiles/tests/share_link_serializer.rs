@@ -16,8 +16,40 @@ const USER_ID: &str = "b0dd64e4-0fbd-4038-9139-d1f32a68a0dc";
 
 /// Every link shape the parsers accept, so the serializer is exercised against
 /// the transports, TLS layers and credential fields that actually occur.
+#[expect(
+    clippy::too_many_lines,
+    reason = "a flat list of fixture links; splitting it would not make any single case clearer"
+)]
 fn links() -> Vec<(&'static str, String)> {
     vec![
+        (
+            "tuic",
+            format!(
+                "tuic://{USER_ID}:hunter2@edge.example.com:443?sni=cdn.example.com\
+                 &congestion_control=bbr&udp_relay_mode=native#Tokyo"
+            ),
+        ),
+        (
+            "wireguard",
+            "wireguard://cHJpdmF0ZS1rZXk%3D@edge.example.com:51821\
+             ?publickey=cGVlci1wdWJsaWMta2V5&address=10.0.0.2/32,fd00::1/128\
+             &mtu=1420&presharedkey=cHNr&reserved=1,2,3#Tokyo"
+                .to_owned(),
+        ),
+        (
+            "vless-httpupgrade",
+            format!(
+                "vless://{USER_ID}@edge.example.com:443?type=httpupgrade\
+                 &path=%2Fupgrade&host=cdn.example.com#Tokyo"
+            ),
+        ),
+        (
+            "vless-xhttp",
+            format!(
+                "vless://{USER_ID}@edge.example.com:443?type=xhttp&path=%2Fx\
+                 &host=cdn.example.com&mode=packet-up#Tokyo"
+            ),
+        ),
         (
             "vless-tcp",
             format!("vless://{USER_ID}@edge.example.com:443"),
@@ -41,6 +73,14 @@ fn links() -> Vec<(&'static str, String)> {
             format!("vless://{USER_ID}@edge.example.com:443?flow=xtls-rprx-vision&security=tls"),
         ),
         (
+            "vless-kcp",
+            format!(
+                "vless://{USER_ID}@edge.example.com:443?type=kcp&mtu=1350&tti=50\
+                 &uplinkCapacity=5&downlinkCapacity=20&congestion=1\
+                 &headerType=wechat-video&seed=s3cr3t#KCP"
+            ),
+        ),
+        (
             "vmess-tcp",
             format!("vmess://{USER_ID}@edge.example.com:443"),
         ),
@@ -58,6 +98,12 @@ fn links() -> Vec<(&'static str, String)> {
             "trojan://hunter2@edge.example.com:443?sni=www.example.com#Trojan".to_owned(),
         ),
         (
+            "trojan-kcp",
+            "trojan://hunter2@edge.example.com:443?type=kcp&headerType=dtls\
+             &seed=s3cr3t&sni=www.example.com#TrojanKCP"
+                .to_owned(),
+        ),
+        (
             "shadowsocks",
             "ss://aes-256-gcm:hunter2@edge.example.com:8388#SS".to_owned(),
         ),
@@ -71,6 +117,51 @@ fn links() -> Vec<(&'static str, String)> {
             "hysteria2://hunter2@edge.example.com:5555?sni=www.example.com\
              &pinSHA256=6ff212bbab490b686b06209c6074865f9340f4c0f9c4aa7d34d568c2a2cebe73#Pinned"
                 .to_owned(),
+        ),
+        (
+            "socks-anonymous",
+            "socks://edge.example.com:1080#Anon".to_owned(),
+        ),
+        (
+            "socks-auth",
+            "socks5://alice:hunter2@edge.example.com:1080#Auth".to_owned(),
+        ),
+        (
+            "http-plain",
+            "http://edge.example.com:8080#Plain".to_owned(),
+        ),
+        (
+            "http-username-only",
+            "http://alice@edge.example.com:8080#Alice".to_owned(),
+        ),
+        (
+            "https-tls",
+            "https://alice:hunter2@edge.example.com#Secure".to_owned(),
+        ),
+        (
+            "anytls-tls",
+            "anytls://hunter2@edge.example.com:443?sni=www.example.com&insecure=1#AnyTLS"
+                .to_owned(),
+        ),
+        (
+            "anytls-reality",
+            "anytls://hunter2@edge.example.com:443?security=reality\
+             &sni=www.example.com&pbk=public-key&sid=ab&fp=chrome#AnyTLS-Reality"
+                .to_owned(),
+        ),
+        (
+            "naive-http2",
+            "naive://alice:hunter2@edge.example.com:443?sni=www.example.com#Naive".to_owned(),
+        ),
+        (
+            "naive-quic",
+            "naive+quic://alice:hunter2@edge.example.com:443?\
+             congestion_control=bbr&sni=www.example.com#Naive-QUIC"
+                .to_owned(),
+        ),
+        (
+            "naive-https-scheme",
+            "naive+https://edge.example.com#Anon".to_owned(),
         ),
     ]
 }
@@ -167,6 +258,10 @@ fn the_scheme_matches_what_the_parser_claims() {
             "hysteria2://p@edge.example.com:5555".to_owned(),
             "hysteria2://",
         ),
+        ("socks://edge.example.com:1080".to_owned(), "socks://"),
+        ("http://edge.example.com:8080".to_owned(), "http://"),
+        ("https://edge.example.com".to_owned(), "https://"),
+        ("anytls://p@edge.example.com:443".to_owned(), "anytls://"),
     ] {
         let (node, credential) = parse(&link);
 
@@ -233,4 +328,38 @@ fn a_vmess_alter_id_survives_the_export() {
         panic!("a VMess link must parse to a VMess credential");
     };
     assert_eq!(vmess.alter_id(), 4);
+}
+
+#[test]
+fn custom_nodes_cannot_be_exported_as_sharing_links() {
+    use magies_domain::{NodeName, ProxyNode, ServerAddress};
+    use magies_profiles::CustomCredential;
+    use std::num::NonZeroU16;
+
+    let node = ProxyNode {
+        id: Uuid::parse_str(NODE_ID).unwrap(),
+        name: NodeName::new("Custom").unwrap(),
+        protocol_type: ProxyProtocol::Custom,
+        server: ServerAddress::new("127.0.0.1").unwrap(),
+        port: NonZeroU16::new(443).unwrap(),
+        credential_ref: CredentialRef::new("node/custom").unwrap(),
+        transport: None,
+        tls: None,
+        udp_enabled: false,
+        subscription_id: None,
+        group_id: None,
+        latency_ms: None,
+        last_tested_at: None,
+        enabled: true,
+        xray_finalmask_json: None,
+    };
+    let credential = StoredNodeCredential::Custom(CustomCredential {
+        core: magies_domain::CoreType::SingBox,
+        document: r#"{"outbounds":[]}"#.to_owned(),
+    });
+
+    assert_eq!(
+        ShareLinkSerializer::serialize(&node, &credential),
+        Err(ShareLinkSerializerError::UnrepresentableCustomNode)
+    );
 }
