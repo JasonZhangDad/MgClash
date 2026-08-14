@@ -4004,6 +4004,53 @@ describe("App", () => {
     );
   });
 
+
+  it("drafts a routing rule from a connection", async () => {
+    loadSessionStatusMock.mockResolvedValue(CONNECTED);
+    loadNodesMock.mockResolvedValue([CONNECTED.node]);
+    loadConnectionsMock.mockResolvedValue({
+      uploadTotalBytes: 0,
+      downloadTotalBytes: 0,
+      connections: [
+        {
+          id: "c1",
+          host: "cdn.example.com",
+          destination: "93.184.216.34:443",
+          network: "tcp",
+          process: "Safari",
+          rule: "final",
+          chain: "proxy",
+          uploadBytes: 0,
+          downloadBytes: 0,
+          start: "2026-08-13T00:00:00Z",
+        },
+      ],
+    });
+    await render();
+
+    await act(async () => button("连接列表").click());
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>("[aria-label='为 cdn.example.com 添加规则']")
+        ?.click(),
+    );
+
+    // The routing dialog opens with the connection's host already filled in.
+    expect(
+      container
+        .querySelector("[aria-label='路由规则']")
+        ?.hasAttribute("hidden"),
+    ).toBe(false);
+    expect(
+      container.querySelector<HTMLSelectElement>("select[aria-label='规则类型']")
+        ?.value,
+    ).toBe("domainSuffix");
+    expect(
+      container.querySelector<HTMLInputElement>("input[aria-label='规则值']")
+        ?.value,
+    ).toBe("cdn.example.com");
+  });
+
   it("changes the main window layout from the menu", async () => {
     await render();
 

@@ -128,6 +128,7 @@ import {
   regionFlag,
   ROUTE_KIND_LABEL,
   ROUTE_OUTBOUND_LABEL,
+  ruleDraftFromConnection,
   runtimeOrderedRoute,
   savedLayout,
   savedTheme,
@@ -2686,6 +2687,15 @@ export default function App() {
                   setConnections(await loadConnections());
                 })
               }
+              onAddRule={(host) => {
+                const draft = ruleDraftFromConnection(host);
+                if (draft === null) {
+                  return;
+                }
+                setRouteRuleKind(draft.kind);
+                setRouteRuleValue(draft.value);
+                setDialog("routing");
+              }}
             />
           )}
           {mainTab !== "connections" &&
