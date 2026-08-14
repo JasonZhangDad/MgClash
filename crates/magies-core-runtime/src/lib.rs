@@ -2,9 +2,6 @@
 
 mod adapter;
 mod binary;
-// Elevation is a Unix path: the prompt is macOS's, and the liveness check
-// signals a pid. Windows TUN elevates through its installer instead.
-#[cfg(unix)]
 pub mod elevated;
 mod health;
 mod local_proxy_ports;

@@ -16,9 +16,7 @@ use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-#[cfg(unix)]
 use magies_core_runtime::ValidatedCoreBinary;
-#[cfg(unix)]
 use magies_core_runtime::elevated::{ElevatedCore, ElevatedCoreError, ElevationLauncher};
 use magies_core_runtime::{
     AtomicRuntimeConfig, CoreHealthError, CoreOutput, CoreRuntime, CoreRuntimeError, CoreState,
@@ -909,7 +907,6 @@ impl CoreSessionControl for SingBoxCoreControl {
 /// macOS opens a `utun` only for root. Validation stays unprivileged and
 /// happens first: a config sing-box already rejected must never cost the user a
 /// password prompt.
-#[cfg(unix)]
 pub struct ElevatedSingBoxControl<L: ElevationLauncher> {
     adapter: SingBoxAdapter,
     binary: ValidatedCoreBinary,
@@ -918,7 +915,6 @@ pub struct ElevatedSingBoxControl<L: ElevationLauncher> {
     health_timeout: Duration,
 }
 
-#[cfg(unix)]
 impl<L: ElevationLauncher> ElevatedSingBoxControl<L> {
     #[must_use]
     pub fn new(
@@ -943,7 +939,6 @@ impl<L: ElevationLauncher> ElevatedSingBoxControl<L> {
     }
 }
 
-#[cfg(unix)]
 impl<L: ElevationLauncher> CoreSessionControl for ElevatedSingBoxControl<L> {
     type Error = ElevatedSingBoxSessionError;
     type Output = CoreOutput;
@@ -977,7 +972,6 @@ impl<L: ElevationLauncher> CoreSessionControl for ElevatedSingBoxControl<L> {
     }
 }
 
-#[cfg(unix)]
 #[derive(Debug, Error)]
 pub enum ElevatedSingBoxSessionError {
     #[error("sing-box rejected the generated configuration")]
@@ -995,7 +989,6 @@ pub enum ElevatedSingBoxSessionError {
     Stop(#[source] ElevatedCoreError),
 }
 
-#[cfg(unix)]
 impl ElevatedSingBoxSessionError {
     /// The stable machine-readable code the UI branches on.
     #[must_use]
