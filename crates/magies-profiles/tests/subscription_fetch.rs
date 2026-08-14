@@ -35,7 +35,13 @@ fn fetches_updated_content_with_validators_and_a_named_user_agent() {
     let requests = server.finish();
     let request = requests[0].to_ascii_lowercase();
     assert!(request.starts_with("get /subscription?token=url-secret http/1.1\r\n"));
-    assert!(request.contains("user-agent: mgclash/0.1.0\r\n"));
+    // Built from the crate version rather than spelled out: a release bump
+    // must not need this test edited, and what matters is that the header
+    // names this build.
+    assert!(request.contains(&format!(
+        "user-agent: mgclash/{}\r\n",
+        env!("CARGO_PKG_VERSION")
+    )));
 }
 
 #[test]
