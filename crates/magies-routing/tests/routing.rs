@@ -1,6 +1,6 @@
 use magies_routing::{
     Network, RouteConfigError, RouteOutbound, RouteProfile, RoutingMode, RoutingRule,
-    RuleProviderFormat, SingBoxRouteConfigGenerator,
+    RuleProviderFormat, SingBoxRouteConfigGenerator, SniffedProtocol,
 };
 use serde_json::json;
 
@@ -339,4 +339,57 @@ fn a_cached_rule_provider_still_needs_a_path() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn routes_by_the_protocol_the_core_sniffs() {
+    // What v2rayN calls a protocol rule: BitTorrent straight out the direct
+    // side, so seeding never rides the proxy.
+    let rules = vec![
+        RoutingRule::protocol(SniffedProtocol::Bittorrent, RouteOutbound::Direct, 10, true),
+        RoutingRule::protocol(SniffedProtocol::Tls, RouteOutbound::Proxy, 20, true),
+        RoutingRule::protocol(SniffedProtocol::Http, RouteOutbound::Block, 30, true),
+    ];
+    let profile = RouteProfile::new(RoutingMode::Rule, rules, RouteOutbound::Proxy).unwrap();
+
+    let route = SingBoxRouteConfigGenerator::generate(&profile);
+
+    assert_eq!(
+        route.json()["rules"],
+        json!([
+            { "ip_is_private": true, "action": "route", "outbound": "direct" },
+            { "protocol": ["bittorrent"], "action": "route", "outbound": "direct" },
+            { "protocol": ["tls"], "action": "route", "outbound": "proxy" },
+            { "protocol": ["http"], "action": "reject" },
+        ])
+    );
+    assert!(profile.requires_sniffing());
+}
+
+#[test]
+fn a_profile_without_protocol_rules_needs_no_sniffing() {
+    let rules = vec![RoutingRule::network(
+        Network::Udp,
+        RouteOutbound::Direct,
+        10,
+        true,
+    )];
+    let profile = RouteProfile::new(RoutingMode::Rule, rules, RouteOutbound::Proxy).unwrap();
+
+    // Sniffing costs the Core work on every connection; it is only turned on
+    // where a rule actually asks what the traffic is.
+    assert!(!profile.requires_sniffing());
+}
+
+#[test]
+fn a_disabled_protocol_rule_does_not_turn_sniffing_on() {
+    let rules = vec![RoutingRule::protocol(
+        SniffedProtocol::Bittorrent,
+        RouteOutbound::Direct,
+        10,
+        false,
+    )];
+    let profile = RouteProfile::new(RoutingMode::Rule, rules, RouteOutbound::Proxy).unwrap();
+
+    assert!(!profile.requires_sniffing());
 }

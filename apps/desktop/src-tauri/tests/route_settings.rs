@@ -3,8 +3,9 @@ use std::process::id;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use magies_desktop_lib::route_settings::{
-    DesktopRouteOutbound, RouteRuleKind, RouteRuleSetting, RouteSettings, RouteSettingsStoreError,
-    RuleProviderFormatSetting, RuleProviderSetting, SqliteRouteSettingsStore,
+    DesktopRouteOutbound, RouteRuleKind, RouteRuleSetting, RouteSettings, RouteSettingsError,
+    RouteSettingsStoreError, RuleProviderFormatSetting, RuleProviderSetting,
+    SqliteRouteSettingsStore,
 };
 use magies_routing::{RoutingMode, SingBoxRouteConfigGenerator};
 use rusqlite::Connection;
@@ -348,4 +349,39 @@ fn a_cached_rule_set_is_read_from_disk_and_an_uncached_one_from_its_url() {
     // Nothing downloaded yet, so the Core still fetches this one itself.
     assert_eq!(sets[1]["type"], "remote");
     assert_eq!(sets[1]["url"], "https://example.com/cn.srs");
+}
+
+#[test]
+fn builds_a_protocol_rule_and_rejects_a_protocol_the_cores_cannot_sniff() {
+    let settings = RouteSettings {
+        rules: vec![rule(
+            RouteRuleKind::Protocol,
+            "bittorrent",
+            DesktopRouteOutbound::Direct,
+        )],
+        providers: Vec::new(),
+        final_outbound: DesktopRouteOutbound::Proxy,
+    };
+
+    let config =
+        SingBoxRouteConfigGenerator::generate(&settings.profile(RoutingMode::Rule).unwrap());
+
+    assert_eq!(config.json()["rules"][1]["protocol"][0], "bittorrent");
+
+    let unsupported = RouteSettings {
+        rules: vec![rule(
+            RouteRuleKind::Protocol,
+            "ssh",
+            DesktopRouteOutbound::Direct,
+        )],
+        providers: Vec::new(),
+        final_outbound: DesktopRouteOutbound::Proxy,
+    };
+
+    // sing-box knows more protocols than Xray does; offering one the other
+    // Core cannot match would make the rule depend on which Core ran.
+    assert!(matches!(
+        unsupported.profile(RoutingMode::Rule),
+        Err(RouteSettingsError::InvalidProtocol { .. })
+    ));
 }

@@ -12,7 +12,7 @@ use magies_profiles::{
     DnsProfile, DnsServer, DnsStrategy, LocalHttpProfile, LocalSocksProfile, NodeCredential,
     ShadowsocksParser, SingBoxRuntimeConfigGenerator, SingBoxRuntimeProfile,
 };
-use magies_routing::{RouteOutbound, RouteProfile, RoutingMode, RoutingRule};
+use magies_routing::{RouteOutbound, RouteProfile, RoutingMode, RoutingRule, SniffedProtocol};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -83,7 +83,13 @@ fn generated_runtime_proxies_an_http_request_through_selected_node() {
     .unwrap();
     let route = RouteProfile::new(
         RoutingMode::Rule,
-        vec![RoutingRule::domain("localhost", RouteOutbound::Proxy, 0, true).unwrap()],
+        vec![
+            RoutingRule::domain("localhost", RouteOutbound::Proxy, 0, true).unwrap(),
+            // Carried by the same document the request below rides through, so
+            // a real sing-box has to accept both the rule and the `sniff`
+            // action it pulls in. It cannot match an HTTP request.
+            RoutingRule::protocol(SniffedProtocol::Bittorrent, RouteOutbound::Direct, 1, true),
+        ],
         RouteOutbound::Direct,
     )
     .unwrap();

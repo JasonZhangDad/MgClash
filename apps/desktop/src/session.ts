@@ -324,6 +324,7 @@ export type RouteRuleKind =
   | "geoSite"
   | "port"
   | "network"
+  | "protocol"
   | "processName"
   | "processPath";
 

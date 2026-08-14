@@ -270,6 +270,7 @@ export const ROUTE_KIND_LABEL: Record<RouteRuleKind, string> = {
   geoSite: "GeoSite",
   port: "端口",
   network: "网络",
+  protocol: "协议",
   processName: "进程名",
   processPath: "进程路径",
 };

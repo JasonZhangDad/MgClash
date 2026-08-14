@@ -111,6 +111,10 @@ fn xray_rule(rule: &RoutingRule) -> Value {
         // Xray takes a port list as a string, which also covers ranges.
         RuleMatcher::Port(port) => json!({ "port": port.get().to_string() }),
         RuleMatcher::Network(network) => json!({ "network": network.as_str() }),
+        // Matches only because the runtime assembler turns inbound sniffing on
+        // for every local inbound; Xray has no per-rule equivalent of
+        // sing-box's `sniff` action.
+        RuleMatcher::Protocol(protocol) => json!({ "protocol": [protocol.as_str()] }),
         RuleMatcher::ProcessName(name) => json!({ "process": [name] }),
         RuleMatcher::ProcessPath(_) => unreachable!("process_path rules are omitted for Xray"),
         RuleMatcher::RuleProvider { .. } => {

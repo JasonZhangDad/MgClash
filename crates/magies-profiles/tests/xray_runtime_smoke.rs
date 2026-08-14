@@ -14,7 +14,9 @@ use magies_profiles::{
     DnsProfile, DnsRule, DnsServer, DnsStrategy, ManualCredentialDraft, ManualNodeDraft,
     PlainDnsTransport, StoredNodeCredential, XrayRuntimeConfigGenerator, XrayRuntimeProfile,
 };
-use magies_routing::{Network, RouteOutbound, RouteProfile, RoutingMode, RoutingRule};
+use magies_routing::{
+    Network, RouteOutbound, RouteProfile, RoutingMode, RoutingRule, SniffedProtocol,
+};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -83,6 +85,7 @@ fn rich_route() -> RouteProfile {
             RoutingRule::ip_cidr6("2001:db8::/32", RouteOutbound::Proxy, 50, true).unwrap(),
             RoutingRule::port(443, RouteOutbound::Proxy, 60, true).unwrap(),
             RoutingRule::network(Network::Udp, RouteOutbound::Direct, 70, true),
+            RoutingRule::protocol(SniffedProtocol::Bittorrent, RouteOutbound::Direct, 75, true),
             RoutingRule::geo_ip("CN", RouteOutbound::Direct, 80, true).unwrap(),
             RoutingRule::geo_site("google", RouteOutbound::Proxy, 90, true).unwrap(),
         ],

@@ -3,7 +3,8 @@
 //! sing-box's `final`.
 
 use magies_routing::{
-    Network, RouteOutbound, RouteProfile, RoutingMode, RoutingRule, XrayRouteConfigGenerator,
+    Network, RouteOutbound, RouteProfile, RoutingMode, RoutingRule, SniffedProtocol,
+    XrayRouteConfigGenerator,
 };
 use serde_json::{Value, json};
 
@@ -179,4 +180,29 @@ fn a_blocked_rule_points_xray_at_its_blackhole() {
     let rule = &config.json()["rules"][1];
     assert_eq!(rule["domain"][0], "domain:ads.example");
     assert_eq!(rule["outboundTag"], "block");
+}
+
+#[test]
+fn translates_a_protocol_rule_to_the_xray_sniffer_field() {
+    let rules = vec![RoutingRule::protocol(
+        SniffedProtocol::Bittorrent,
+        RouteOutbound::Direct,
+        10,
+        true,
+    )];
+    let profile = RouteProfile::new(RoutingMode::Rule, rules, RouteOutbound::Proxy).unwrap();
+
+    let route = XrayRouteConfigGenerator::generate(&profile);
+
+    // Xray spells the same match as a list under `protocol`, and needs the
+    // inbound sniffing the runtime assembler already turns on. Rule 0 is the
+    // private-IP rule every non-direct profile starts with.
+    assert_eq!(
+        route.json()["rules"][1],
+        json!({
+            "type": "field",
+            "protocol": ["bittorrent"],
+            "outboundTag": "direct",
+        })
+    );
 }

@@ -343,6 +343,11 @@ impl SingBoxRuntimeConfigGenerator {
             let generated = SingBoxTunConfigGenerator::generate(tun);
             inbounds.push(generated.json()["inbounds"][0].clone());
             prepend_tun_actions(&mut route, profile.dns_hijack);
+        } else if profile.route.requires_sniffing() {
+            // A TUN session already sniffs. Everywhere else it stays off until
+            // a rule asks what the traffic is, because it costs work on every
+            // connection — and without it that rule matches nothing.
+            prepend_sniff_action(&mut route);
         }
         if profile.final_fragment_enabled {
             prepend_final_fragment_rule(&mut route);
@@ -486,6 +491,13 @@ fn prepend_tun_actions(route: &mut Value, dns_hijack: bool) {
     }
     combined.append(rules);
     *rules = combined;
+}
+
+fn prepend_sniff_action(route: &mut Value) {
+    route["rules"]
+        .as_array_mut()
+        .expect("route generator always emits an array of rules")
+        .insert(0, json!({ "action": "sniff" }));
 }
 
 fn prepend_final_fragment_rule(route: &mut Value) {
