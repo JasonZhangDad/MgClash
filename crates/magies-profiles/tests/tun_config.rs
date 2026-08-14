@@ -51,11 +51,31 @@ fn linux_auto_redirect_is_enabled_only_with_auto_route() {
 }
 
 #[test]
+fn macos_lets_the_system_name_the_utun_device() {
+    // sing-box only accepts a `utunN` name on macOS and picks the next free
+    // one itself, so the generator names nothing rather than guessing a number
+    // that may already be taken.
+    let profile = TunProfile::new(OperatingSystem::MacOs, false, 1500, false, false).unwrap();
+
+    let generated = SingBoxTunConfigGenerator::generate(&profile);
+    let inbound = &generated.json()["inbounds"][0];
+
+    assert!(inbound["interface_name"].is_null());
+    assert_eq!(inbound["type"], "tun");
+    assert_eq!(inbound["address"][0], "172.19.0.1/30");
+    assert_eq!(inbound["stack"], "gvisor");
+    // Linux-only automatic redirection must not leak onto macOS.
+    assert!(inbound["auto_redirect"].is_null());
+}
+
+#[test]
 fn validates_platform_mtu_and_strict_route() {
-    assert_eq!(
-        TunProfile::new(OperatingSystem::MacOs, false, 1500, true, true),
-        Err(TunProfileError::UnsupportedPlatform(OperatingSystem::MacOs))
-    );
+    for mtu in [1279, 9001] {
+        assert_eq!(
+            TunProfile::new(OperatingSystem::MacOs, false, mtu, true, true),
+            Err(TunProfileError::InvalidMtu { mtu })
+        );
+    }
     for mtu in [1279, 9001] {
         assert_eq!(
             TunProfile::new(OperatingSystem::Linux, false, mtu, true, true),
