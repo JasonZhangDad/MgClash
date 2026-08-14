@@ -41,6 +41,9 @@ import {
   closeConnection,
   closeConnections,
   loadConnections,
+  loadRuleSets,
+  updateRuleSet,
+  updateRuleSets,
   importNode,
   importNodes,
   loadAppSettings,
@@ -104,6 +107,7 @@ import {
   type GeoAssetsStatus,
   type TrafficSnapshot,
   type ConnectionSnapshot,
+  type RuleSetCacheEntry,
 } from "./session";
 import {
   createSubscription,
@@ -129,6 +133,7 @@ import {
   ROUTE_KIND_LABEL,
   ROUTE_OUTBOUND_LABEL,
   ruleDraftFromConnection,
+  describeRuleSetCache,
   runtimeOrderedRoute,
   savedLayout,
   savedTheme,
@@ -199,6 +204,7 @@ export default function App() {
   const [dnsDraft, setDnsDraft] = useState<DnsSettings | null>(null);
   const [dnsDirty, setDnsDirty] = useState(false);
   const [routeDraft, setRouteDraft] = useState<RouteSettings | null>(null);
+  const [ruleSets, setRuleSets] = useState<RuleSetCacheEntry[]>([]);
   const [providerName, setProviderName] = useState("");
   const [providerUrl, setProviderUrl] = useState("");
   const [providerFormat, setProviderFormat] =
@@ -536,6 +542,33 @@ export default function App() {
       setBusy(false);
     }
   }, [dnsDraft]);
+
+  const onUpdateRuleSet = useCallback(
+    async (name: string) => {
+      setBusy(true);
+      setError(null);
+      try {
+        setRuleSets(await updateRuleSet(name));
+      } catch (failure: unknown) {
+        setError(describeFailure(failure));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [],
+  );
+
+  const onUpdateRuleSets = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setRuleSets(await updateRuleSets());
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
 
   const onAddRuleProvider = useCallback(() => {
     const name = providerName.trim();
@@ -1029,6 +1062,16 @@ export default function App() {
     },
     [t],
   );
+
+  const onOpenRouting = useCallback(async () => {
+    setDialog("routing");
+    setError(null);
+    try {
+      setRuleSets(await loadRuleSets());
+    } catch (failure: unknown) {
+      console.warn("rule set status failed", failure);
+    }
+  }, []);
 
   const onOpenGeo = useCallback(async () => {
     setDialog("geo");
@@ -1885,7 +1928,7 @@ export default function App() {
         onOpenSubscriptions={() => setDialog("subscriptions")}
         onRefreshSubscriptions={() => void onRefreshAllSubscriptions()}
         onOpenSettings={() => setDialog("settings")}
-        onOpenRouting={() => setDialog("routing")}
+        onOpenRouting={() => void onOpenRouting()}
         onOpenDns={() => setDialog("dns")}
         onOpenGeo={() => void onOpenGeo()}
         onCheckUpdate={() => void onCheckUpdate()}
@@ -4498,6 +4541,13 @@ export default function App() {
               <button type="button" disabled={busy} onClick={onAddRuleProvider}>
                 {t("添加规则集")}
               </button>
+              <button
+                type="button"
+                disabled={busy || routeDraft.providers.length === 0}
+                onClick={() => void onUpdateRuleSets()}
+              >
+                {t("全部更新规则集")}
+              </button>
             </div>
 
             {routeDraft.providers.length === 0 ? (
@@ -4511,6 +4561,7 @@ export default function App() {
                     <th>{t("格式")}</th>
                     <th>{t("出口")}</th>
                     <th>{t("启用")}</th>
+                    <th>{t("缓存")}</th>
                     <th>{t("操作")}</th>
                   </tr>
                 </thead>
@@ -4538,7 +4589,16 @@ export default function App() {
                           }}
                         />
                       </td>
+                      <td>{describeRuleSetCache(ruleSets, provider.name, t)}</td>
                       <td className="node-actions">
+                        <button
+                          type="button"
+                          aria-label={`更新规则集 ${provider.name}`}
+                          disabled={busy}
+                          onClick={() => void onUpdateRuleSet(provider.name)}
+                        >
+                          {t("更新")}
+                        </button>
                         <button
                           type="button"
                           aria-label={`${t("删除规则集")} ${provider.name}`}

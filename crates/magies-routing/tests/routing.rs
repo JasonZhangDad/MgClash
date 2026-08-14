@@ -295,3 +295,48 @@ fn blocking_everything_by_default_is_refused() {
         RouteConfigError::BlockCannotBeFinal
     );
 }
+
+#[test]
+fn a_cached_rule_provider_is_read_from_disk_instead_of_the_network() {
+    // Once the app has downloaded the set, the Core must not fetch it again:
+    // the cached copy is what "update now" refreshes.
+    let rules = vec![
+        RoutingRule::cached_rule_provider(
+            "ads",
+            "/var/cache/mgclash/ads.srs",
+            RuleProviderFormat::Binary,
+            RouteOutbound::Block,
+            0,
+            true,
+        )
+        .unwrap(),
+    ];
+    let profile = RouteProfile::new(RoutingMode::Rule, rules, RouteOutbound::Proxy).unwrap();
+    let config = SingBoxRouteConfigGenerator::generate(&profile);
+
+    assert_eq!(
+        config.json()["rule_set"],
+        json!([{
+            "type": "local",
+            "tag": "ads",
+            "format": "binary",
+            "path": "/var/cache/mgclash/ads.srs"
+        }])
+    );
+    assert_eq!(config.json()["rules"][1]["rule_set"][0], "ads");
+}
+
+#[test]
+fn a_cached_rule_provider_still_needs_a_path() {
+    assert!(
+        RoutingRule::cached_rule_provider(
+            "ads",
+            "   ",
+            RuleProviderFormat::Binary,
+            RouteOutbound::Block,
+            0,
+            true,
+        )
+        .is_err()
+    );
+}

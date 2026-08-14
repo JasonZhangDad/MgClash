@@ -49,6 +49,27 @@ export function ruleDraftFromConnection(
   return { kind: "domainSuffix", value: withoutPort };
 }
 
+/** What the rule-set table shows in its cache column. */
+export function describeRuleSetCache(
+  entries: {
+    bytes: number;
+    cached: boolean;
+    name: string;
+    updatedAt: number | null;
+  }[],
+  name: string,
+  t: (text: string) => string,
+): string {
+  const entry = entries.find((candidate) => candidate.name === name);
+  if (entry === undefined || !entry.cached) {
+    return t("未缓存");
+  }
+  const size = formatBytes(entry.bytes);
+  return entry.updatedAt === null
+    ? size
+    : `${size} · ${formatClock(entry.updatedAt * 1_000)}`;
+}
+
 /** How each route outbound reads in the rule tables. */
 export const ROUTE_OUTBOUND_LABEL: Record<RouteOutbound, string> = {
   block: "拦截",

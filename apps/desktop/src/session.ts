@@ -495,6 +495,27 @@ export interface ConnectionSnapshot {
   uploadTotalBytes: number;
 }
 
+/** What the rule-set table knows about one provider's downloaded copy. */
+export interface RuleSetCacheEntry {
+  bytes: number;
+  cached: boolean;
+  name: string;
+  path: string;
+  updatedAt: number | null;
+}
+
+export function loadRuleSets(): Promise<RuleSetCacheEntry[]> {
+  return invoke<RuleSetCacheEntry[]>("rule_sets_status");
+}
+
+export function updateRuleSet(name: string): Promise<RuleSetCacheEntry[]> {
+  return invoke<RuleSetCacheEntry[]>("rule_set_update", { name });
+}
+
+export function updateRuleSets(): Promise<RuleSetCacheEntry[]> {
+  return invoke<RuleSetCacheEntry[]>("rule_sets_update_all");
+}
+
 export function loadConnections(): Promise<ConnectionSnapshot> {
   return invoke<ConnectionSnapshot>("session_connections");
 }

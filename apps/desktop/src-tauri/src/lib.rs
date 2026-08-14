@@ -15,6 +15,7 @@ pub mod preferences_backup;
 pub mod profile_backup;
 pub mod route_settings;
 pub mod routing_mode;
+pub mod rule_provider_cache;
 pub mod session;
 pub mod subscriptions;
 pub mod traffic;
@@ -64,6 +65,9 @@ use crate::preferences_backup::PreferencesBundle;
 use crate::profile_backup::ProfileBundle;
 use crate::route_settings::{RouteSettings, SqliteRouteSettingsStore};
 use crate::routing_mode::{SqliteRoutingModeStore, parse_routing_mode};
+use crate::rule_provider_cache::{
+    RuleProviderCache, RuleProviderCacheEntry, RuleProviderCacheError,
+};
 use crate::session::{
     NodeMoveDirection, NodeStores, NodeSummary, SessionCommandError, SessionDefaults,
     SessionService, SessionStatus,
@@ -275,6 +279,7 @@ struct AppState {
     /// Where an exported diagnostic bundle is written.
     export_directory: PathBuf,
     geo_assets: GeoAssetsStore,
+    rule_sets: Arc<RuleProviderCache>,
     core_install: CoreInstallStore,
     tray: TrayUi,
     allow_exit: AtomicBool,
@@ -1002,6 +1007,106 @@ async fn session_close_connections(state: State<'_, AppState>) -> Result<(), Com
     close_all_connections(api_address, CONNECTIONS_TIMEOUT)
         .await
         .map_err(|error| connections_error(&error))
+}
+
+fn rule_set_error(error: &RuleProviderCacheError) -> CommandError {
+    CommandError {
+        code: error.code(),
+        message: describe(error),
+    }
+}
+
+/// The cache entries for the providers the active route scheme configured.
+fn rule_set_entries(state: &AppState) -> Result<Vec<RuleProviderCacheEntry>, CommandError> {
+    let providers = lock(&state.service).status().route.providers;
+    providers
+        .iter()
+        .map(|provider| {
+            state
+                .rule_sets
+                .entry(&provider.name)
+                .map_err(|error| rule_set_error(&error))
+        })
+        .collect()
+}
+
+/// Points the session at every rule set that is already downloaded.
+fn apply_cached_rule_sets(state: &AppState) -> Result<(), CommandError> {
+    let entries = rule_set_entries(state)?;
+    let cached = entries
+        .into_iter()
+        .filter(|entry| entry.cached)
+        .map(|entry| (entry.name, entry.path))
+        .collect();
+    lock(&state.service)
+        .set_cached_rule_sets(cached)
+        .map_err(|error| command_error(&error))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State by value"
+)]
+fn rule_sets_status(
+    state: State<'_, AppState>,
+) -> Result<Vec<RuleProviderCacheEntry>, CommandError> {
+    rule_set_entries(&state)
+}
+
+#[tauri::command]
+async fn rule_set_update(
+    name: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<RuleProviderCacheEntry>, CommandError> {
+    let url = {
+        let status = lock(&state.service).status();
+        status
+            .route
+            .providers
+            .iter()
+            .find(|provider| provider.name == name)
+            .map(|provider| provider.url.clone())
+            .ok_or(CommandError {
+                code: "unknown_rule_set",
+                message: format!("no rule set named {name:?}"),
+            })?
+    };
+    let cache = Arc::clone(&state.rule_sets);
+    cache
+        .update(&name, &url)
+        .await
+        .map_err(|error| rule_set_error(&error))?;
+    apply_cached_rule_sets(&state)?;
+    rule_set_entries(&state)
+}
+
+#[tauri::command]
+async fn rule_sets_update_all(
+    state: State<'_, AppState>,
+) -> Result<Vec<RuleProviderCacheEntry>, CommandError> {
+    let providers: Vec<(String, String)> = lock(&state.service)
+        .status()
+        .route
+        .providers
+        .iter()
+        .filter(|provider| provider.enabled)
+        .map(|provider| (provider.name.clone(), provider.url.clone()))
+        .collect();
+    let cache = Arc::clone(&state.rule_sets);
+    let mut failure = None;
+    for (name, url) in providers {
+        // One vendor being down must not stop the rest from refreshing.
+        if let Err(error) = cache.update(&name, &url).await {
+            tracing::warn!("rule set {name} could not be updated: {}", describe(&error));
+            failure = failure.or_else(|| Some(rule_set_error(&error)));
+        }
+    }
+    apply_cached_rule_sets(&state)?;
+    match failure {
+        Some(error) => Err(error),
+        None => rule_set_entries(&state),
+    }
 }
 
 fn parse_node_id(id: &str) -> Result<Uuid, CommandError> {
@@ -2014,6 +2119,7 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         PlatformProxyControl::for_host(data_directory.join("system-proxy-recovery.json"));
     let geo_assets = GeoAssetsStore::open(data_directory.join("geo"))?;
     let core_install = CoreInstallStore::open(data_directory.join("cores"))?;
+    let rule_sets = Arc::new(RuleProviderCache::open(data_directory.join("rule-sets"))?);
     let session = DesktopSession::new(
         PlatformSecretStore,
         HostCoreControl::from_install(Some(&core_install), health_address, HEALTH_TIMEOUT)
@@ -2105,6 +2211,7 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         pac: Mutex::new(pac),
         export_directory: data_directory,
         geo_assets,
+        rule_sets: Arc::clone(&rule_sets),
         core_install,
         tray,
         allow_exit: AtomicBool::new(false),
@@ -2226,6 +2333,9 @@ pub fn run() {
             session_url_test,
             session_speed_test,
             session_traffic,
+            rule_sets_status,
+            rule_set_update,
+            rule_sets_update_all,
             session_connections,
             session_close_connection,
             session_close_connections,

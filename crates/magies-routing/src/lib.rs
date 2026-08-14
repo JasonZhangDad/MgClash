@@ -93,7 +93,7 @@ enum RuleMatcher {
     },
     RuleProvider {
         tag: String,
-        url: String,
+        source: RuleProviderSource,
         format: RuleProviderFormat,
     },
 }
@@ -102,6 +102,15 @@ impl RuleMatcher {
     const fn is_geo(&self) -> bool {
         matches!(self, Self::Geo { .. } | Self::RuleProvider { .. })
     }
+}
+
+/// Where a rule set comes from: the Core fetches it, or the app already did.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RuleProviderSource {
+    /// The Core downloads the set itself on its own schedule.
+    Remote { url: String },
+    /// The app downloaded the set; the Core reads the file.
+    Cached { path: String },
 }
 
 /// How a remote rule set is encoded, in sing-box's own words.
@@ -343,7 +352,44 @@ impl RoutingRule {
         let tag = validated_provider_tag(tag)?;
         let url = validated_provider_url(url)?;
         Ok(Self::new(
-            RuleMatcher::RuleProvider { tag, url, format },
+            RuleMatcher::RuleProvider {
+                tag,
+                source: RuleProviderSource::Remote { url },
+                format,
+            },
+            outbound,
+            priority,
+            enabled,
+        ))
+    }
+
+    /// Creates a rule backed by a rule set the app has already downloaded.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when `tag` is not a safe identifier or `path` is
+    /// blank.
+    pub fn cached_rule_provider(
+        tag: &str,
+        path: &str,
+        format: RuleProviderFormat,
+        outbound: RouteOutbound,
+        priority: i32,
+        enabled: bool,
+    ) -> Result<Self, RouteConfigError> {
+        let tag = validated_provider_tag(tag)?;
+        let path = path.trim();
+        if path.is_empty() {
+            return Err(RouteConfigError::EmptyRuleProviderPath);
+        }
+        Ok(Self::new(
+            RuleMatcher::RuleProvider {
+                tag,
+                source: RuleProviderSource::Cached {
+                    path: path.to_owned(),
+                },
+                format,
+            },
             outbound,
             priority,
             enabled,
@@ -566,14 +612,24 @@ fn generated_rule_sets(rules: &[&RoutingRule]) -> Vec<Value> {
                     })
                 })
             }
-            RuleMatcher::RuleProvider { tag, url, format } => seen.insert(tag.clone()).then(|| {
-                json!({
+            RuleMatcher::RuleProvider {
+                tag,
+                source,
+                format,
+            } => seen.insert(tag.clone()).then(|| match source {
+                RuleProviderSource::Remote { url } => json!({
                     "type": "remote",
                     "tag": tag,
                     "format": format.as_str(),
                     "url": url,
                     "download_detour": "direct"
-                })
+                }),
+                RuleProviderSource::Cached { path } => json!({
+                    "type": "local",
+                    "tag": tag,
+                    "format": format.as_str(),
+                    "path": path
+                }),
             }),
             _ => None,
         })
@@ -657,6 +713,8 @@ pub enum RouteConfigError {
     InvalidRuleProviderTag { value: String },
     #[error("rule provider source must be an HTTP(S) URL: {value}")]
     InvalidRuleProviderUrl { value: String },
+    #[error("a cached rule provider needs a file path")]
+    EmptyRuleProviderPath,
     #[error("user routing rules require Rule mode")]
     RulesRequireRuleMode,
     #[error("Global mode must use the proxy final outbound")]

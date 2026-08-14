@@ -1,5 +1,7 @@
 //! Persisted desktop route rules and their validated Core profile.
 
+use std::collections::HashMap;
+use std::hash::BuildHasher;
 use std::path::Path;
 
 use magies_routing::{
@@ -69,6 +71,20 @@ impl RouteSchemeBundle {
     /// Returns a typed matcher or profile error.
     pub fn profile(&self, mode: RoutingMode) -> Result<RouteProfile, RouteSettingsError> {
         self.active_settings().profile(mode)
+    }
+
+    /// Builds the active scheme's profile against the downloaded rule sets.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed matcher or profile error.
+    pub fn profile_with_cached_sets<S: BuildHasher>(
+        &self,
+        mode: RoutingMode,
+        cached: &HashMap<String, String, S>,
+    ) -> Result<RouteProfile, RouteSettingsError> {
+        self.active_settings()
+            .profile_with_cached_sets(mode, cached)
     }
 
     /// Switches the active routing scheme.
@@ -288,15 +304,29 @@ pub struct RuleProviderSetting {
 }
 
 impl RuleProviderSetting {
-    fn rule(&self, priority: i32) -> Result<RoutingRule, RouteSettingsError> {
-        Ok(RoutingRule::rule_provider(
-            &self.name,
-            &self.url,
-            self.format.into(),
-            self.outbound.into(),
-            priority,
-            self.enabled,
-        )?)
+    fn rule(
+        &self,
+        priority: i32,
+        cached_path: Option<&str>,
+    ) -> Result<RoutingRule, RouteSettingsError> {
+        Ok(match cached_path {
+            Some(path) => RoutingRule::cached_rule_provider(
+                &self.name,
+                path,
+                self.format.into(),
+                self.outbound.into(),
+                priority,
+                self.enabled,
+            )?,
+            None => RoutingRule::rule_provider(
+                &self.name,
+                &self.url,
+                self.format.into(),
+                self.outbound.into(),
+                priority,
+                self.enabled,
+            )?,
+        })
     }
 }
 
@@ -317,6 +347,20 @@ impl RouteSettings {
     ///
     /// Returns a typed matcher or profile error.
     pub fn profile(&self, mode: RoutingMode) -> Result<RouteProfile, RouteSettingsError> {
+        self.profile_with_cached_sets(mode, &HashMap::new())
+    }
+
+    /// Builds the profile, reading any rule set the app has already downloaded
+    /// from disk instead of asking the Core to fetch it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed matcher or profile error.
+    pub fn profile_with_cached_sets<S: BuildHasher>(
+        &self,
+        mode: RoutingMode,
+        cached: &HashMap<String, String, S>,
+    ) -> Result<RouteProfile, RouteSettingsError> {
         match mode {
             RoutingMode::Global => Ok(RouteProfile::new(mode, Vec::new(), RouteOutbound::Proxy)?),
             RoutingMode::Direct => Ok(RouteProfile::new(mode, Vec::new(), RouteOutbound::Direct)?),
@@ -331,7 +375,9 @@ impl RouteSettings {
                 // downloaded list must not shadow a rule the user typed.
                 let offset = i32::try_from(rules.len()).unwrap_or(i32::MAX);
                 for (provider, priority) in self.providers.iter().zip(offset..) {
-                    rules.push(provider.rule(priority)?);
+                    rules.push(
+                        provider.rule(priority, cached.get(&provider.name).map(String::as_str))?,
+                    );
                 }
                 Ok(RouteProfile::new(mode, rules, self.final_outbound.into())?)
             }
