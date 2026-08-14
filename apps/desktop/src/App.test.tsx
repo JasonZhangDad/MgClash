@@ -4395,6 +4395,121 @@ describe("App", () => {
     expect(container.querySelector("[aria-label='缺少 Core']")).toBeNull();
   });
 
+
+  it("scans a sharing link off the camera", async () => {
+    const track = { stop: vi.fn() };
+    const stream = { getTracks: () => [track] } as unknown as MediaStream;
+    const getUserMedia = vi.fn().mockResolvedValue(stream);
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia },
+    });
+    await render();
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>("[aria-label='用摄像头扫描二维码']")
+        ?.click(),
+    );
+
+    expect(getUserMedia).toHaveBeenCalledWith({
+      video: { facingMode: "environment" },
+    });
+    expect(container.querySelector("[aria-label='摄像头预览']")).not.toBeNull();
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>("[aria-label='停止扫描']")
+        ?.click(),
+    );
+
+    // Stopping releases the camera rather than leaving the light on.
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(container.querySelector("[aria-label='摄像头预览']")).toBeNull();
+  });
+
+  it("reports a camera the system will not open", async () => {
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia: vi.fn().mockRejectedValue(new Error("Permission denied")),
+      },
+    });
+    await render();
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>("[aria-label='用摄像头扫描二维码']")
+        ?.click(),
+    );
+
+    expect(container.querySelector("[role='alert']")?.textContent).toContain(
+      "Permission denied",
+    );
+    expect(container.querySelector("[aria-label='摄像头预览']")).toBeNull();
+  });
+
+
+  it("imports the link a scanned frame decodes to", async () => {
+    const track = { stop: vi.fn() };
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia: vi
+          .fn()
+          .mockResolvedValue({ getTracks: () => [track] } as unknown as MediaStream),
+      },
+    });
+    // A frame only exists once the camera reports a picture size.
+    Object.defineProperty(HTMLVideoElement.prototype, "videoWidth", {
+      configurable: true,
+      get: () => 640,
+    });
+    Object.defineProperty(HTMLVideoElement.prototype, "videoHeight", {
+      configurable: true,
+      get: () => 480,
+    });
+    const context = { drawImage: vi.fn() };
+    const getContext = vi
+      .spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue(context as unknown as CanvasRenderingContext2D);
+    const toDataURL = vi
+      .spyOn(HTMLCanvasElement.prototype, "toDataURL")
+      .mockReturnValue("data:image/png;base64,AAECAw==");
+    readQrCodeMock.mockResolvedValue("ss://aes-128-gcm:secret@edge.example.com:8388#Scanned");
+    importNodesMock.mockResolvedValue({
+      duplicates: 0,
+      failures: [],
+      imported: 1,
+      status: SELECTED,
+    });
+    vi.useFakeTimers();
+    try {
+      await render();
+      await act(async () =>
+        container
+          .querySelector<HTMLButtonElement>("[aria-label='用摄像头扫描二维码']")
+          ?.click(),
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+
+      // The frame reaches the same decoder the image-file import uses.
+      expect(readQrCodeMock).toHaveBeenCalledWith(
+        new Uint8Array([0, 1, 2, 3]),
+      );
+      expect(importNodesMock).toHaveBeenCalledWith(
+        "ss://aes-128-gcm:secret@edge.example.com:8388#Scanned",
+      );
+    } finally {
+      vi.useRealTimers();
+      getContext.mockRestore();
+      toDataURL.mockRestore();
+    }
+  });
+
   it("changes the main window layout from the menu", async () => {
     await render();
 

@@ -167,6 +167,7 @@ import {
 import { MenuBar } from "./components/MenuBar";
 import { StatusBar } from "./components/StatusBar";
 import { MsgView } from "./components/MsgView";
+import { CameraScanner } from "./components/CameraScanner";
 import { ConnectionsView } from "./components/ConnectionsView";
 import { ProxiesView } from "./components/ProxiesView";
 import { Dialog } from "./components/Dialog";
@@ -3101,6 +3102,13 @@ export default function App() {
               }}
             />
           </label>
+          <CameraScanner
+            busy={busy}
+            t={t}
+            decode={readQrCode}
+            onLink={(link) => void runBulkImport(link)}
+            onError={setError}
+          />
           <label className="file-import">
             {t("扫描二维码图片")}
             <input

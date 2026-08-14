@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- macOS refuses getUserMedia outright without a stated purpose, so the
+	     QR scanner needs this even in an unsigned build. -->
+	<key>NSCameraUsageDescription</key>
+	<string>MgClash 使用摄像头扫描节点分享二维码。图像只在本机解码，不会离开设备。</string>
+</dict>
+</plist>
