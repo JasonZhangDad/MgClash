@@ -1,4 +1,4 @@
-import { formatBytes } from "../appHelpers";
+import { formatBytes, processTraffic } from "../appHelpers";
 import type { ConnectionSnapshot } from "../session";
 
 interface ConnectionsViewProps {
@@ -98,6 +98,26 @@ export function ConnectionsView({
       ) : connections.length === 0 ? (
         <p className="hint">{t("当前没有连接")}</p>
       ) : (
+        <>
+        <table className="node-list" aria-label={t("进程流量")}>
+          <thead>
+            <tr>
+              <th>{t("进程")}</th>
+              <th>{t("上传")}</th>
+              <th>{t("下载")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {processTraffic(connections).map((entry) => (
+              <tr key={entry.name}>
+                <td>{entry.name}</td>
+                <td>{formatBytes(entry.uploadBytes)}</td>
+                <td>{formatBytes(entry.downloadBytes)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="hint">{t("进程汇总只统计当前仍然打开的连接。")}</p>
         <table className="node-list" aria-label={t("连接列表")}>
           <thead>
             <tr>
@@ -147,6 +167,7 @@ export function ConnectionsView({
             ))}
           </tbody>
         </table>
+        </>
       )}
     </section>
   );

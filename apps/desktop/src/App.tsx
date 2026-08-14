@@ -134,6 +134,8 @@ import {
   ROUTE_OUTBOUND_LABEL,
   ruleDraftFromConnection,
   describeRuleSetCache,
+  groupTraffic,
+  processTraffic,
   runtimeOrderedRoute,
   savedLayout,
   savedTheme,
@@ -2691,6 +2693,11 @@ export default function App() {
               groups={nodeGroups}
               nodes={nodes}
               activeNodeId={node?.id ?? null}
+              traffic={groupTraffic(
+                nodes,
+                nodeTraffic,
+                proxyGroupId ?? nodeGroups[0]?.id ?? null,
+              )}
               selectedGroupId={proxyGroupId}
               testing={nodeTestInProgress}
               t={t}

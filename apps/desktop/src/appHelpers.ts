@@ -1,5 +1,10 @@
 import type { PlatformSummary } from "./platform";
-import type { RouteOutbound, RouteRuleKind, RouteSettings } from "./session";
+import type {
+  NodeTraffic,
+  RouteOutbound,
+  RouteRuleKind,
+  RouteSettings,
+} from "./session";
 import { isCommandError } from "./session";
 
 export const REFRESH_INTERVAL_MS = 3_000;
@@ -68,6 +73,73 @@ export function describeRuleSetCache(
   return entry.updatedAt === null
     ? size
     : `${size} · ${formatClock(entry.updatedAt * 1_000)}`;
+}
+
+/** One group's traffic, added up from the nodes that belong to it. */
+export function groupTraffic(
+  nodes: { groupId: string | null; id: string }[],
+  traffic: Record<string, NodeTraffic>,
+  groupId: string | null,
+): NodeTraffic {
+  return nodes
+    .filter((node) => node.groupId === groupId)
+    .reduce<NodeTraffic>(
+      (total, node) => {
+        const entry = traffic[node.id];
+        if (entry === undefined) {
+          return total;
+        }
+        return {
+          todayUploadBytes: total.todayUploadBytes + entry.todayUploadBytes,
+          todayDownloadBytes:
+            total.todayDownloadBytes + entry.todayDownloadBytes,
+          totalUploadBytes: total.totalUploadBytes + entry.totalUploadBytes,
+          totalDownloadBytes:
+            total.totalDownloadBytes + entry.totalDownloadBytes,
+        };
+      },
+      {
+        todayUploadBytes: 0,
+        todayDownloadBytes: 0,
+        totalUploadBytes: 0,
+        totalDownloadBytes: 0,
+      },
+    );
+}
+
+/**
+ * Live traffic per program, from the connections the Core is holding now.
+ *
+ * These are the bytes of the connections that are still open — the Core reports
+ * no history, so a program that finished is not here.
+ */
+export function processTraffic(
+  connections: {
+    downloadBytes: number;
+    process: string;
+    uploadBytes: number;
+  }[],
+): { downloadBytes: number; name: string; uploadBytes: number }[] {
+  const totals = new Map<
+    string,
+    { downloadBytes: number; uploadBytes: number }
+  >();
+  for (const connection of connections) {
+    const name = connection.process === "" ? "—" : connection.process;
+    const total = totals.get(name) ?? { downloadBytes: 0, uploadBytes: 0 };
+    totals.set(name, {
+      downloadBytes: total.downloadBytes + connection.downloadBytes,
+      uploadBytes: total.uploadBytes + connection.uploadBytes,
+    });
+  }
+  return [...totals.entries()]
+    .map(([name, total]) => ({ ...total, name }))
+    .sort(
+      (left, right) =>
+        right.downloadBytes +
+        right.uploadBytes -
+        (left.downloadBytes + left.uploadBytes),
+    );
 }
 
 /** How each route outbound reads in the rule tables. */

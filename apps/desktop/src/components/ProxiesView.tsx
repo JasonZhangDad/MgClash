@@ -1,7 +1,9 @@
+import { formatBytes } from "../appHelpers";
 import type {
   NodeGroupStrategy,
   NodeGroupSummary,
   NodeSummary,
+  NodeTraffic,
 } from "../session";
 
 interface ProxiesViewProps {
@@ -9,6 +11,8 @@ interface ProxiesViewProps {
   groups: NodeGroupSummary[];
   nodes: NodeSummary[];
   activeNodeId: string | null;
+  /// This group's traffic, added up from its members.
+  traffic: NodeTraffic;
   selectedGroupId: string | null;
   testing: boolean;
   t: (text: string) => string;
@@ -23,6 +27,7 @@ export function ProxiesView({
   groups,
   nodes,
   activeNodeId,
+  traffic,
   selectedGroupId,
   testing,
   t,
@@ -84,6 +89,12 @@ export function ProxiesView({
             >
               {t("测试本组延迟")}
             </button>
+            <span aria-label={t("代理组流量")}>
+              {t("今日")} ↑ {formatBytes(traffic.todayUploadBytes)} ↓{" "}
+              {formatBytes(traffic.todayDownloadBytes)} · {t("总计")} ↑{" "}
+              {formatBytes(traffic.totalUploadBytes)} ↓{" "}
+              {formatBytes(traffic.totalDownloadBytes)}
+            </span>
           </div>
 
           {members.length === 0 ? (
