@@ -314,6 +314,30 @@ impl HostCoreControl {
             .replace_settings(crate::core_install::xray_settings_with_store(Some(install)));
     }
 
+    /// Adopts an elevated Core left behind by an app that did not stop it.
+    ///
+    /// Called once at startup: a crash leaves a root Core still holding the TUN
+    /// device, and the PID file beside the runtime config is the only record of
+    /// it. Adopting it makes it stoppable again — the next TUN start or
+    /// disconnect ends it, both of which the user asked for. Nothing is killed
+    /// here, so launching the app never asks for a password on its own.
+    #[cfg(target_os = "macos")]
+    pub fn reclaim_elevated_core(&mut self) -> Option<u32> {
+        let mut core = ElevatedCore::new(
+            OsascriptLauncher,
+            self.runtime_directory.join("elevated-core.pid"),
+            self.runtime_directory.join("elevated-core.log"),
+        );
+        let pid = core.reclaim()?;
+        self.elevated = Some(ElevatedSingBoxControl::new(
+            self.sing_box.resolve_binary().ok()?,
+            core,
+            self.sing_box.health_address(),
+            self.sing_box.health_timeout(),
+        ));
+        Some(pid)
+    }
+
     /// Whether the next start needs the authorization prompt.
     ///
     /// Only a sing-box TUN session on macOS does: that is where the device
@@ -333,6 +357,12 @@ impl HostCoreControl {
         // The child-process control cannot own this session; stopping it here
         // keeps a Core from an earlier non-TUN session from lingering.
         self.sing_box.stop().map_err(HostCoreError::SingBox)?;
+        // An adopted leftover, or the Core of a session that was not stopped:
+        // replacing the control without stopping it would strand a root
+        // process holding the device this start is about to ask for.
+        if let Some(control) = self.elevated.as_mut() {
+            control.stop().map_err(HostCoreError::Elevated)?;
+        }
         let binary = self
             .sing_box
             .resolve_binary()

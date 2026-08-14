@@ -346,3 +346,76 @@ fn free_port() -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.local_addr().unwrap().port()
 }
+
+#[test]
+fn a_core_left_behind_by_a_crash_is_found_and_stopped() {
+    let directory = scratch("leftover");
+    let pid_file = directory.join("core.pid");
+    let log_file = directory.join("core.log");
+    let binary = fake_core(&directory, "sleep 30");
+
+    // The app died without stopping its Core. All that is left is the PID file,
+    // and the Core still holds the TUN device.
+    let mut crashed = ElevatedCore::new(ShellLauncher, &pid_file, &log_file);
+    let (pid, _output) = crashed.start(&binary, Path::new("session.json")).unwrap();
+    std::mem::forget(crashed);
+
+    let mut reclaimed = ElevatedCore::new(ShellLauncher, &pid_file, &log_file);
+    assert_eq!(reclaimed.reclaim(), Some(pid));
+    assert!(reclaimed.is_running());
+
+    reclaimed.stop().unwrap();
+
+    assert!(wait_until(|| !pid_file.exists()));
+    fs::remove_dir_all(&directory).unwrap();
+}
+
+#[test]
+fn a_pid_file_naming_a_dead_process_is_cleared_rather_than_adopted() {
+    let directory = scratch("stale-pid");
+    let pid_file = directory.join("core.pid");
+    // A PID that has already exited, and one that was never a number.
+    fs::write(&pid_file, "999999999\n").unwrap();
+    let mut core = ElevatedCore::new(ShellLauncher, &pid_file, directory.join("core.log"));
+
+    assert_eq!(core.reclaim(), None);
+    assert!(!pid_file.exists());
+
+    fs::write(&pid_file, "not-a-pid\n").unwrap();
+    assert_eq!(core.reclaim(), None);
+    assert!(!pid_file.exists());
+
+    fs::remove_dir_all(&directory).unwrap();
+}
+
+#[test]
+fn starting_again_stops_the_core_it_was_already_tracking() {
+    let directory = scratch("restart-stops");
+    let mut core = ElevatedCore::new(
+        ShellLauncher,
+        directory.join("core.pid"),
+        directory.join("core.log"),
+    );
+    let binary = fake_core(&directory, "sleep 30");
+
+    let (first, _output) = core.start(&binary, Path::new("session.json")).unwrap();
+    let (second, _output) = core.start(&binary, Path::new("session.json")).unwrap();
+
+    // Losing track of the first one would leave a root process holding the TUN
+    // device with nothing left that knows its PID.
+    assert_ne!(first, second);
+    assert!(wait_until(|| !process_is_alive_in_test(first)));
+    assert!(core.is_running());
+
+    core.stop().unwrap();
+    fs::remove_dir_all(&directory).unwrap();
+}
+
+/// The same liveness question the module asks, from outside it.
+fn process_is_alive_in_test(pid: u32) -> bool {
+    Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .output()
+        .is_ok_and(|output| output.status.success())
+}

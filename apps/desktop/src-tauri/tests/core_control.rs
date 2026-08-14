@@ -341,3 +341,16 @@ fn an_unconfigured_core_fails_the_same_way_on_the_elevated_path() {
 
     assert_eq!(error.code(), "core_not_configured");
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn nothing_is_reclaimed_when_no_elevated_core_was_left_behind() {
+    let mut control = HostCoreControl::from_env(address(), Duration::from_millis(10))
+        .with_runtime_directory(
+            std::env::temp_dir().join(format!("mgclash-empty-runtime-{}", std::process::id())),
+        );
+
+    // The normal case: a clean shutdown leaves no PID file, and startup must
+    // not ask the user about a Core that is not there.
+    assert_eq!(control.reclaim_elevated_core(), None);
+}
