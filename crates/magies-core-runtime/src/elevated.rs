@@ -10,13 +10,18 @@
 //! prompt runs the Core under its own privileged shell, so the app tracks it by
 //! PID file and stops it by signalling that PID.
 
-use std::fs;
+use std::fs::{self, File};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
+
+use crate::output::{self, CoreOutput, CoreOutputStream};
 
 /// The shell the elevation prompt runs, and what it leaves behind for polling.
 ///
@@ -88,6 +93,9 @@ pub struct ElevatedCore<L: ElevationLauncher> {
     pid_file: PathBuf,
     log_file: PathBuf,
     pid: Option<u32>,
+    /// Ends the log reader. Shared with the reader thread, which has no other
+    /// way to learn that the Core it follows is gone.
+    stopped: Arc<AtomicBool>,
 }
 
 impl<L: ElevationLauncher> ElevatedCore<L> {
@@ -97,6 +105,7 @@ impl<L: ElevationLauncher> ElevatedCore<L> {
             pid_file: pid_file.into(),
             log_file: log_file.into(),
             pid: None,
+            stopped: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -113,14 +122,29 @@ impl<L: ElevationLauncher> ElevatedCore<L> {
 
     /// Asks for privileges and starts the Core.
     ///
+    /// Returns the PID and the Core's output. An elevated Core writes to a log
+    /// file rather than to a pipe the app owns, so the output is that file
+    /// followed as it grows — the log panel cannot tell the difference.
+    ///
     /// # Errors
     ///
-    /// Returns a typed error when the prompt is declined, the shell fails, or
-    /// no PID appears — the last means the Core died immediately, and its log
-    /// says why.
-    pub fn start(&mut self, binary: &Path, config: &Path) -> Result<u32, ElevatedCoreError> {
+    /// Returns a typed error when the prompt is declined, the shell fails, the
+    /// log cannot be opened, or no PID appears — the last means the Core died
+    /// immediately, and its log says why.
+    pub fn start(
+        &mut self,
+        binary: &Path,
+        config: &Path,
+    ) -> Result<(u32, CoreOutput), ElevatedCoreError> {
         // A PID left by an earlier run would otherwise be read back as this one.
         let _ = fs::remove_file(&self.pid_file);
+        // A restart gets its own flag: raising the old one ends the previous
+        // reader, and reusing it would end the new one before it read a line.
+        self.stopped.store(true, Ordering::Relaxed);
+        self.stopped = Arc::new(AtomicBool::new(false));
+        // Truncated before the shell appends to it, so the panel shows this
+        // session rather than replaying the last one.
+        let tail = LogTail::open(&self.log_file, Arc::clone(&self.stopped))?;
         self.launcher.launch(&elevation_script(
             binary,
             config,
@@ -129,7 +153,18 @@ impl<L: ElevationLauncher> ElevatedCore<L> {
         ))?;
         let pid = self.read_pid()?;
         self.pid = Some(pid);
-        Ok(pid)
+        let (sender, output) = output::output_channel();
+        // Merged: the script redirects stderr into the same log, so there is
+        // one stream to report and stdout is the honest name for it.
+        drop(
+            output::spawn_output_reader(CoreOutputStream::Stdout, tail, sender).map_err(
+                |source| ElevatedCoreError::LogUnreadable {
+                    path: self.log_file.clone(),
+                    source,
+                },
+            )?,
+        );
+        Ok((pid, output))
     }
 
     /// Whether the Core is still running.
@@ -145,6 +180,7 @@ impl<L: ElevationLauncher> ElevatedCore<L> {
     ///
     /// Returns a typed error when the second authorization fails.
     pub fn stop(&mut self) -> Result<(), ElevatedCoreError> {
+        self.stopped.store(true, Ordering::Relaxed);
         let Some(pid) = self.pid.take() else {
             return Ok(());
         };
@@ -177,6 +213,60 @@ impl<L: ElevationLauncher> ElevatedCore<L> {
             .map_err(|_| ElevatedCoreError::PidMalformed {
                 value: text.trim().to_owned(),
             })
+    }
+}
+
+impl<L: ElevationLauncher> Drop for ElevatedCore<L> {
+    fn drop(&mut self) {
+        // Without this a caller that drops the Core instead of stopping it
+        // leaves the reader thread parked on a log nobody writes to.
+        self.stopped.store(true, Ordering::Relaxed);
+    }
+}
+
+/// The Core's log, read as it grows.
+///
+/// A plain file reader would report end-of-file the moment it caught up with
+/// the Core, which for a running Core is not the end of anything.
+struct LogTail {
+    file: File,
+    stopped: Arc<AtomicBool>,
+}
+
+/// How long the reader waits before looking for more log.
+const TAIL_POLL: Duration = Duration::from_millis(100);
+
+impl LogTail {
+    fn open(path: &Path, stopped: Arc<AtomicBool>) -> Result<Self, ElevatedCoreError> {
+        // Created and truncated here rather than by the elevated shell: the
+        // reader needs the file to exist, and last session's log is not this
+        // session's output.
+        File::create(path).map_err(|source| ElevatedCoreError::LogUnreadable {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        let file = File::open(path).map_err(|source| ElevatedCoreError::LogUnreadable {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        Ok(Self { file, stopped })
+    }
+}
+
+impl Read for LogTail {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        loop {
+            let length = self.file.read(buffer)?;
+            if length > 0 {
+                return Ok(length);
+            }
+            if self.stopped.load(Ordering::Relaxed) {
+                // The only real end-of-file: the Core is gone, so whatever is
+                // in the log is all there will be.
+                return Ok(0);
+            }
+            sleep(TAIL_POLL);
+        }
     }
 }
 
@@ -226,6 +316,11 @@ pub enum ElevatedCoreError {
     },
     #[error("the elevated Core wrote {value:?} instead of a process id")]
     PidMalformed { value: String },
+    #[error("the elevated Core log at {} could not be read: {source}", path.display())]
+    LogUnreadable {
+        path: PathBuf,
+        source: std::io::Error,
+    },
 }
 
 impl ElevatedCoreError {
@@ -235,6 +330,7 @@ impl ElevatedCoreError {
             Self::AuthorizationDeclined => "tun_authorization_declined",
             Self::LaunchRejected { .. } | Self::LaunchFailed { .. } => "tun_elevation_failed",
             Self::PidUnreadable { .. } | Self::PidMalformed { .. } => "tun_core_did_not_start",
+            Self::LogUnreadable { .. } => "tun_core_log_unreadable",
         }
     }
 }
