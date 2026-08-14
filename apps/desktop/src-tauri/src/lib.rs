@@ -50,7 +50,7 @@ use crate::app_settings::{AppSettings, SqliteAppSettingsStore, SystemProxyModeSe
 use crate::connections::{
     ConnectionSnapshot, ConnectionsError, close_all_connections, close_connection, load_connections,
 };
-use crate::core_control::{HostCoreControl, describe};
+use crate::core_control::{CoreSettings, CoreSettingsError, HostCoreControl, describe};
 use crate::core_install::{CoreInstallStatus, CoreInstallStore, CoreKind};
 use crate::core_update::{CoreUpdateCheck, check_core_updates};
 use crate::diagnostics::DiagnosticBundle;
@@ -1106,6 +1106,35 @@ async fn rule_sets_update_all(
     match failure {
         Some(error) => Err(error),
         None => rule_set_entries(&state),
+    }
+}
+
+/// Whether each Core is ready to run without downloading anything.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoreReadiness {
+    pub sing_box: bool,
+    pub xray: bool,
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State by value"
+)]
+fn core_readiness(state: State<'_, AppState>) -> CoreReadiness {
+    // Configured is not the same as present: a manifest can outlive the file it
+    // names, and the window should offer the download in that case too.
+    let usable = |settings: Result<CoreSettings, CoreSettingsError>| {
+        settings.is_ok_and(|settings| settings.binary.is_file())
+    };
+    CoreReadiness {
+        sing_box: usable(crate::core_install::sing_box_settings_with_store(Some(
+            &state.core_install,
+        ))),
+        xray: usable(crate::core_install::xray_settings_with_store(Some(
+            &state.core_install,
+        ))),
     }
 }
 
@@ -2351,6 +2380,7 @@ pub fn run() {
             session_url_test,
             session_speed_test,
             session_traffic,
+            core_readiness,
             rule_sets_status,
             rule_set_update,
             rule_sets_update_all,

@@ -17,6 +17,7 @@ const nodeQrCodeMock = vi.hoisted(() => vi.fn());
 const readQrCodeMock = vi.hoisted(() => vi.fn());
 const checkUpdateMock = vi.hoisted(() => vi.fn());
 const checkCoreUpdateMock = vi.hoisted(() => vi.fn());
+const loadCoreReadinessMock = vi.hoisted(() => vi.fn());
 const removeDuplicateNodesMock = vi.hoisted(() => vi.fn());
 const createNodeMock = vi.hoisted(() => vi.fn());
 const importNodesMock = vi.hoisted(() => vi.fn());
@@ -122,6 +123,7 @@ vi.mock("./session", async () => {
   readQrCode: readQrCodeMock,
   checkUpdate: checkUpdateMock,
   checkCoreUpdate: checkCoreUpdateMock,
+  loadCoreReadiness: loadCoreReadinessMock,
   removeDuplicateNodes: removeDuplicateNodesMock,
     loadNodeGroups: loadNodeGroupsMock,
     loadNodes: loadNodesMock,
@@ -363,6 +365,8 @@ describe("App", () => {
     recoverSystemProxyMock.mockResolvedValue("clean");
     dismissSystemProxyRecoveryMock.mockResolvedValue("clean");
     loadSubscriptionsMock.mockResolvedValue([]);
+    loadCoreReadinessMock.mockReset();
+    loadCoreReadinessMock.mockResolvedValue({ singBox: true, xray: false });
     testAllNodesMock.mockResolvedValue(undefined);
     loadConnectionsMock.mockResolvedValue({
       uploadTotalBytes: 0,
@@ -4347,6 +4351,48 @@ describe("App", () => {
     await act(async () => button("保存前置代理").click());
 
     expect(setNodeFrontMock).toHaveBeenCalledWith(SELECTED.node!.id, osaka.id);
+  });
+
+  it("offers to fetch a Core when none is installed", async () => {
+    loadCoreReadinessMock.mockResolvedValue({ singBox: false, xray: false });
+    downloadCoreUpdateMock.mockResolvedValue({ directory: "/tmp/cores" });
+    checkCoreUpdateMock.mockResolvedValue({
+      singBox: {
+        name: "sing-box",
+        current: "1.13.18",
+        latest: "1.13.18",
+        url: "https://example.com/sing-box",
+        updateAvailable: false,
+        fromBinary: true,
+      },
+      xray: {
+        name: "xray",
+        current: "26.3.27",
+        latest: "26.3.27",
+        url: "https://example.com/xray",
+        updateAvailable: false,
+        fromBinary: false,
+      },
+      install: { directory: "/tmp/cores" },
+    });
+    await render();
+
+    const notice = container.querySelector("[aria-label='缺少 Core']");
+    expect(notice?.textContent).toContain("还没有可用的 Core");
+
+    // The install makes the Core usable, and the prompt stops nagging.
+    loadCoreReadinessMock.mockResolvedValue({ singBox: true, xray: false });
+    await act(async () => button("下载 sing-box").click());
+
+    expect(downloadCoreUpdateMock).toHaveBeenCalledWith("sing-box");
+    expect(container.querySelector("[aria-label='缺少 Core']")).toBeNull();
+  });
+
+  it("says nothing when a Core is already usable", async () => {
+    loadCoreReadinessMock.mockResolvedValue({ singBox: true, xray: false });
+    await render();
+
+    expect(container.querySelector("[aria-label='缺少 Core']")).toBeNull();
   });
 
   it("changes the main window layout from the menu", async () => {
