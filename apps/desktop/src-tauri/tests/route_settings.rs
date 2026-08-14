@@ -311,3 +311,41 @@ fn blocking_by_default_is_refused_by_the_desktop_settings() {
 
     assert!(settings.profile(RoutingMode::Rule).is_err());
 }
+
+#[test]
+fn a_cached_rule_set_is_read_from_disk_and_an_uncached_one_from_its_url() {
+    let settings = RouteSettings {
+        rules: Vec::new(),
+        providers: vec![
+            RuleProviderSetting {
+                name: "ads".to_owned(),
+                url: "https://example.com/ads.srs".to_owned(),
+                format: RuleProviderFormatSetting::Binary,
+                outbound: DesktopRouteOutbound::Block,
+                enabled: true,
+            },
+            RuleProviderSetting {
+                name: "cn".to_owned(),
+                url: "https://example.com/cn.srs".to_owned(),
+                format: RuleProviderFormatSetting::Binary,
+                outbound: DesktopRouteOutbound::Direct,
+                enabled: true,
+            },
+        ],
+        final_outbound: DesktopRouteOutbound::Proxy,
+    };
+    let mut cached = std::collections::HashMap::new();
+    cached.insert("ads".to_owned(), "/cache/ads.srs".to_owned());
+
+    let profile = settings
+        .profile_with_cached_sets(RoutingMode::Rule, &cached)
+        .unwrap();
+    let config = SingBoxRouteConfigGenerator::generate(&profile);
+
+    let sets = config.json()["rule_set"].as_array().unwrap();
+    assert_eq!(sets[0]["type"], "local");
+    assert_eq!(sets[0]["path"], "/cache/ads.srs");
+    // Nothing downloaded yet, so the Core still fetches this one itself.
+    assert_eq!(sets[1]["type"], "remote");
+    assert_eq!(sets[1]["url"], "https://example.com/cn.srs");
+}

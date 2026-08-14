@@ -59,6 +59,9 @@ const setNodeEnabledMock = vi.hoisted(() => vi.fn());
 const deleteSubscriptionMock = vi.hoisted(() => vi.fn());
 const syncGlobalHotkeysMock = vi.hoisted(() => vi.fn());
 const loadConnectionsMock = vi.hoisted(() => vi.fn());
+const loadRuleSetsMock = vi.hoisted(() => vi.fn());
+const updateRuleSetMock = vi.hoisted(() => vi.fn());
+const updateRuleSetsMock = vi.hoisted(() => vi.fn());
 const downloadCoreUpdateMock = vi.hoisted(() => vi.fn());
 const setRouteSchemeMock = vi.hoisted(() => vi.fn());
 const createRouteSchemeMock = vi.hoisted(() => vi.fn());
@@ -83,6 +86,9 @@ vi.mock("./session", async () => {
   return {
     clearLogs: clearLogsMock,
     loadConnections: loadConnectionsMock,
+    loadRuleSets: loadRuleSetsMock,
+    updateRuleSet: updateRuleSetMock,
+    updateRuleSets: updateRuleSetsMock,
     downloadCoreUpdate: downloadCoreUpdateMock,
     setRouteScheme: setRouteSchemeMock,
     createRouteScheme: createRouteSchemeMock,
@@ -307,6 +313,12 @@ describe("App", () => {
     refreshAllSubscriptionsMock.mockReset();
     deleteSubscriptionMock.mockReset();
     loadConnectionsMock.mockReset();
+    loadRuleSetsMock.mockReset();
+    updateRuleSetMock.mockReset();
+    updateRuleSetsMock.mockReset();
+    loadRuleSetsMock.mockResolvedValue([]);
+    updateRuleSetMock.mockResolvedValue([]);
+    updateRuleSetsMock.mockResolvedValue([]);
     downloadCoreUpdateMock.mockReset();
     setRouteSchemeMock.mockReset();
     createRouteSchemeMock.mockReset();
@@ -4117,6 +4129,118 @@ describe("App", () => {
         ?.click(),
     );
     expect(refreshSubscriptionMock).toHaveBeenCalledWith(subscription.id);
+  });
+
+  it("downloads a rule set and shows what is cached", async () => {
+    const provider = {
+      enabled: true,
+      format: "binary" as const,
+      name: "ads",
+      outbound: "block" as const,
+      url: "https://example.com/ads.srs",
+    };
+    loadSessionStatusMock.mockResolvedValue({
+      ...IDLE,
+      route: { finalOutbound: "proxy", providers: [provider], rules: [] },
+    });
+    loadRuleSetsMock.mockResolvedValue([
+      { bytes: 0, cached: false, name: "ads", path: "/cache/ads.srs", updatedAt: null },
+    ]);
+    updateRuleSetMock.mockResolvedValue([
+      {
+        bytes: 2_048,
+        cached: true,
+        name: "ads",
+        path: "/cache/ads.srs",
+        updatedAt: 1_760_000_000,
+      },
+    ]);
+    await render();
+
+    const row = container.querySelector("[aria-label='规则集列表'] tbody tr");
+    expect(row?.textContent).toContain("未缓存");
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>("[aria-label='更新规则集 ads']")
+        ?.click(),
+    );
+
+    expect(updateRuleSetMock).toHaveBeenCalledWith("ads");
+    expect(
+      container.querySelector("[aria-label='规则集列表'] tbody tr")?.textContent,
+    ).toContain("2.0 KB");
+  });
+
+
+  it("updates every rule set at once and reports a failure", async () => {
+    const provider = {
+      enabled: true,
+      format: "binary" as const,
+      name: "ads",
+      outbound: "block" as const,
+      url: "https://example.com/ads.srs",
+    };
+    loadSessionStatusMock.mockResolvedValue({
+      ...IDLE,
+      route: { finalOutbound: "proxy", providers: [provider], rules: [] },
+    });
+    loadRuleSetsMock.mockResolvedValue([
+      { bytes: 0, cached: false, name: "ads", path: "/cache/ads.srs", updatedAt: null },
+    ]);
+    updateRuleSetsMock.mockResolvedValue([
+      { bytes: 4_096, cached: true, name: "ads", path: "/cache/ads.srs", updatedAt: null },
+    ]);
+    await render();
+
+    await act(async () => button("全部更新规则集").click());
+
+    expect(updateRuleSetsMock).toHaveBeenCalledTimes(1);
+    expect(
+      container.querySelector("[aria-label='规则集列表'] tbody tr")?.textContent,
+    ).toContain("4.0 KB");
+
+    // A vendor that is down surfaces rather than looking like success.
+    updateRuleSetsMock.mockRejectedValue({
+      code: "rule_set_download_failed",
+      message: "failed to download https://example.com/ads.srs",
+    });
+    await act(async () => button("全部更新规则集").click());
+    expect(container.querySelector("[role='alert']")?.textContent).toContain(
+      "failed to download",
+    );
+  });
+
+  it("surfaces a rule set download that fails on its own", async () => {
+    const provider = {
+      enabled: true,
+      format: "binary" as const,
+      name: "ads",
+      outbound: "block" as const,
+      url: "https://example.com/ads.srs",
+    };
+    loadSessionStatusMock.mockResolvedValue({
+      ...IDLE,
+      route: { finalOutbound: "proxy", providers: [provider], rules: [] },
+    });
+    loadRuleSetsMock.mockResolvedValue([
+      { bytes: 0, cached: false, name: "ads", path: "/cache/ads.srs", updatedAt: null },
+    ]);
+    updateRuleSetMock.mockRejectedValue({
+      code: "rule_set_download_failed",
+      message: "failed to download https://example.com/ads.srs",
+    });
+    await render();
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>("[aria-label='更新规则集 ads']")
+        ?.click(),
+    );
+
+    expect(container.querySelector("[role='alert']")?.textContent).toContain(
+      "failed to download",
+    );
   });
 
   it("changes the main window layout from the menu", async () => {

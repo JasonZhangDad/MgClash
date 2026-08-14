@@ -4,7 +4,7 @@
 //! shared node model, saves the credential in the OS store, and drives
 //! [`DesktopSession`] for connect and disconnect.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::num::NonZeroU16;
 use std::path::Path;
@@ -358,6 +358,8 @@ where
     routing_mode: SqliteRoutingModeStore,
     route_settings: SqliteRouteSettingsStore,
     current_route_bundle: RouteSchemeBundle,
+    /// Rule sets the app downloaded, keyed by provider name.
+    cached_rule_sets: HashMap<String, String>,
     dns_settings: SqliteDnsSettingsStore,
     current_dns_settings: DnsSettings,
     recovery: NetworkRecoveryPolicy,
@@ -413,6 +415,7 @@ where
             routing_mode,
             route_settings,
             current_route_bundle,
+            cached_rule_sets: HashMap::new(),
             dns_settings,
             current_dns_settings,
             recovery: NetworkRecoveryPolicy::default(),
@@ -1481,7 +1484,7 @@ where
     ) -> Result<SessionStatus, SessionCommandError<C::Error, P::Error>> {
         let profile = self
             .current_route_bundle
-            .profile(mode)
+            .profile_with_cached_sets(mode, &self.cached_rule_sets)
             .map_err(SessionCommandError::InvalidRouteSettings)?;
         self.restarting(move |session| {
             session
@@ -1507,7 +1510,7 @@ where
             .profile(RoutingMode::Rule)
             .map_err(SessionCommandError::InvalidRouteSettings)?;
         let profile = settings
-            .profile(self.defaults.route.mode())
+            .profile_with_cached_sets(self.defaults.route.mode(), &self.cached_rule_sets)
             .map_err(SessionCommandError::InvalidRouteSettings)?;
         self.restarting(move |session| {
             session
@@ -1538,7 +1541,7 @@ where
             .map_err(SessionCommandError::InvalidRouteSettings)?;
         let profile = self
             .current_route_bundle
-            .profile(self.defaults.route.mode())
+            .profile_with_cached_sets(self.defaults.route.mode(), &self.cached_rule_sets)
             .map_err(SessionCommandError::InvalidRouteSettings)?;
         self.restarting(move |session| {
             session
@@ -1589,7 +1592,7 @@ where
             .map_err(SessionCommandError::InvalidRouteSettings)?;
         let profile = self
             .current_route_bundle
-            .profile(self.defaults.route.mode())
+            .profile_with_cached_sets(self.defaults.route.mode(), &self.cached_rule_sets)
             .map_err(SessionCommandError::InvalidRouteSettings)?;
         self.route_settings
             .save_bundle(&self.current_route_bundle)
@@ -2016,6 +2019,23 @@ where
             .map_err(SessionCommandError::LocalProxyConfig)?;
         LocalSocksProfile::new(u32::from(clash_api_port))
             .map_err(SessionCommandError::LocalProxyConfig)?;
+        Ok(())
+    }
+
+    /// Points the route at the rule sets the app has downloaded.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when the resulting route is invalid.
+    pub fn set_cached_rule_sets(
+        &mut self,
+        cached: HashMap<String, String>,
+    ) -> Result<(), SessionCommandError<C::Error, P::Error>> {
+        self.cached_rule_sets = cached;
+        self.defaults.route = self
+            .current_route_bundle
+            .profile_with_cached_sets(self.defaults.route.mode(), &self.cached_rule_sets)
+            .map_err(SessionCommandError::InvalidRouteSettings)?;
         Ok(())
     }
 

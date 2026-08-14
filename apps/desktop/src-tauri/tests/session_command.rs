@@ -12,7 +12,8 @@ use magies_desktop_lib::dns_settings::{
     DesktopDnsStrategy, DnsMode, DnsSettings, SqliteDnsSettingsStore,
 };
 use magies_desktop_lib::route_settings::{
-    DesktopRouteOutbound, RouteRuleKind, RouteRuleSetting, RouteSettings, SqliteRouteSettingsStore,
+    DesktopRouteOutbound, RouteRuleKind, RouteRuleSetting, RouteSettings,
+    RuleProviderFormatSetting, RuleProviderSetting, SqliteRouteSettingsStore,
 };
 use magies_desktop_lib::routing_mode::SqliteRoutingModeStore;
 use magies_desktop_lib::session::{
@@ -2231,4 +2232,34 @@ fn syncing_the_selection_while_connected_keeps_the_running_node() {
 
     assert!(status.connected);
     assert_eq!(status.node.as_ref().unwrap().id, tokyo.id);
+}
+
+#[test]
+fn a_downloaded_rule_set_is_read_from_disk_by_the_next_connection() {
+    let (mut service, _runtime, _fail_start) = service();
+    service.import_node(SHADOWSOCKS_LINK).unwrap();
+    service.set_routing_mode(RoutingMode::Rule).unwrap();
+    service
+        .set_route_settings(RouteSettings {
+            rules: Vec::new(),
+            providers: vec![RuleProviderSetting {
+                name: "ads".to_owned(),
+                url: "https://example.com/ads.srs".to_owned(),
+                format: RuleProviderFormatSetting::Binary,
+                outbound: DesktopRouteOutbound::Direct,
+                enabled: true,
+            }],
+            final_outbound: DesktopRouteOutbound::Proxy,
+        })
+        .unwrap();
+
+    let mut cached = std::collections::HashMap::new();
+    cached.insert("ads".to_owned(), "/cache/ads.srs".to_owned());
+    service.set_cached_rule_sets(cached).unwrap();
+    service.connect().unwrap();
+
+    let config: serde_json::Value =
+        serde_json::from_slice(&fs::read(service.runtime_config_path().unwrap()).unwrap()).unwrap();
+    assert_eq!(config["route"]["rule_set"][0]["type"], "local");
+    assert_eq!(config["route"]["rule_set"][0]["path"], "/cache/ads.srs");
 }
