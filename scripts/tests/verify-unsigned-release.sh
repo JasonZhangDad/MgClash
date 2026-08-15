@@ -56,8 +56,22 @@ printf '%s *%s\r\n' "${windows_digest}" "${artifacts[0]}" > "${windows_sidecar}"
 
 "${verify_script}" "${release_directory}" "0.1.0"
 
-[[ -f "${release_directory}/SHA256SUMS" ]]
-[[ "$(wc -l < "${release_directory}/SHA256SUMS" | tr -d ' ')" == "5" ]]
+# Written as an explicit failure rather than a bare `[[ ]]`: macOS ships bash
+# 3.2, where `set -e` lets a failed test fall through, so a bare assertion is a
+# no-op on a Mac and a hard failure on CI. That divergence hid a wrong count
+# here until a release run caught it.
+[[ -f "${release_directory}/SHA256SUMS" ]] || {
+  echo "verification produced no SHA256SUMS" >&2
+  exit 1
+}
+# One line per artifact, counted rather than assumed: SHA256SUMS is the file a
+# downloader checks the whole release against, so a missing line is a download
+# nobody can verify.
+recorded_lines="$(wc -l < "${release_directory}/SHA256SUMS" | tr -d ' ')"
+[[ "${recorded_lines}" == "${#artifacts[@]}" ]] || {
+  echo "SHA256SUMS has ${recorded_lines} lines, expected ${#artifacts[@]}" >&2
+  exit 1
+}
 for artifact in "${artifacts[@]}"; do
   grep -Fq "  ${artifact}" "${release_directory}/SHA256SUMS"
 done
