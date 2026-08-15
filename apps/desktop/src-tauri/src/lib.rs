@@ -473,6 +473,20 @@ fn refresh_tray(app: &AppHandle) -> Result<(), CommandError> {
         })
 }
 
+fn set_system_proxy_mode_from_tray(
+    app: &AppHandle,
+    mode: &str,
+) -> Result<(), CommandError> {
+    let parsed = crate::app_settings::parse_system_proxy_mode(mode).ok_or(CommandError {
+        code: "invalid_system_proxy_mode",
+        message: format!("unknown system proxy mode: {mode}"),
+    })?;
+    let state = app.state::<AppState>();
+    let mut settings = lock(&state.settings).clone();
+    settings.system_proxy_mode = parsed;
+    set_app_settings(app.clone(), settings, state).map(|_| ())
+}
+
 fn handle_tray_action(app: &AppHandle, action: TrayAction) {
     if action == TrayAction::Open {
         show_main_window(app);
@@ -497,6 +511,7 @@ fn handle_background_tray_action(app: &AppHandle, action: TrayAction) {
             .set_routing_mode(mode)
             .map(|_| ())
             .map_err(|error| command_error(&error)),
+        TrayAction::SetSystemProxyMode(mode) => set_system_proxy_mode_from_tray(app, mode),
         TrayAction::SelectNode(id) => {
             let state = app.state::<AppState>();
             let mut service = state.service();

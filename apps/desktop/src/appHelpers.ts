@@ -19,17 +19,22 @@ export const DEFAULT_SPEED_TEST_URL =
   "https://speed.cloudflare.com/__down?bytes=10000000";
 export const THEME_KEY = "mgclash.theme";
 export const LAYOUT_KEY = "mgclash.mainLayout";
+export const FONT_SIZE_KEY = "mgclash.fontSize";
+export const FONT_SIZES = [12, 13, 14, 15, 16, 18] as const;
+export type FontSize = (typeof FONT_SIZES)[number];
 
 export type DialogId =
   | "subscriptions"
   | "dns"
   | "routing"
+  | "backup"
   | "geo"
   | "import"
   | "create"
   | "settings"
   | "config"
   | "about"
+  | "hotkeys"
   | null;
 
 /** The rule a connection suggests, or null when it names no host. */
@@ -312,6 +317,15 @@ export function savedTheme(): ThemeMode {
     return localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light";
   } catch {
     return "light";
+  }
+}
+
+export function savedFontSize(): FontSize {
+  try {
+    const stored = Number(localStorage.getItem(FONT_SIZE_KEY));
+    return FONT_SIZES.includes(stored as FontSize) ? (stored as FontSize) : 13;
+  } catch {
+    return 13;
   }
 }
 

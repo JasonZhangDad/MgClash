@@ -18,6 +18,8 @@ interface NodeContextMenuProps {
   onActivate: () => void;
   onToggleEnabled: () => void;
   onTest: () => void;
+  onSpeedTest: () => void;
+  onUrlTest: () => void;
   onClone: () => void;
   onExportLinks: () => void;
   onShowQrCode: () => void;
@@ -54,6 +56,8 @@ export function NodeContextMenu({
   onActivate,
   onToggleEnabled,
   onTest,
+  onSpeedTest,
+  onUrlTest,
   onClone,
   onExportLinks,
   onShowQrCode,
@@ -95,6 +99,26 @@ export function NodeContextMenu({
           onClick={onTest}
         >
           {`${t("测试延迟")}${suffix}`}
+        </button>
+      </li>
+      <li>
+        <button
+          type="button"
+          role="menuitem"
+          disabled={busy || !connected || !selected}
+          onClick={onUrlTest}
+        >
+          {t("URL 测试")}
+        </button>
+      </li>
+      <li>
+        <button
+          type="button"
+          role="menuitem"
+          disabled={busy || !connected || !selected}
+          onClick={onSpeedTest}
+        >
+          {t("下载测速")}
         </button>
       </li>
 

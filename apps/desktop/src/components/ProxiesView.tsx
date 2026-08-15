@@ -49,10 +49,13 @@ export function ProxiesView({
           <button
             key={candidate.id}
             type="button"
-            className={candidate.id === group?.id ? "active" : undefined}
+            className={
+              candidate.id === group?.id ? "proxy-card active" : "proxy-card"
+            }
             onClick={() => onSelectGroup(candidate.id)}
           >
-            {candidate.name}
+            <span className="proxy-card-name">{candidate.name}</span>
+            <span className="proxy-card-type">{candidate.strategy}</span>
           </button>
         ))}
       </nav>

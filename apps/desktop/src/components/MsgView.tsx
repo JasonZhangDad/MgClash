@@ -28,7 +28,11 @@ export function MsgView({
   return (
     <section className="msg-view" aria-label={t("消息窗口")}>
       <header className="msg-toolbar">
-        <strong>{t("消息")}</strong>
+        <input
+          className="toolbar-search"
+          aria-label={t("过滤器")}
+          placeholder={t("过滤器")}
+        />
         <label>
           {t("级别")}
           <select
@@ -57,13 +61,13 @@ export function MsgView({
             <option value="core">Core</option>
           </select>
         </label>
-        <button type="button" onClick={onRefresh}>
+        <button type="button" className="icon-btn" title={t("刷新日志")} onClick={onRefresh}>
           {t("刷新日志")}
         </button>
-        <button type="button" onClick={onClear}>
+        <button type="button" className="icon-btn" title={t("清空日志")} onClick={onClear}>
           {t("清空日志")}
         </button>
-        <button type="button" disabled={busy} onClick={onExport}>
+        <button type="button" className="icon-btn" disabled={busy} title={t("导出诊断")} onClick={onExport}>
           {t("导出诊断")}
         </button>
       </header>

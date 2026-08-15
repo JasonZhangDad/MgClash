@@ -507,6 +507,19 @@ describe("App", () => {
     return found;
   }
 
+  async function toggleConnect(): Promise<void> {
+    await act(async () => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          code: "Enter",
+          ctrlKey: true,
+          bubbles: true,
+        }),
+      );
+    });
+  }
+
   it("warns on first run that this build is unsigned", async () => {
     await render();
 
@@ -574,7 +587,7 @@ describe("App", () => {
     expect(container.textContent).toContain("未连接");
     expect(container.textContent).toContain("sing-box");
     expect(container.textContent).toContain("macos-x86_64");
-    expect(button("连接").disabled).toBe(true);
+    expect(connectSessionMock).not.toHaveBeenCalled();
     expect(loadTrafficMock).toHaveBeenCalledOnce();
   });
 
@@ -676,7 +689,8 @@ describe("App", () => {
 
     await render();
 
-    expect(button("连接").disabled).toBe(true);
+    await toggleConnect();
+    expect(connectSessionMock).not.toHaveBeenCalled();
   });
 
   it("restores the saved System Proxy settings", async () => {
@@ -744,8 +758,10 @@ describe("App", () => {
     );
     expect(container.textContent).toContain("Tokyo Edge");
     expect(container.textContent).toContain("shadowsocks");
-    expect(container.textContent).toContain("edge.example.com:8388");
-    expect(button("连接").disabled).toBe(false);
+    expect(container.textContent).toContain("edge.example.com");
+    expect(
+      container.querySelector("[aria-label='节点列表']")?.textContent,
+    ).toContain("Tokyo Edge");
     expect(
       container.querySelector("[aria-label='节点列表']")?.textContent,
     ).toContain("Tokyo Edge");
@@ -1009,13 +1025,11 @@ describe("App", () => {
     loadNodesMock.mockResolvedValue([CONNECTED.node]);
     await render();
 
-    const pac = [...container.querySelectorAll("button")].find(
-      (candidate) =>
-        candidate.textContent === "PAC" &&
-        candidate.closest(".proxy-mode-group") !== null,
+    const control = container.querySelector<HTMLSelectElement>(
+      "[aria-label='状态栏系统代理']",
     );
-    expect(pac?.disabled).toBe(false);
-    await act(async () => pac?.click());
+    expect(control?.disabled).toBe(false);
+    await act(async () => selectValue("pac", control!));
 
     expect(saveAppSettingsMock).toHaveBeenCalledWith(
       expect.objectContaining({ systemProxyMode: "pac" }),
@@ -1741,13 +1755,15 @@ describe("App", () => {
     loadSessionStatusMock.mockResolvedValue(SELECTED);
     loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
     selectNodeMock.mockResolvedValue({ ...SELECTED, node: osaka });
-    switchNodeMock.mockResolvedValue({ ...SELECTED, node: osaka });
+    connectSessionMock.mockResolvedValue({ ...SELECTED, node: osaka, connected: true });
     await render();
 
     await nodeMenuAction("Osaka", "设为活动");
 
-    expect(switchNodeMock).toHaveBeenCalledWith(osaka.id);
-    expect(container.textContent).toContain("osaka.example.com:9000");
+    expect(selectNodeMock).toHaveBeenCalledWith(osaka.id);
+    expect(connectSessionMock).toHaveBeenCalled();
+    expect(container.textContent).toContain("osaka.example.com");
+    expect(container.textContent).toContain("9000");
   });
 
   it("switches node while connected from the context menu", async () => {
@@ -1836,7 +1852,8 @@ describe("App", () => {
     expect(
       container.querySelector("[aria-label='节点列表']")?.textContent,
     ).toContain("Tokyo 2");
-    expect(container.textContent).toContain("new.example.com:443");
+    expect(container.textContent).toContain("new.example.com");
+    expect(container.textContent).toContain("443");
   });
 
   it("moves nodes with compact ordering controls", async () => {
@@ -1863,7 +1880,7 @@ describe("App", () => {
     ]);
   });
 
-  it("lists the groups in a left rail instead of toolbar chips", async () => {
+  it("lists the groups as wrap chips like v2rayN", async () => {
     const work = {
       id: "00000000-0000-0000-0000-000000000020",
       name: "Work",
@@ -1876,18 +1893,18 @@ describe("App", () => {
     expect(
       container.querySelector(".profiles-toolbar [aria-label='节点分组筛选']"),
     ).toBeNull();
-    const rail = container.querySelector(
-      ".group-rail[aria-label='节点分组筛选']",
+    const chips = container.querySelector(
+      ".group-chips[aria-label='节点分组筛选']",
     );
-    if (!rail) {
-      throw new Error("the group rail is missing");
+    if (!chips) {
+      throw new Error("the group chips are missing");
     }
     expect(
-      [...rail.querySelectorAll("button")].map((entry) => entry.textContent),
+      [...chips.querySelectorAll("button")].map((entry) => entry.textContent),
     ).toEqual(["全部", "未分组", "Work"]);
   });
 
-  it("numbers the rows of the server table", async () => {
+  it("orders the server table like v2rayN: type, remarks, address, port", async () => {
     const osaka = {
       ...SELECTED.node!,
       id: "00000000-0000-0000-0000-000000000002",
@@ -1899,11 +1916,7 @@ describe("App", () => {
     const headers = [
       ...container.querySelectorAll("[aria-label='节点列表'] thead th"),
     ].map((cell) => cell.textContent);
-    expect(headers[1]).toBe("序号");
-    const indices = [
-      ...container.querySelectorAll("[aria-label='节点列表'] tbody tr"),
-    ].map((row) => row.querySelectorAll("td")[1]?.textContent);
-    expect(indices).toEqual(["1", "2"]);
+    expect(headers.slice(1, 5)).toEqual(["类型", "别名", "地址", "端口"]);
   });
 
   it("assigns and filters named node groups", async () => {
@@ -2078,7 +2091,7 @@ describe("App", () => {
     reorderNodesMock.mockResolvedValue([fast, slow, untested]);
     await render();
 
-    await act(async () => button("按延迟排序").click());
+    await nodeMenuAction("Slow Edge", "按延迟排序");
     expect(reorderNodesMock).toHaveBeenCalledWith([
       fast.id,
       slow.id,
@@ -2096,15 +2109,16 @@ describe("App", () => {
     });
     await render();
 
+    await act(async () => button("参数设置").click());
     const field = container.querySelector<HTMLInputElement>(
-      "[aria-label='URL 测试地址']",
+      "[aria-label='设置中的 URL 测试地址']",
     );
     if (!field) {
       throw new Error("URL test address field is missing");
     }
     expect(field.value).toBe("https://www.gstatic.com/generate_204");
     await act(async () => typeInput(" https://probe.example/204 ", field));
-    await act(async () => button("URL 测试").click());
+    await nodeMenuAction("Tokyo Edge", "URL 测试");
 
     expect(testUrlMock).toHaveBeenCalledWith("https://probe.example/204");
     expect(saveAppSettingsMock).toHaveBeenCalledWith(
@@ -2125,9 +2139,10 @@ describe("App", () => {
       urlTestAddress: "https://probe.example/204",
     });
     await render();
+    await act(async () => button("参数设置").click());
     expect(
       container.querySelector<HTMLInputElement>(
-        "[aria-label='URL 测试地址']",
+        "[aria-label='设置中的 URL 测试地址']",
       )?.value,
     ).toBe("https://probe.example/204");
   });
@@ -2141,14 +2156,15 @@ describe("App", () => {
     });
     await render();
 
+    await act(async () => button("参数设置").click());
     const field = container.querySelector<HTMLInputElement>(
-      "[aria-label='URL 测试地址']",
+      "[aria-label='设置中的 URL 测试地址']",
     );
     if (!field) {
       throw new Error("URL test address field is missing");
     }
     await act(async () => typeInput("file:///tmp/probe", field));
-    await act(async () => button("URL 测试").click());
+    await nodeMenuAction("Tokyo Edge", "URL 测试");
 
     expect(saveAppSettingsMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ urlTestAddress: "file:///tmp/probe" }),
@@ -2159,9 +2175,10 @@ describe("App", () => {
   });
 
   it("requires a connected node for URL testing", async () => {
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
     await render();
 
-    expect(button("URL 测试").disabled).toBe(true);
+    expect(await nodeMenuItemDisabled("Tokyo Edge", "URL 测试")).toBe(true);
   });
 
   it("runs a download speed test through the connected node", async () => {
@@ -2176,7 +2193,7 @@ describe("App", () => {
     });
     await render();
 
-    await act(async () => button("下载测速").click());
+    await nodeMenuAction("Tokyo Edge", "下载测速");
     expect(testDownloadSpeedMock).toHaveBeenCalledWith(
       "https://speed.cloudflare.com/__down?bytes=10000000",
     );
@@ -2267,7 +2284,7 @@ describe("App", () => {
     loadSessionStatusMock.mockResolvedValue(SELECTED);
     loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
     selectNodeMock.mockResolvedValue({ ...SELECTED, node: osaka });
-    switchNodeMock.mockResolvedValue({ ...SELECTED, node: osaka });
+    connectSessionMock.mockResolvedValue({ ...SELECTED, node: osaka, connected: true });
     await render();
     const rows = container.querySelectorAll("[aria-label='节点列表'] tbody tr");
 
@@ -2275,7 +2292,8 @@ describe("App", () => {
       rows[1].dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     });
 
-    expect(switchNodeMock).toHaveBeenCalledWith(osaka.id);
+    expect(selectNodeMock).toHaveBeenCalledWith(osaka.id);
+    expect(connectSessionMock).toHaveBeenCalled();
   });
 
   it("copies an exported share link without rendering it", async () => {
@@ -2369,7 +2387,7 @@ describe("App", () => {
 
     expect(
       [...(control?.options ?? [])].map((option) => option.value),
-    ).toEqual(["managed", "pac", "cleared", "unchanged"]);
+    ).toEqual(["cleared", "managed", "unchanged", "pac"]);
   });
 
   it("shows each node's own traffic in the table", async () => {
@@ -2995,7 +3013,7 @@ describe("App", () => {
     ]);
     await render();
 
-    await act(async () => button("全部更新").click());
+    await act(async () => button("更新全部订阅 (不通过代理)").click());
 
     expect(refreshAllSubscriptionsMock).toHaveBeenCalledOnce();
     expect(container.textContent).toContain("subscription request timed out");
@@ -3018,11 +3036,11 @@ describe("App", () => {
     disconnectSessionMock.mockResolvedValue(SELECTED);
     await render();
 
-    await act(async () => button("连接").click());
+    await toggleConnect();
 
     expect(container.textContent).toContain("已连接");
 
-    await act(async () => button("断开").click());
+    await toggleConnect();
 
     expect(disconnectSessionMock).toHaveBeenCalledOnce();
     expect(container.textContent).toContain("未连接");
@@ -3275,7 +3293,7 @@ describe("App", () => {
     );
     try {
       await render();
-      await act(async () => button("连接").click());
+      await toggleConnect();
 
       const before = loadSessionStatusMock.mock.calls.length;
       await act(async () => {
@@ -3388,7 +3406,7 @@ describe("App", () => {
       configOverride: '{"log":{"level":"trace"}}',
     });
     await render();
-    await act(async () => button("查看配置").click());
+    await act(async () => button("完整配置模板").click());
     await act(async () => {});
 
     const editor = container.querySelector<HTMLTextAreaElement>(
@@ -3469,7 +3487,7 @@ describe("App", () => {
     });
     try {
       await render();
-      await act(async () => button("连接").click());
+      await toggleConnect();
       loadSessionStatusMock.mockRejectedValue(new Error("refresh failed"));
 
       await act(async () => {
@@ -3537,7 +3555,10 @@ describe("App", () => {
     exportNodeLinkMock.mockClear();
     writeText.mockClear();
 
-    await act(async () => button("导出全部分享链接").click());
+    await act(async () =>
+      container.querySelector<HTMLInputElement>("[aria-label='全选节点']")?.click(),
+    );
+    await nodeMenuAction("Tokyo Edge", "导出分享链接 (2)");
 
     expect(exportNodeLinkMock).toHaveBeenCalledWith(SELECTED.node!.id);
     expect(exportNodeLinkMock).toHaveBeenCalledWith(osaka.id);
@@ -3555,7 +3576,15 @@ describe("App", () => {
     switchNodeMock.mockResolvedValue({ ...SELECTED, node: osaka });
     await render();
 
-    await act(async () => button("下一节点").click());
+    await act(async () => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "]",
+          ctrlKey: true,
+          bubbles: true,
+        }),
+      );
+    });
 
     expect(switchNodeMock).toHaveBeenCalledWith(osaka.id);
   });
@@ -3583,7 +3612,7 @@ describe("App", () => {
     });
     await render();
 
-    await act(async () => button("连接").click());
+    await toggleConnect();
 
     expect(container.querySelector("[role='alert']")?.textContent).toContain(
       "the pinned sing-box binary is not configured",
@@ -3616,15 +3645,55 @@ describe("App", () => {
 
     const nav = container.querySelector("[aria-label='主菜单']");
     expect(nav).not.toBeNull();
-    expect(nav?.textContent).toContain("服务器");
-    expect(nav?.textContent).toContain("订阅");
+    expect(nav?.textContent).toContain("配置项");
+    expect(nav?.textContent).toContain("订阅分组");
     expect(nav?.textContent).toContain("设置");
     expect(nav?.textContent).toContain("帮助");
-    expect(container.querySelector(".menubar-brand")?.textContent).toContain(
-      "MgClash",
-    );
+    expect(nav?.textContent).toContain("重启服务");
+    expect(nav?.textContent).toContain("退出");
     expect(container.querySelector("[aria-label='节点列表']")).not.toBeNull();
-    expect(container.querySelector("[aria-label='节点详情']")).not.toBeNull();
+    expect(container.querySelector(".group-chips")).not.toBeNull();
+    expect(container.querySelector("[aria-label='节点详情']")).toBeNull();
+  });
+
+  it("imports a share link from the clipboard via the server menu", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        readText: vi.fn().mockResolvedValue(
+          "ss://aes-128-gcm:secret@edge.example.com:8388#Tokyo Edge",
+        ),
+      },
+    });
+    importNodesMock.mockResolvedValue({
+      duplicates: 0,
+      failures: [],
+      imported: 1,
+      status: SELECTED,
+    });
+    loadNodesMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([SELECTED.node]);
+    await render();
+
+    await act(async () => button("从剪贴板导入分享链接").click());
+
+    expect(importNodesMock).toHaveBeenCalledWith(
+      "ss://aes-128-gcm:secret@edge.example.com:8388#Tokyo Edge",
+    );
+  });
+
+  it("changes the font size from the theme flyout", async () => {
+    await render();
+    const size = container.querySelector<HTMLSelectElement>(
+      "[aria-label='字体大小']",
+    );
+    if (!size) {
+      throw new Error("font size control is missing");
+    }
+    await act(async () => selectValue("16", size));
+    expect(document.documentElement.style.fontSize).toBe("16px");
+    expect(localStorage.getItem("mgclash.fontSize")).toBe("16");
   });
 
   it("filters the node table by name, server, or protocol", async () => {
@@ -3679,7 +3748,7 @@ describe("App", () => {
     expect(container.querySelector("[aria-label='下载速率']")).not.toBeNull();
     expect(container.querySelector("[aria-label='节点列表']")).not.toBeNull();
 
-    await act(async () => button("订阅设置").click());
+    await act(async () => button("订阅分组设置").click());
     expect(container.querySelector("[aria-label='订阅名称']")).not.toBeNull();
 
     expect(container.querySelector("[aria-label='分享链接']")).not.toBeNull();
@@ -3708,7 +3777,7 @@ describe("App", () => {
   it("presets the protocol when adding a server from the menu", async () => {
     await render();
 
-    await act(async () => button("添加 Trojan 服务器").click());
+    await act(async () => button("添加 [Trojan]").click());
 
     const dialog = container.querySelector("[aria-label='手动创建节点']");
     expect(dialog?.hasAttribute("hidden")).toBe(false);
@@ -3725,7 +3794,7 @@ describe("App", () => {
     expect(loadSubscriptionsMock).toHaveBeenCalledTimes(1);
     expect(loadSessionStatusMock).toHaveBeenCalledTimes(1);
 
-    await act(async () => button("重新加载").click());
+    await act(async () => button("重启服务").click());
 
     expect(loadNodesMock).toHaveBeenCalledTimes(2);
     expect(loadSubscriptionsMock).toHaveBeenCalledTimes(2);
@@ -3748,12 +3817,16 @@ describe("App", () => {
 
     expect(document.documentElement.dataset.theme).toBe("light");
 
-    await act(async () => button("深色主题").click());
+    const theme = container.querySelector<HTMLSelectElement>("select[aria-label='主题']");
+    if (!theme) {
+      throw new Error("theme picker is missing");
+    }
+    await act(async () => selectValue("dark", theme));
 
     expect(document.documentElement.dataset.theme).toBe("dark");
     expect(localStorage.getItem("mgclash.theme")).toBe("dark");
 
-    await act(async () => button("浅色主题").click());
+    await act(async () => selectValue("light", theme));
 
     expect(document.documentElement.dataset.theme).toBe("light");
   });
@@ -3775,10 +3848,10 @@ describe("App", () => {
     loadNodeGroupsMock.mockResolvedValue([work]);
     loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
     setNodeGroupStrategyMock.mockResolvedValue([{ ...work, strategy: "select" }]);
-    switchNodeMock.mockResolvedValue({ ...SELECTED, node: osaka });
+    connectSessionMock.mockResolvedValue({ ...SELECTED, node: osaka, connected: true });
     await render();
 
-    await act(async () => button("代理组").click());
+    await act(async () => button("当前代理").click());
 
     const rows = [
       ...container.querySelectorAll("[aria-label='代理组节点'] tbody tr"),
@@ -3799,7 +3872,7 @@ describe("App", () => {
         .querySelector<HTMLButtonElement>("[aria-label='设为活动 Osaka']")
         ?.click(),
     );
-    expect(switchNodeMock).toHaveBeenCalledWith(osaka.id);
+    expect(connectSessionMock).toHaveBeenCalled();
   });
 
   it("tests every node of the selected policy group", async () => {
@@ -3818,7 +3891,7 @@ describe("App", () => {
     loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
     await render();
 
-    await act(async () => button("代理组").click());
+    await act(async () => button("当前代理").click());
     await act(async () => button("测试本组延迟").click());
 
     expect(testAllNodesMock).toHaveBeenCalledWith(
@@ -3850,7 +3923,7 @@ describe("App", () => {
     });
     await render();
 
-    await act(async () => button("连接列表").click());
+    await act(async () => button("当前连接").click());
 
     const rows = [
       ...container.querySelectorAll("[aria-label='连接列表'] tbody tr"),
@@ -3879,7 +3952,7 @@ describe("App", () => {
     loadSessionStatusMock.mockResolvedValue({ ...CONNECTED, core: "xray" });
     await render();
 
-    await act(async () => button("连接列表").click());
+    await act(async () => button("当前连接").click());
 
     expect(container.querySelector("[aria-label='连接列表']")).toBeNull();
     expect(container.textContent).toContain("Xray 不提供连接列表");
@@ -3890,7 +3963,7 @@ describe("App", () => {
     loadSessionStatusMock.mockResolvedValue(IDLE);
     await render();
 
-    await act(async () => button("连接列表").click());
+    await act(async () => button("当前连接").click());
 
     expect(container.querySelector("[aria-label='连接列表']")).toBeNull();
     expect(container.textContent).toContain("连接后才会有连接记录");
@@ -4133,18 +4206,24 @@ describe("App", () => {
     await render();
 
     // The second group only shows once it is picked from the rail.
-    await act(async () => button("代理组").click());
+    await act(async () => button("当前代理").click());
     expect(
       container.querySelectorAll("[aria-label='代理组节点'] tbody tr"),
     ).toHaveLength(0);
-    await act(async () => button("Home").click());
+    await act(async () =>
+      [...container.querySelectorAll<HTMLButtonElement>(
+        ".proxies-pane .group-rail button",
+      )]
+        .find((entry) => entry.textContent?.includes("Home"))
+        ?.click(),
+    );
     expect(
       [...container.querySelectorAll("[aria-label='代理组节点'] tbody tr")].map(
         (row) => row.textContent,
       ),
     ).toEqual([expect.stringContaining("Osaka")]);
 
-    await act(async () => button("连接列表").click());
+    await act(async () => button("当前连接").click());
     const search = container.querySelector<HTMLInputElement>(
       "input[aria-label='搜索连接']",
     );
@@ -4232,7 +4311,7 @@ describe("App", () => {
     });
     await render();
 
-    await act(async () => button("连接列表").click());
+    await act(async () => button("当前连接").click());
     await act(async () =>
       container
         .querySelector<HTMLButtonElement>("[aria-label='为 cdn.example.com 添加规则']")
@@ -4304,7 +4383,7 @@ describe("App", () => {
     await render();
 
     // A vendor list changing is unrelated to the server the Core is running.
-    await act(async () => button("全部更新").click());
+    await act(async () => button("更新全部订阅 (不通过代理)").click());
     expect(refreshAllSubscriptionsMock).toHaveBeenCalledTimes(1);
 
     await act(async () =>
@@ -4483,12 +4562,12 @@ describe("App", () => {
     });
     await render();
 
-    await act(async () => button("代理组").click());
+    await act(async () => button("当前代理").click());
     const groupTotals = container.querySelector("[aria-label='代理组流量']");
     expect(groupTotals?.textContent).toContain("2.0 KB");
     expect(groupTotals?.textContent).toContain("8.0 KB");
 
-    await act(async () => button("连接列表").click());
+    await act(async () => button("当前连接").click());
     const rows = [
       ...container.querySelectorAll("[aria-label='进程流量'] tbody tr"),
     ];
@@ -4743,7 +4822,7 @@ describe("App", () => {
 
     await act(async () =>
       container
-        .querySelector<HTMLButtonElement>("[aria-label='按名称排序表头']")
+        .querySelector<HTMLButtonElement>("[aria-label='按别名排序表头']")
         ?.click(),
     );
 
@@ -4756,7 +4835,7 @@ describe("App", () => {
     await render();
 
     const grip = container.querySelector<HTMLElement>(
-      "[aria-label='调整名称列宽']",
+      "[aria-label='调整别名列宽']",
     );
     if (!grip) {
       throw new Error("the name column has no resize grip");
@@ -4780,7 +4859,7 @@ describe("App", () => {
     const stored = JSON.parse(
       localStorage.getItem("mgclash.columnWidths") ?? "{}",
     ) as Record<string, number>;
-    expect(stored["名称"]).toBeGreaterThan(48);
+    expect(stored["别名"]).toBeGreaterThan(48);
   });
 
 
@@ -4823,7 +4902,7 @@ describe("App", () => {
       "tab",
     );
     expect(localStorage.getItem("mgclash.mainLayout")).toBe("tab");
-    expect(button("消息")).not.toBeNull();
+    expect(button("信息")).not.toBeNull();
 
     await act(async () => button("左右分栏").click());
 
@@ -4832,17 +4911,13 @@ describe("App", () => {
     );
   });
 
-  it("hides and shows the message window from the menu", async () => {
+  it("shows the message pane as a side tab", async () => {
     await render();
 
     expect(container.querySelector("[aria-label='消息窗口']")).not.toBeNull();
-
-    await act(async () => button("隐藏消息窗口").click());
-
+    await act(async () => button("当前代理").click());
     expect(container.querySelector("[aria-label='消息窗口']")).toBeNull();
-
-    await act(async () => button("显示消息窗口").click());
-
+    await act(async () => button("信息").click());
     expect(container.querySelector("[aria-label='消息窗口']")).not.toBeNull();
   });
 
@@ -4851,9 +4926,9 @@ describe("App", () => {
     loadNodesMock.mockResolvedValue([CONNECTED.node]);
     await render();
 
-    expect(button("添加 VLESS 服务器").disabled).toBe(false);
-    expect(button("手动创建").disabled).toBe(false);
-    expect(button("导入节点").disabled).toBe(false);
+    expect(button("添加 [VLESS]").disabled).toBe(false);
+    expect(button("从剪贴板导入分享链接").disabled).toBe(false);
+    expect(button("扫描屏幕上的二维码").disabled).toBe(false);
   });
 
   it("edits other servers while connected but not the running one", async () => {
@@ -4878,17 +4953,16 @@ describe("App", () => {
     await render();
 
     for (const label of [
-      "添加 VLESS 服务器",
-      "添加 VMess 服务器",
-      "添加 Shadowsocks 服务器",
-      "添加 Hysteria2 服务器",
-      "添加 TUIC 服务器",
-      "添加 SOCKS5 服务器",
-      "添加 HTTP 服务器",
-      "添加 WireGuard 服务器",
-      "添加 AnyTLS 服务器",
-      "添加 Naive 服务器",
-      "手动创建",
+      "添加 [VLESS]",
+      "添加 [VMess]",
+      "添加 [Shadowsocks]",
+      "添加 [Hysteria2]",
+      "添加 [TUIC]",
+      "添加 [SOCKS]",
+      "添加 [HTTP]",
+      "添加 [WireGuard]",
+      "添加 [AnyTLS]",
+      "添加 [Naive]",
     ]) {
       await act(async () => button(label).click());
       expect(

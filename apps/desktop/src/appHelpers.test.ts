@@ -11,6 +11,7 @@ import {
   sortNodes,
   processTraffic,
   ruleDraftFromConnection,
+  savedFontSize,
 } from "./appHelpers";
 
 describe("ruleDraftFromConnection", () => {
@@ -230,5 +231,23 @@ describe("column widths", () => {
     expect(clampColumnWidth(10)).toBe(48);
     expect(clampColumnWidth(3_000)).toBe(1_200);
     expect(clampColumnWidth(220)).toBe(220);
+  });
+});
+
+describe("savedFontSize", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("defaults to 13 when nothing is stored", () => {
+    expect(savedFontSize()).toBe(13);
+  });
+
+  it("reads a stored size the picker offers", () => {
+    localStorage.setItem("mgclash.fontSize", "16");
+    expect(savedFontSize()).toBe(16);
+  });
+
+  it("ignores a size the picker does not offer", () => {
+    localStorage.setItem("mgclash.fontSize", "11");
+    expect(savedFontSize()).toBe(13);
   });
 });

@@ -5,18 +5,25 @@ interface DialogProps {
   children: ReactNode;
   hidden?: boolean;
   onClose: () => void;
+  onConfirm?: () => void;
   title: string;
   wide?: boolean;
+  /// v2rayN windows put Confirm/Cancel on the bottom dock.
+  confirmLabel?: string;
+  cancelLabel?: string;
 }
 
-/** Modal shell used for v2rayN-style option / subscription / routing windows. */
+/** Modal shell matching v2rayN Avalonia windows: title, body, confirm/cancel. */
 export function Dialog({
   ariaLabel,
   children,
   hidden = false,
   onClose,
+  onConfirm,
   title,
   wide = false,
+  confirmLabel = "确定",
+  cancelLabel = "取消",
 }: DialogProps) {
   return (
     <div className="dialog-backdrop" hidden={hidden} onClick={onClose}>
@@ -34,6 +41,14 @@ export function Dialog({
           </button>
         </header>
         <div className="dialog-body">{children}</div>
+        <footer className="dialog-foot">
+          <button type="button" className="primary" onClick={onConfirm ?? onClose}>
+            {confirmLabel}
+          </button>
+          <button type="button" onClick={onClose}>
+            {cancelLabel}
+          </button>
+        </footer>
       </div>
     </div>
   );

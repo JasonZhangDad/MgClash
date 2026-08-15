@@ -66,6 +66,26 @@ export function ConnectionsView({
           value={query}
           onChange={(event) => onQuery(event.target.value)}
         />
+        <button
+          type="button"
+          className="icon-btn"
+          disabled={
+            busy || !connected || !supported || connections.length === 0
+          }
+          title={t("全部关闭")}
+          onClick={onCloseAll}
+        >
+          {t("全部关闭")}
+        </button>
+        <button
+          type="button"
+          className="icon-btn"
+          disabled={busy || !connected || !supported}
+          title={t("刷新")}
+          onClick={onRefresh}
+        >
+          {t("刷新")}
+        </button>
         <span>
           {t("连接数")} {connections.length}
         </span>
@@ -73,22 +93,6 @@ export function ConnectionsView({
           ↑ {formatBytes(snapshot?.uploadTotalBytes ?? 0)} ↓{" "}
           {formatBytes(snapshot?.downloadTotalBytes ?? 0)}
         </span>
-        <button
-          type="button"
-          disabled={busy || !connected || !supported}
-          onClick={onRefresh}
-        >
-          {t("刷新")}
-        </button>
-        <button
-          type="button"
-          disabled={
-            busy || !connected || !supported || connections.length === 0
-          }
-          onClick={onCloseAll}
-        >
-          {t("全部关闭")}
-        </button>
       </div>
 
       {!supported ? (

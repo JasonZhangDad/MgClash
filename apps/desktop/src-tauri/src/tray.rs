@@ -16,6 +16,10 @@ const NODE_MENU_PREFIX: &str = "tray:node:";
 const MODE_GLOBAL_MENU_ID: &str = "tray:mode:global";
 const MODE_RULE_MENU_ID: &str = "tray:mode:rule";
 const MODE_DIRECT_MENU_ID: &str = "tray:mode:direct";
+const PROXY_CLEARED_MENU_ID: &str = "tray:proxy:cleared";
+const PROXY_MANAGED_MENU_ID: &str = "tray:proxy:managed";
+const PROXY_UNCHANGED_MENU_ID: &str = "tray:proxy:unchanged";
+const PROXY_PAC_MENU_ID: &str = "tray:proxy:pac";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TrayMenuModel {
@@ -26,6 +30,7 @@ pub struct TrayMenuModel {
     pub toggle_enabled: bool,
     pub mode: RoutingMode,
     pub mode_enabled: bool,
+    pub system_proxy_mode: &'static str,
     pub nodes: Vec<TrayNodeItem>,
 }
 
@@ -43,6 +48,7 @@ pub enum TrayAction {
     Open,
     Toggle,
     SetRoutingMode(RoutingMode),
+    SetSystemProxyMode(&'static str),
     SelectNode(Uuid),
     Quit,
 }
@@ -56,6 +62,7 @@ pub struct TrayUi {
     traffic: MenuItem<Wry>,
     toggle: MenuItem<Wry>,
     modes: Submenu<Wry>,
+    proxy: Submenu<Wry>,
     nodes: Submenu<Wry>,
     last_model: Mutex<Option<TrayMenuModel>>,
 }
@@ -83,8 +90,10 @@ impl TrayUi {
             initial.toggle_enabled,
             None::<&str>,
         )?;
-        let modes = Submenu::new(app, "模式", true)?;
+        let modes = Submenu::new(app, "路由", true)?;
         replace_mode_items(app.handle(), &modes, initial.mode, initial.mode_enabled)?;
+        let proxy = Submenu::new(app, "系统代理", true)?;
+        replace_proxy_items(app.handle(), &proxy, initial.system_proxy_mode)?;
         let nodes = Submenu::new(app, "节点", true)?;
         replace_node_items(app.handle(), &nodes, &initial.nodes)?;
         let info_separator = PredefinedMenuItem::separator(app)?;
@@ -97,6 +106,7 @@ impl TrayUi {
                 &node,
                 &traffic,
                 &info_separator,
+                &proxy,
                 &modes,
                 &nodes,
                 &action_separator,
@@ -125,6 +135,7 @@ impl TrayUi {
             traffic,
             toggle,
             modes,
+            proxy,
             nodes,
             last_model: Mutex::new(Some(initial)),
         })
@@ -151,6 +162,7 @@ impl TrayUi {
         self.toggle.set_text(model.toggle_text)?;
         self.toggle.set_enabled(model.toggle_enabled)?;
         replace_mode_items(app, &self.modes, model.mode, model.mode_enabled)?;
+        replace_proxy_items(app, &self.proxy, model.system_proxy_mode)?;
         replace_node_items(app, &self.nodes, &model.nodes)?;
         self.icon.set_tooltip(Some(tray_tooltip(&model)))?;
         *last_model = Some(model);
@@ -184,6 +196,33 @@ fn replace_mode_items(
             id,
             label,
             enabled,
+            selected == mode,
+            None::<&str>,
+        )?)?;
+    }
+    Ok(())
+}
+
+fn replace_proxy_items(
+    app: &AppHandle,
+    submenu: &Submenu<Wry>,
+    selected: &str,
+) -> tauri::Result<()> {
+    let item_count = submenu.items()?.len();
+    for _ in 0..item_count {
+        let _ = submenu.remove_at(0)?;
+    }
+    for (id, label, mode) in [
+        (PROXY_CLEARED_MENU_ID, "清除系统代理", "cleared"),
+        (PROXY_MANAGED_MENU_ID, "自动配置系统代理", "managed"),
+        (PROXY_UNCHANGED_MENU_ID, "不改变系统代理", "unchanged"),
+        (PROXY_PAC_MENU_ID, "Pac 模式", "pac"),
+    ] {
+        submenu.append(&CheckMenuItem::with_id(
+            app,
+            id,
+            label,
+            true,
             selected == mode,
             None::<&str>,
         )?)?;
@@ -265,6 +304,7 @@ pub fn menu_model(
         // The session restarts around a routing-mode change, so the tray offers
         // it while connected exactly as the window does.
         mode_enabled: true,
+        system_proxy_mode: status.system_proxy_mode,
         nodes: ordered_nodes
             .iter()
             .map(|node| {
@@ -339,6 +379,10 @@ pub fn action_for_menu_id(id: &str) -> Option<TrayAction> {
         MODE_GLOBAL_MENU_ID => Some(TrayAction::SetRoutingMode(RoutingMode::Global)),
         MODE_RULE_MENU_ID => Some(TrayAction::SetRoutingMode(RoutingMode::Rule)),
         MODE_DIRECT_MENU_ID => Some(TrayAction::SetRoutingMode(RoutingMode::Direct)),
+        PROXY_CLEARED_MENU_ID => Some(TrayAction::SetSystemProxyMode("cleared")),
+        PROXY_MANAGED_MENU_ID => Some(TrayAction::SetSystemProxyMode("managed")),
+        PROXY_UNCHANGED_MENU_ID => Some(TrayAction::SetSystemProxyMode("unchanged")),
+        PROXY_PAC_MENU_ID => Some(TrayAction::SetSystemProxyMode("pac")),
         _ => id
             .strip_prefix(NODE_MENU_PREFIX)
             .and_then(|id| Uuid::parse_str(id).ok())
@@ -423,6 +467,10 @@ mod tests {
         assert_eq!(action_for_menu_id("tray:toggle"), Some(TrayAction::Toggle));
         assert_eq!(action_for_menu_id("tray:open"), Some(TrayAction::Open));
         assert_eq!(action_for_menu_id("tray:quit"), Some(TrayAction::Quit));
+        assert_eq!(
+            action_for_menu_id("tray:proxy:pac"),
+            Some(TrayAction::SetSystemProxyMode("pac"))
+        );
         assert_eq!(
             action_for_menu_id("tray:mode:direct"),
             Some(TrayAction::SetRoutingMode(RoutingMode::Direct))
