@@ -32,10 +32,16 @@ create_artifact() {
 
 artifacts=(
   "mgclash-0.1.0-macos-x86_64-unsigned.tar.gz"
+  "mgclash-0.1.0-macos-x86_64-unsigned.dmg"
   "mgclash-0.1.0-macos-aarch64-unsigned.tar.gz"
+  "mgclash-0.1.0-macos-aarch64-unsigned.dmg"
   "mgclash-0.1.0-windows-x86_64-unsigned.zip"
   "mgclash-0.1.0-windows-x86_64-unsigned-setup.exe"
+  "mgclash-0.1.0-windows-x86_64-unsigned-portable.exe"
   "mgclash-0.1.0-linux-x86_64-unsigned.tar.gz"
+  "mgclash-0.1.0-linux-x86_64-unsigned.deb"
+  "mgclash-0.1.0-linux-x86_64-unsigned.rpm"
+  "mgclash-0.1.0-linux-x86_64-unsigned.AppImage"
 )
 
 for artifact in "${artifacts[@]}"; do
