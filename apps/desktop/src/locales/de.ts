@@ -351,7 +351,7 @@ const DICTIONARY: Dictionary = {
   "一般": "Mittel",
   "优秀": "Gut",
   "失败": "Fehlgeschlagen",
-  "当前": "Aktiv",
+  "活动": "Aktiv",
   "搜索节点名称 / 服务器 / 协议": "Name, Server oder Protokoll suchen",
   "未知分组": "Unbekannte Gruppe",
   "测试延迟": "Latenz testen",

@@ -3768,7 +3768,8 @@ describe("App", () => {
 
     const row = container.querySelector("[aria-label='节点列表'] tbody tr");
     expect(row?.textContent).toContain("42 ms");
-    expect(row?.textContent).toContain("优秀");
+    expect(row?.querySelector(".latency-good")).not.toBeNull();
+    expect(row?.textContent).not.toContain("优秀");
   });
 
   it("opens dialogs from the menu bar without losing hidden forms", async () => {
