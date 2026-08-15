@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 
 import type { LogEntry, LogLevel, LogSource } from "../session";
+import { IconExport, IconRefresh, IconTrash } from "./Icons";
 
 interface MsgViewProps {
   busy: boolean;
@@ -75,13 +76,16 @@ export function MsgView({
           </select>
         </label>
         <button type="button" className="icon-btn" title={t("刷新日志")} onClick={onRefresh}>
-          {t("刷新日志")}
+          <IconRefresh />
+          <span className="sr-only">{t("刷新日志")}</span>
         </button>
         <button type="button" className="icon-btn" title={t("清空日志")} onClick={onClear}>
-          {t("清空日志")}
+          <IconTrash />
+          <span className="sr-only">{t("清空日志")}</span>
         </button>
         <button type="button" className="icon-btn" disabled={busy} title={t("导出诊断")} onClick={onExport}>
-          {t("导出诊断")}
+          <IconExport />
+          <span className="sr-only">{t("导出诊断")}</span>
         </button>
       </header>
       {visibleLogs.length === 0 ? (

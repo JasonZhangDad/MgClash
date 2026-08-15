@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 
+import { IconClose } from "./Icons";
+
 interface DialogProps {
   ariaLabel: string;
   children: ReactNode;
@@ -36,8 +38,9 @@ export function Dialog({
       >
         <header className="dialog-head">
           <strong>{title}</strong>
-          <button type="button" onClick={onClose}>
-            关闭
+          <button type="button" className="icon-btn" title="关闭" onClick={onClose}>
+            <IconClose />
+            <span className="sr-only">关闭</span>
           </button>
         </header>
         <div className="dialog-body">{children}</div>

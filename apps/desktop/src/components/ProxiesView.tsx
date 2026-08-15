@@ -124,7 +124,7 @@ export function ProxiesView({
                     <td>
                       {node.name}
                       {node.id === activeNodeId ? (
-                        <em className="pill active">{t("当前")}</em>
+                        <em className="tag-active">{t("活动")}</em>
                       ) : null}
                     </td>
                     <td>{node.protocol}</td>

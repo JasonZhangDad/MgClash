@@ -350,7 +350,7 @@ const DICTIONARY: Dictionary = {
   "一般": "Moyen",
   "优秀": "Bon",
   "失败": "Échec",
-  "当前": "Actif",
+  "活动": "Actif",
   "搜索节点名称 / 服务器 / 协议": "Rechercher nom, serveur ou protocole",
   "未知分组": "Groupe inconnu",
   "测试延迟": "Tester la latence",

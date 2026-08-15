@@ -134,7 +134,7 @@ import {
   LAYOUT_KEY,
   latencyQuality,
   noticeWasDismissed,
-  regionFlag,
+
   ROUTE_KIND_LABEL,
   ROUTE_OUTBOUND_LABEL,
   clampColumnWidth,
@@ -185,6 +185,13 @@ import { SortableHeader } from "./components/SortableHeader";
 import { NodeContextMenu } from "./components/NodeContextMenu";
 import { ProxiesView } from "./components/ProxiesView";
 import { Dialog } from "./components/Dialog";
+import {
+  IconBolt,
+  IconEdit,
+  IconExpand,
+  IconMore,
+  IconPlus,
+} from "./components/Icons";
 
 function nodeGroupStrategyBadge(
   strategy: NodeGroupStrategy,
@@ -2188,7 +2195,7 @@ export default function App() {
         <div className={`main-split layout-${layout}`}>
           {(layout !== "tab" || mainTab === "profiles") && (
             <section className="profiles-pane">
-              <div className="profiles-groups">
+              <div className="profiles-chrome">
                 <nav className="group-chips" aria-label={t("节点分组筛选")}>
                   <button
                     type="button"
@@ -2231,7 +2238,8 @@ export default function App() {
                   disabled={busy}
                   onClick={() => setDialog("subscriptions")}
                 >
-                  ✎
+                  <IconEdit />
+                  <span className="sr-only">{t("订阅分组设置")}</span>
                 </button>
                 <button
                   type="button"
@@ -2243,45 +2251,47 @@ export default function App() {
                     setDialog("subscriptions");
                   }}
                 >
-                  +
+                  <IconPlus />
+                  <span className="sr-only">{t("添加")}</span>
                 </button>
-              </div>
-
-              <div className="profiles-toolbar">
-                <input
-                  className="toolbar-search"
-                  aria-label={t("搜索节点名称 / 服务器 / 协议")}
-                  placeholder={t("搜索节点名称 / 服务器 / 协议")}
-                  value={nodeQuery}
-                  onChange={(event) => setNodeQuery(event.target.value)}
-                />
-                <button
-                  type="button"
-                  className="icon-btn"
-                  title={t("自适应列宽")}
-                  onClick={() => setColumnWidths({})}
-                >
-                  {t("自适应列宽")}
-                </button>
-                {testingAllNodes ? (
-                  <button type="button" onClick={onCancelNodeTests}>
-                    {t("取消测速")}
-                  </button>
-                ) : (
+                <div className="profiles-toolbar">
+                  <input
+                    className="toolbar-search"
+                    aria-label={t("搜索节点名称 / 服务器 / 协议")}
+                    placeholder={t("搜索节点名称 / 服务器 / 协议")}
+                    value={nodeQuery}
+                    onChange={(event) => setNodeQuery(event.target.value)}
+                  />
                   <button
                     type="button"
-                    className="primary"
-                    title={t("一键多线程测试延迟和速度")}
-                    disabled={
-                      busy ||
-                      nodeTestInProgress ||
-                      !nodes.some((candidate) => candidate.enabled)
-                    }
-                    onClick={() => void onTestAllNodes()}
+                    className="icon-btn"
+                    title={t("自适应列宽")}
+                    onClick={() => setColumnWidths({})}
                   >
-                    {t("全部测速")}
+                    <IconExpand />
+                    <span className="sr-only">{t("自适应列宽")}</span>
                   </button>
-                )}
+                  {testingAllNodes ? (
+                    <button type="button" onClick={onCancelNodeTests}>
+                      {t("取消测速")}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      title={t("一键多线程测试延迟和速度")}
+                      disabled={
+                        busy ||
+                        nodeTestInProgress ||
+                        !nodes.some((candidate) => candidate.enabled)
+                      }
+                      onClick={() => void onTestAllNodes()}
+                    >
+                      <IconBolt />
+                      <span className="sr-only">{t("全部测速")}</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="node-workspace">
@@ -2340,7 +2350,7 @@ export default function App() {
                         <th>{t("今日下载")}</th>
                         <th>{t("总上传")}</th>
                         <th>{t("总下载")}</th>
-                        <th>{t("操作")}</th>
+                        <th className="node-actions-col" />
                       </tr>
                     </thead>
                     <tbody>
@@ -2418,9 +2428,8 @@ export default function App() {
                                 }
                               >
                                 {selected ? (
-                                  <em className="pill active">{t("当前")}</em>
+                                  <em className="tag-active">{t("活动")}</em>
                                 ) : null}
-                                <span className="flag">{regionFlag(candidate.name)}</span>
                                 {candidate.name}
                                 {!candidate.enabled ? (
                                   <em className="pill">{t("已禁用")}</em>
@@ -2437,20 +2446,25 @@ export default function App() {
                                 : (nodeGroupNames.get(candidate.groupId) ?? t("未知分组"))
                             }</td>
                             <td>
-                              <span className="latency">
+                              <span
+                                className={
+                                  quality === null
+                                    ? "latency"
+                                    : `latency latency-${quality}`
+                                }
+                                aria-label={
+                                  quality === "good"
+                                    ? t("优秀")
+                                    : quality === "ok"
+                                      ? t("一般")
+                                      : quality === "bad"
+                                        ? t("较差")
+                                        : quality === "fail"
+                                          ? t("失败")
+                                          : undefined
+                                }
+                              >
                                 {latency}
-                                {quality === "good" ? (
-                                  <em className="pill good">{t("优秀")}</em>
-                                ) : null}
-                                {quality === "ok" ? (
-                                  <em className="pill ok">{t("一般")}</em>
-                                ) : null}
-                                {quality === "bad" ? (
-                                  <em className="pill bad">{t("较差")}</em>
-                                ) : null}
-                                {quality === "fail" && latency !== "失败" ? (
-                                  <em className="pill fail">{t("失败")}</em>
-                                ) : null}
                               </span>
                             </td>
                             <td>
@@ -2489,7 +2503,7 @@ export default function App() {
                                 disabled={busy || nodeTestInProgress}
                                 onClick={(event) => openNodeMenu(event, candidate.id)}
                               >
-                                ⋯
+                                <IconMore />
                               </button>
                             </td>
                           </tr>
