@@ -493,7 +493,7 @@ fn handle_tray_action(app: &AppHandle, action: TrayAction) {
         return;
     }
     if action == TrayAction::Quit {
-        request_app_exit(app);
+        start_app_exit(app);
         return;
     }
 
@@ -542,7 +542,12 @@ fn handle_background_tray_action(app: &AppHandle, action: TrayAction) {
     }
 }
 
-fn request_app_exit(app: &AppHandle) {
+#[tauri::command]
+fn request_app_exit(app: AppHandle) {
+    start_app_exit(&app);
+}
+
+fn start_app_exit(app: &AppHandle) {
     let state = app.state::<AppState>();
     if state.exit_in_progress.swap(true, Ordering::AcqRel) {
         return;
@@ -2179,7 +2184,7 @@ fn handle_run_event(app: &AppHandle, event: tauri::RunEvent) {
         let state = app.state::<AppState>();
         if !state.allow_exit.load(Ordering::Acquire) {
             api.prevent_exit();
-            request_app_exit(app);
+            start_app_exit(app);
         }
     }
 }
@@ -2495,7 +2500,8 @@ pub fn run() {
             subscription_update,
             subscription_delete,
             subscription_refresh,
-            subscription_refresh_all
+            subscription_refresh_all,
+            request_app_exit
         ])
         .build(tauri::generate_context!())
         .expect("failed to build MgClash desktop shell")

@@ -61,6 +61,7 @@ import {
   moveNode,
   reorderNodes,
   recoverSystemProxy,
+  requestAppExit,
   selectNode,
   switchNode,
   setDnsSettings,
@@ -2088,7 +2089,9 @@ export default function App() {
           );
         }}
         onImportProfile={() => void onImportProfile()}
-        onExit={() => window.close()}
+        onExit={() => {
+          void requestAppExit();
+        }}
         layout={layout}
         onLayout={setLayout}
         theme={theme}

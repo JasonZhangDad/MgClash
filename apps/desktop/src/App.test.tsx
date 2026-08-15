@@ -74,6 +74,7 @@ const updateGeoAssetsMock = vi.hoisted(() => vi.fn());
 const closeConnectionMock = vi.hoisted(() => vi.fn());
 const closeConnectionsMock = vi.hoisted(() => vi.fn());
 const clearGlobalHotkeysMock = vi.hoisted(() => vi.fn());
+const requestAppExitMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./globalHotkeys", () => ({
   clearGlobalHotkeys: clearGlobalHotkeysMock,
@@ -106,6 +107,7 @@ vi.mock("./session", async () => {
     loadAppSettings: loadAppSettingsMock,
     previewCoreConfig: previewCoreConfigMock,
     loadLogs: loadLogsMock,
+    requestAppExit: requestAppExitMock,
     saveAppSettings: saveAppSettingsMock,
     disconnectSession: disconnectSessionMock,
     dismissSystemProxyRecovery: dismissSystemProxyRecoveryMock,
@@ -312,6 +314,8 @@ describe("App", () => {
     recoverSystemProxyMock.mockReset();
     dismissSystemProxyRecoveryMock.mockReset();
     loadLogsMock.mockReset();
+    requestAppExitMock.mockReset();
+    requestAppExitMock.mockResolvedValue(undefined);
     loadAppSettingsMock.mockReset();
     saveAppSettingsMock.mockReset();
     clearLogsMock.mockReset();
@@ -1121,6 +1125,23 @@ describe("App", () => {
 
     expect(clearLogsMock).toHaveBeenCalled();
     expect(container.textContent).toContain("暂无日志");
+  });
+
+  it("filters the message list from the search box", async () => {
+    loadLogsMock.mockResolvedValue(LOG_ENTRIES);
+    await render();
+
+    const filter = container.querySelector<HTMLInputElement>(
+      "[aria-label='过滤器']",
+    );
+    if (!filter) {
+      throw new Error("the message filter is missing");
+    }
+    await act(async () => typeInput("outbound", filter));
+
+    const list = container.querySelector("[aria-label='日志列表']");
+    expect(list?.textContent).toContain("outbound dial failed");
+    expect(list?.textContent).not.toContain("session connected");
   });
 
   it("clears traffic statistics from the settings menu", async () => {
@@ -3654,6 +3675,17 @@ describe("App", () => {
     expect(container.querySelector("[aria-label='节点列表']")).not.toBeNull();
     expect(container.querySelector(".group-chips")).not.toBeNull();
     expect(container.querySelector("[aria-label='节点详情']")).toBeNull();
+  });
+
+  it("quits through the same exit command as the tray, not window.close", async () => {
+    const close = vi.spyOn(window, "close").mockImplementation(() => {});
+    await render();
+
+    await act(async () => button("退出").click());
+
+    expect(requestAppExitMock).toHaveBeenCalledTimes(1);
+    expect(close).not.toHaveBeenCalled();
+    close.mockRestore();
   });
 
   it("imports a share link from the clipboard via the server menu", async () => {

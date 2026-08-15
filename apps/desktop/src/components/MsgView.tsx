@@ -1,3 +1,5 @@
+import { useMemo, useState } from "react";
+
 import type { LogEntry, LogLevel, LogSource } from "../session";
 
 interface MsgViewProps {
@@ -25,6 +27,15 @@ export function MsgView({
   onClear,
   onExport,
 }: MsgViewProps) {
+  const [filter, setFilter] = useState("");
+  const visibleLogs = useMemo(() => {
+    const query = filter.trim().toLowerCase();
+    if (query === "") {
+      return logs;
+    }
+    return logs.filter((entry) => entry.message.toLowerCase().includes(query));
+  }, [filter, logs]);
+
   return (
     <section className="msg-view" aria-label={t("消息窗口")}>
       <header className="msg-toolbar">
@@ -32,6 +43,8 @@ export function MsgView({
           className="toolbar-search"
           aria-label={t("过滤器")}
           placeholder={t("过滤器")}
+          value={filter}
+          onChange={(event) => setFilter(event.target.value)}
         />
         <label>
           {t("级别")}
@@ -71,11 +84,11 @@ export function MsgView({
           {t("导出诊断")}
         </button>
       </header>
-      {logs.length === 0 ? (
+      {visibleLogs.length === 0 ? (
         <p className="hint">{t("暂无日志")}</p>
       ) : (
         <ul className="log-list" aria-label={t("日志列表")}>
-          {logs.map((entry, index) => (
+          {visibleLogs.map((entry, index) => (
             <li
               key={`${entry.timestampMs}-${index}`}
               className={`log-entry log-${entry.level}`}
