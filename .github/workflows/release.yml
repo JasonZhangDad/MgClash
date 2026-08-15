@@ -71,7 +71,9 @@ jobs:
             librsvg2-dev \
             libssl-dev \
             libwebkit2gtk-4.1-dev \
-            libxdo-dev
+            libxdo-dev \
+            libfuse2 \
+            rpm
       - name: Install frontend dependencies
         working-directory: apps/desktop
         run: npm ci
@@ -241,6 +243,10 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
             dist/*.exe
+            dist/*.dmg
+            dist/*.deb
+            dist/*.rpm
+            dist/*.AppImage
             dist/*.sha256
 
   publish:

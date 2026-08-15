@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "resources": {
+      "../../../target/release-resources/sing-box": "sing-box",
+      "../../../target/release-resources/LICENSE-sing-box": "LICENSE-sing-box"
+    }
+  }
+}
