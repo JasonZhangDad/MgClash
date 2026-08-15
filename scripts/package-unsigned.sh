@@ -211,12 +211,17 @@ else
     # `/usr/lib/<name>/`, and a package that puts it anywhere else installs an
     # app that cannot find its own Core. Failing here beats shipping that.
     if command -v dpkg-deb >/dev/null 2>&1; then
+      # Captured before matching rather than piped into grep: `grep -q` closes
+      # the pipe on its first match, dpkg-deb dies of SIGPIPE, and `pipefail`
+      # then reports the whole pipeline as failed — so a package that *does*
+      # carry the Core fails the check precisely because it passes it.
+      deb_listing="$(dpkg-deb -c "${deb_source}")"
       # The leading `./` is optional: dpkg-deb prints it in some versions and
       # not in others, and requiring it turned a correct package into a build
       # failure once already.
-      if ! dpkg-deb -c "${deb_source}" | grep -qE '(\./)?usr/lib/[^/]+/sing-box$'; then
+      if ! grep -qE '(\./)?usr/lib/[^/]+/sing-box$' <<<"${deb_listing}"; then
         echo "the deb does not carry sing-box under /usr/lib/<name>/" >&2
-        dpkg-deb -c "${deb_source}" | grep -i "sing-box" >&2 || true
+        grep -i "sing-box" <<<"${deb_listing}" >&2 || true
         exit 1
       fi
     else
