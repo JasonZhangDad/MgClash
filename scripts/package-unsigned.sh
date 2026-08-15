@@ -211,7 +211,10 @@ else
     # `/usr/lib/<name>/`, and a package that puts it anywhere else installs an
     # app that cannot find its own Core. Failing here beats shipping that.
     if command -v dpkg-deb >/dev/null 2>&1; then
-      if ! dpkg-deb -c "${deb_source}" | grep -qE '\./usr/lib/[^/]+/sing-box$'; then
+      # The leading `./` is optional: dpkg-deb prints it in some versions and
+      # not in others, and requiring it turned a correct package into a build
+      # failure once already.
+      if ! dpkg-deb -c "${deb_source}" | grep -qE '(\./)?usr/lib/[^/]+/sing-box$'; then
         echo "the deb does not carry sing-box under /usr/lib/<name>/" >&2
         dpkg-deb -c "${deb_source}" | grep -i "sing-box" >&2 || true
         exit 1
