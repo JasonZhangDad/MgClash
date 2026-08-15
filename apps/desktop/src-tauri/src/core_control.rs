@@ -619,12 +619,18 @@ impl LazySingBoxError {
 #[must_use]
 pub fn bundled_core_in(executable_directory: &Path) -> Option<PathBuf> {
     let file_name = format!("{BUNDLED_CORE_STEM}{}", std::env::consts::EXE_SUFFIX);
+    let linux_resources = executable_directory.join("..").join("lib");
     [
         executable_directory.join(&file_name),
         executable_directory
             .join("..")
             .join("Resources")
             .join(&file_name),
+        // A Linux package splits the two: `/usr/bin/<exe>` and
+        // `/usr/lib/<name>/`. Both spellings the bundler may use are tried —
+        // the app has to work whichever one produced the package it is in.
+        linux_resources.join("MgClash").join(&file_name),
+        linux_resources.join("mgclash").join(&file_name),
     ]
     .into_iter()
     .find(|candidate| candidate.is_file())

@@ -355,3 +355,24 @@ fn nothing_is_reclaimed_when_no_elevated_core_was_left_behind() {
     // not ask the user about a Core that is not there.
     assert_eq!(control.reclaim_elevated_core(), None);
 }
+
+#[test]
+fn finds_a_core_in_the_linux_package_resources_directory() {
+    // A deb or rpm puts the executable in /usr/bin and its resources in
+    // /usr/lib/<name>/, so neither "beside the executable" nor the macOS
+    // layout finds the Core. Both spellings Tauri may use are tried, because
+    // the app has to work whichever one the bundler picked.
+    for name in ["MgClash", "mgclash"] {
+        let layout = Layout::new(&format!("linux-{name}"));
+        layout.write(&["..", "lib", name, &core_file_name()]);
+
+        // Compared as "a Core was found and it is really there" rather than by
+        // path: macOS is case-insensitive, so the two spellings are the same
+        // directory here and the candidate that matches first is arbitrary.
+        let found = bundled_core_in(layout.path());
+        assert!(
+            found.as_deref().is_some_and(Path::is_file),
+            "{name}: {found:?}"
+        );
+    }
+}

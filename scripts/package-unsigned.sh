@@ -111,6 +111,24 @@ if [[ "${os}" == "macos" ]]; then
   cp "${scratch}/core/LICENSE-sing-box" "${app}/Contents/Resources/"
   archive="${output_directory}/${name}.tar.gz"
   tar -czf "${archive}" -C "${bundle_directory}" "MgClash.app"
+
+  # Built here rather than by `tauri build --bundles dmg`: that would rebuild
+  # the .app and lose the Core copied into it above. hdiutil needs no signing
+  # identity, and the /Applications symlink is what makes a .dmg an installer
+  # rather than a folder.
+  disk_image_root="${scratch}/dmg"
+  mkdir -p "${disk_image_root}"
+  cp -R "${app}" "${disk_image_root}/"
+  ln -s /Applications "${disk_image_root}/Applications"
+  disk_image="${output_directory}/${name}.dmg"
+  rm -f "${disk_image}"
+  hdiutil create \
+    -volname "MgClash" \
+    -srcfolder "${disk_image_root}" \
+    -ov -format UDZO \
+    -quiet \
+    "${disk_image}"
+  artifacts+=("${disk_image}")
 else
   # Windows and Linux ship the portable executable: Tauri embeds the frontend,
   # so the binary is self-contained.
@@ -126,7 +144,12 @@ else
     binary="${repository}/target/release/MgClash.exe"
     [[ -f "${binary}" ]] || binary="${repository}/target/release/magies-desktop.exe"
   else
-    npm run tauri -- build --no-bundle
+    release_resources="${repository}/target/release-resources"
+    mkdir -p "${release_resources}"
+    cp "${scratch}/core/sing-box" "${release_resources}/"
+    cp "${scratch}/core/LICENSE-sing-box" "${release_resources}/"
+    npm run tauri -- build --bundles deb,rpm,appimage \
+      --config src-tauri/tauri.linux-release.conf.json
     binary="${repository}/target/release/MgClash"
     [[ -f "${binary}" ]] || binary="${repository}/target/release/magies-desktop"
   fi
@@ -167,7 +190,45 @@ else
     installer="${output_directory}/mgclash-${version}-windows-${cpu}-unsigned-setup.exe"
     cp "${installer_source}" "${installer}"
     artifacts+=("${installer}")
+    # The portable executable on its own, which is what a user who does not
+    # want an installer actually downloads.
+    portable="${output_directory}/mgclash-${version}-windows-${cpu}-unsigned-portable.exe"
+    cp "${binary}" "${portable}"
+    artifacts+=("${portable}")
   else
+    bundle_root="${repository}/target/release/bundle"
+    deb_source="$(find "${bundle_root}/deb" -name '*.deb' -type f | head -n 1)"
+    rpm_source="$(find "${bundle_root}/rpm" -name '*.rpm' -type f | head -n 1)"
+    appimage_source="$(find "${bundle_root}/appimage" -name '*.AppImage' -type f | head -n 1)"
+    for source in "${deb_source}" "${rpm_source}" "${appimage_source}"; do
+      [[ -n "${source}" && -f "${source}" ]] || {
+        echo "a Linux package is missing from ${bundle_root}" >&2
+        exit 1
+      }
+    done
+
+    # Checked rather than assumed: the app looks for its bundled Core under
+    # `/usr/lib/<name>/`, and a package that puts it anywhere else installs an
+    # app that cannot find its own Core. Failing here beats shipping that.
+    if command -v dpkg-deb >/dev/null 2>&1; then
+      if ! dpkg-deb -c "${deb_source}" | grep -qE '\./usr/lib/[^/]+/sing-box$'; then
+        echo "the deb does not carry sing-box under /usr/lib/<name>/" >&2
+        dpkg-deb -c "${deb_source}" | grep -i "sing-box" >&2 || true
+        exit 1
+      fi
+    else
+      echo "no dpkg-deb: the deb's Core layout was not checked" >&2
+    fi
+
+    cp "${deb_source}" "${output_directory}/${name}.deb"
+    cp "${rpm_source}" "${output_directory}/${name}.rpm"
+    cp "${appimage_source}" "${output_directory}/${name}.AppImage"
+    artifacts+=(
+      "${output_directory}/${name}.deb"
+      "${output_directory}/${name}.rpm"
+      "${output_directory}/${name}.AppImage"
+    )
+
     archive="${output_directory}/${name}.tar.gz"
     tar -czf "${archive}" -C "${staging}" "${name}"
   fi

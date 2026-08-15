@@ -17,9 +17,15 @@ page and at first launch. This ADR records how that is produced.
 
 | Platform | Artifact | Why |
 | --- | --- | --- |
-| macOS | `.app` inside a `.tar.gz` | the `.app` layout is what Gatekeeper prompts about; a bare Mach-O is not a usable desktop artifact |
-| Windows | portable `.zip` and NSIS installer | supports both portable and installed use without Authenticode |
-| Linux | `.tar.gz` | same, and no signed repository is offered |
+| macOS | `.app` inside a `.tar.gz`, and a `.dmg` | the `.app` layout is what Gatekeeper prompts about; a bare Mach-O is not a usable desktop artifact. The `.dmg` adds the drag-to-Applications install every macOS user expects — it grants no integrity the archive lacks, since neither is signed |
+| Windows | portable `.zip`, a bare portable `.exe`, and an NSIS installer | supports installed and portable use without Authenticode; the bare `.exe` is what someone who wants no archive downloads |
+| Linux | `.tar.gz`, `.deb`, `.rpm`, and `.AppImage` | PRD V1.1 section 5 planned the packaged formats; none is repository- or GPG-signed, so they are convenience, not provenance |
+
+A packaged Linux install splits the executable from its resources
+(`/usr/bin/<exe>` and `/usr/lib/<name>/`), which the tarball does not. The app
+looks in both places, and `package-unsigned.sh` fails the build when the built
+`.deb` does not carry the Core where the app will look for it — an installer
+whose app cannot find its own Core is worse than no installer.
 
 The name is `mgclash-<version>-<os>-<cpu>-unsigned.<ext>`. Every artifact ships a
 `.sha256` sidecar: with no signature, a published digest is the only integrity

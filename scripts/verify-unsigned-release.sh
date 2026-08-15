@@ -25,10 +25,16 @@ fi
 
 artifacts=(
   "mgclash-${version}-macos-x86_64-unsigned.tar.gz"
+  "mgclash-${version}-macos-x86_64-unsigned.dmg"
   "mgclash-${version}-macos-aarch64-unsigned.tar.gz"
+  "mgclash-${version}-macos-aarch64-unsigned.dmg"
   "mgclash-${version}-windows-x86_64-unsigned.zip"
   "mgclash-${version}-windows-x86_64-unsigned-setup.exe"
+  "mgclash-${version}-windows-x86_64-unsigned-portable.exe"
   "mgclash-${version}-linux-x86_64-unsigned.tar.gz"
+  "mgclash-${version}-linux-x86_64-unsigned.deb"
+  "mgclash-${version}-linux-x86_64-unsigned.rpm"
+  "mgclash-${version}-linux-x86_64-unsigned.AppImage"
 )
 
 checksums="$(mktemp "${release_directory}/.SHA256SUMS.XXXXXX")"
