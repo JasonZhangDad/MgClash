@@ -2354,7 +2354,7 @@ dependencies = [
 
 [[package]]
 name = "magies-core-runtime"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "magies-platform",
  "sha2",
@@ -2363,7 +2363,7 @@ dependencies = [
 
 [[package]]
 name = "magies-desktop"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "chrono",
  "flate2",
@@ -2394,7 +2394,7 @@ dependencies = [
 
 [[package]]
 name = "magies-domain"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2404,7 +2404,7 @@ dependencies = [
 
 [[package]]
 name = "magies-platform"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "gio",
  "serde",
@@ -2413,7 +2413,7 @@ dependencies = [
 
 [[package]]
 name = "magies-profiles"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "base64 0.22.1",
  "image",
@@ -2440,7 +2440,7 @@ dependencies = [
 
 [[package]]
 name = "magies-routing"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "ipnet",
  "serde_json",
@@ -2450,7 +2450,7 @@ dependencies = [
 
 [[package]]
 name = "magies-session"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "magies-core-runtime",
  "magies-domain",
@@ -2465,7 +2465,7 @@ dependencies = [
 
 [[package]]
 name = "magies-storage"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "keyring",
  "magies-domain",
