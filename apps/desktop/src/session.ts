@@ -434,6 +434,11 @@ export function clearLogs(): Promise<void> {
   return invoke<void>("session_clear_logs");
 }
 
+/** Same path as tray Quit: disconnect then exit, not window.close. */
+export function requestAppExit(): Promise<void> {
+  return invoke<void>("request_app_exit");
+}
+
 export function importNodes(content: string): Promise<BulkImportReport> {
   return invoke<BulkImportReport>("session_import_nodes", { content });
 }

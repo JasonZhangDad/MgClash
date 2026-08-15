@@ -53,6 +53,22 @@ function usedKeys(): string[] {
     // above cannot see. The other entries happen to appear literally elsewhere
     // too; relying on that coincidence is how one of them ends up untranslated.
     ...Object.values(ROUTE_KIND_LABEL),
+    // Column titles passed to SortableHeader as `label`, then translated
+    // there as `t(label)` — the regex above cannot see the string.
+    "传输协议",
+    "订阅分组",
+    "别名",
+    "添加 [VMess]",
+    "添加 [VLESS]",
+    "添加 [Shadowsocks]",
+    "添加 [Trojan]",
+    "添加 [Hysteria2]",
+    "添加 [WireGuard]",
+    "添加 [SOCKS]",
+    "添加 [HTTP]",
+    "添加 [TUIC]",
+    "添加 [AnyTLS]",
+    "添加 [Naive]",
   ];
 }
 

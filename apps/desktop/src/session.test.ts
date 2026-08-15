@@ -53,6 +53,7 @@ import {
   moveNode,
   reorderNodes,
   recoverSystemProxy,
+  requestAppExit,
   selectNode,
   setNodeEnabled,
   setNodeGroup,
@@ -464,6 +465,7 @@ describe("the remaining command wrappers", () => {
     ["importPreferences", () => importPreferences("/tmp/p.json"), "import_preferences", { path: "/tmp/p.json" }],
     ["exportProfile", () => exportProfile(), "export_profile"],
     ["importProfile", () => importProfile("/tmp/p.json"), "import_profile", { path: "/tmp/p.json" }],
+    ["requestAppExit", () => requestAppExit(), "request_app_exit"],
   ];
 
   it.each(cases)("%s calls its command", async (_name, call, command, args) => {

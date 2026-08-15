@@ -473,13 +473,27 @@ fn refresh_tray(app: &AppHandle) -> Result<(), CommandError> {
         })
 }
 
+fn set_system_proxy_mode_from_tray(
+    app: &AppHandle,
+    mode: &str,
+) -> Result<(), CommandError> {
+    let parsed = crate::app_settings::parse_system_proxy_mode(mode).ok_or(CommandError {
+        code: "invalid_system_proxy_mode",
+        message: format!("unknown system proxy mode: {mode}"),
+    })?;
+    let state = app.state::<AppState>();
+    let mut settings = lock(&state.settings).clone();
+    settings.system_proxy_mode = parsed;
+    set_app_settings(app.clone(), settings, state).map(|_| ())
+}
+
 fn handle_tray_action(app: &AppHandle, action: TrayAction) {
     if action == TrayAction::Open {
         show_main_window(app);
         return;
     }
     if action == TrayAction::Quit {
-        request_app_exit(app);
+        start_app_exit(app);
         return;
     }
 
@@ -497,6 +511,7 @@ fn handle_background_tray_action(app: &AppHandle, action: TrayAction) {
             .set_routing_mode(mode)
             .map(|_| ())
             .map_err(|error| command_error(&error)),
+        TrayAction::SetSystemProxyMode(mode) => set_system_proxy_mode_from_tray(app, mode),
         TrayAction::SelectNode(id) => {
             let state = app.state::<AppState>();
             let mut service = state.service();
@@ -527,7 +542,12 @@ fn handle_background_tray_action(app: &AppHandle, action: TrayAction) {
     }
 }
 
-fn request_app_exit(app: &AppHandle) {
+#[tauri::command]
+fn request_app_exit(app: AppHandle) {
+    start_app_exit(&app);
+}
+
+fn start_app_exit(app: &AppHandle) {
     let state = app.state::<AppState>();
     if state.exit_in_progress.swap(true, Ordering::AcqRel) {
         return;
@@ -2164,7 +2184,7 @@ fn handle_run_event(app: &AppHandle, event: tauri::RunEvent) {
         let state = app.state::<AppState>();
         if !state.allow_exit.load(Ordering::Acquire) {
             api.prevent_exit();
-            request_app_exit(app);
+            start_app_exit(app);
         }
     }
 }
@@ -2480,7 +2500,8 @@ pub fn run() {
             subscription_update,
             subscription_delete,
             subscription_refresh,
-            subscription_refresh_all
+            subscription_refresh_all,
+            request_app_exit
         ])
         .build(tauri::generate_context!())
         .expect("failed to build MgClash desktop shell")

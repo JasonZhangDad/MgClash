@@ -61,6 +61,7 @@ import {
   moveNode,
   reorderNodes,
   recoverSystemProxy,
+  requestAppExit,
   selectNode,
   switchNode,
   setDnsSettings,
@@ -148,12 +149,14 @@ import {
   groupTraffic,
   processTraffic,
   runtimeOrderedRoute,
+  savedFontSize,
   savedLayout,
   savedTheme,
   savedUrlTestAddress,
   sortNodeIdsByLatency,
   lowestLatencyNodeId,
   matchesHotkey,
+  FONT_SIZE_KEY,
   THEME_KEY,
   TRAFFIC_REFRESH_INTERVAL_MS,
   CONNECTIONS_REFRESH_INTERVAL_MS,
@@ -163,6 +166,7 @@ import {
   UNSIGNED_NOTICE_KEY,
   URL_TEST_ADDRESS_KEY,
   type DialogId,
+  type FontSize,
   type MainLayout,
   type MainTab,
   type NodeMenuPosition,
@@ -279,10 +283,16 @@ export default function App() {
   const [createForm, setCreateForm] =
     useState<ManualNodeForm>(emptyManualNodeForm);
   const [dialog, setDialog] = useState<DialogId>(null);
+  const [settingsTab, setSettingsTab] = useState<
+    "core" | "ui" | "tun" | "coreType"
+  >("core");
+  const [dnsTab, setDnsTab] = useState<"basic" | "advanced">("basic");
   const [theme, setTheme] = useState<ThemeMode>(() => savedTheme());
+  const [fontSize, setFontSize] = useState<FontSize>(() => savedFontSize());
   const [layout, setLayout] = useState<MainLayout>(() => savedLayout());
   const [msgVisible, setMsgVisible] = useState(true);
   const [mainTab, setMainTab] = useState<MainTab>("profiles");
+  const [sideTab, setSideTab] = useState<Exclude<MainTab, "profiles">>("msg");
   const [connections, setConnections] = useState<ConnectionSnapshot | null>(
     null,
   );
@@ -336,12 +346,14 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
+    document.documentElement.style.fontSize = `${fontSize}px`;
     try {
       localStorage.setItem(THEME_KEY, theme);
+      localStorage.setItem(FONT_SIZE_KEY, String(fontSize));
     } catch {
       // The theme still applies to this launch even if it cannot be stored.
     }
-  }, [theme]);
+  }, [theme, fontSize]);
 
   useEffect(() => {
     try {
@@ -477,7 +489,7 @@ export default function App() {
   // it from behind the node table.
   useEffect(() => {
     if (
-      mainTab !== "connections" ||
+      (mainTab !== "connections" && sideTab !== "connections") ||
       status?.connected !== true ||
       status.core === "xray"
     ) {
@@ -503,7 +515,7 @@ export default function App() {
       active = false;
       clearInterval(timer);
     };
-  }, [mainTab, status?.connected, status?.core]);
+  }, [mainTab, sideTab, status?.connected, status?.core]);
 
   const run = useCallback(
     async (command: () => Promise<SessionStatus | void>) => {
@@ -890,6 +902,19 @@ export default function App() {
     },
     [runBulkImport],
   );
+
+  const onImportClipboard = useCallback(async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text.trim() === "") {
+        setError("剪贴板为空");
+        return;
+      }
+      await runBulkImport(text);
+    } catch (failure: unknown) {
+      setError(describeFailure(failure));
+    }
+  }, [runBulkImport]);
 
   const updateCreateForm = useCallback(
     (changes: Partial<ManualNodeForm>) => {
@@ -1493,6 +1518,29 @@ export default function App() {
     [nodes, status?.node?.id],
   );
 
+  const onActivateNode = useCallback(
+    async (id: string) => {
+      setBusy(true);
+      setError(null);
+      try {
+        if (status?.connected === true) {
+          setStatus(await switchNode(id));
+        } else {
+          if (status?.node?.id !== id) {
+            await selectNode(id);
+          }
+          setStatus(await connectSession());
+        }
+        setNodes(await loadNodes());
+      } catch (failure: unknown) {
+        setError(describeFailure(failure));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [status?.connected, status?.node?.id],
+  );
+
   const onExportPreferences = useCallback(async () => {
     setBusy(true);
     setError(null);
@@ -2000,28 +2048,39 @@ export default function App() {
     <main className="app-shell" data-layout={layout}>
       <MenuBar
         busy={busy}
-        connected={connected}
         t={t}
         onAddServer={(protocol) => openCreateForm(protocol)}
         onOpenImport={() => setDialog("import")}
-        onOpenCreate={() => openCreateForm()}
+        onImportClipboard={() => void onImportClipboard()}
         onOpenSubscriptions={() => setDialog("subscriptions")}
         onRefreshSubscriptions={() => void onRefreshAllSubscriptions()}
+        onRefreshSubscriptionsViaProxy={() => void onRefreshAllSubscriptions()}
+        onRefreshCurrentSubscription={() => {
+          const groupName =
+            nodeGroupFilter === "all" || nodeGroupFilter === "ungrouped"
+              ? null
+              : (nodeGroups.find((group) => group.id === nodeGroupFilter)?.name ??
+                null);
+          const current =
+            subscriptions.find((item) => item.name === groupName) ??
+            subscriptions.find((item) => item.enabled) ??
+            subscriptions[0];
+          if (current !== undefined) {
+            void onRefreshSubscription(current.id);
+          }
+        }}
         onOpenSettings={() => setDialog("settings")}
         onOpenRouting={() => void onOpenRouting()}
         onOpenDns={() => setDialog("dns")}
+        onOpenHotkeys={() => setDialog("hotkeys")}
         onOpenGeo={() => void onOpenGeo()}
         onCheckUpdate={() => void onCheckUpdate()}
         onCheckCoreUpdate={() => void onCheckCoreUpdate()}
         onOpenAbout={() => setDialog("about")}
         onReload={() => void onReload()}
         onClearTraffic={() => void onClearTraffic()}
-        onExportAllLinks={() =>
-          void onExportNodeLinks(nodes.map((candidate) => candidate.id))
-        }
         onExportPreferences={() => void onExportPreferences()}
-        onImportPreferences={() => void onImportPreferences()}
-        onExportProfile={() => void onExportProfile()}
+        onExportProfile={() => setDialog("backup")}
         onViewConfig={() => {
           setDialog("config");
           setCoreConfig("");
@@ -2030,18 +2089,20 @@ export default function App() {
           );
         }}
         onImportProfile={() => void onImportProfile()}
-        onPreviousNode={() => void onStepNode(-1)}
-        onNextNode={() => void onStepNode(1)}
-        onConnect={() => void run(connectSession)}
-        onDisconnect={() => void run(disconnectSession)}
-        canConnect={node !== null && systemProxyStartup === "clean"}
-        canStepNode={nodes.filter((candidate) => candidate.enabled).length >= 2}
+        onExit={() => {
+          void requestAppExit();
+        }}
         layout={layout}
         onLayout={setLayout}
         theme={theme}
         onTheme={setTheme}
-        msgVisible={msgVisible}
-        onToggleMsg={() => setMsgVisible((current) => !current)}
+        fontSize={fontSize}
+        onFontSize={setFontSize}
+        locale={locale}
+        onLocale={(next) => {
+          setLocale(next);
+          void onChangeSettings({ locale: next });
+        }}
       />
 
       <div className="workspace">
@@ -2125,44 +2186,66 @@ export default function App() {
         )}
 
         <div className={`main-split layout-${layout}`}>
-          {mainTab === "profiles" &&
-            (layout !== "tab" || mainTab === "profiles") && (
+          {(layout !== "tab" || mainTab === "profiles") && (
             <section className="profiles-pane">
-              <nav className="group-rail" aria-label={t("节点分组筛选")}>
-                <button
-                  type="button"
-                  className={nodeGroupFilter === "all" ? "active" : undefined}
-                  onClick={() => setNodeGroupFilter("all")}
-                >
-                  {t("全部")}
-                </button>
-                <button
-                  type="button"
-                  className={
-                    nodeGroupFilter === "ungrouped" ? "active" : undefined
-                  }
-                  onClick={() => setNodeGroupFilter("ungrouped")}
-                >
-                  {t("未分组")}
-                </button>
-                {nodeGroups.map((group) => (
+              <div className="profiles-groups">
+                <nav className="group-chips" aria-label={t("节点分组筛选")}>
                   <button
-                    key={group.id}
+                    type="button"
+                    className={nodeGroupFilter === "all" ? "active" : undefined}
+                    onClick={() => setNodeGroupFilter("all")}
+                  >
+                    {t("全部")}
+                  </button>
+                  <button
                     type="button"
                     className={
-                      nodeGroupFilter === group.id ? "active" : undefined
+                      nodeGroupFilter === "ungrouped" ? "active" : undefined
                     }
-                    onClick={() => setNodeGroupFilter(group.id)}
+                    onClick={() => setNodeGroupFilter("ungrouped")}
                   >
-                    {(() => {
-                      const badge = nodeGroupStrategyBadge(group.strategy, t);
-                      return badge === ""
-                        ? group.name
-                        : `${group.name} · ${badge}`;
-                    })()}
+                    {t("未分组")}
                   </button>
-                ))}
-              </nav>
+                  {nodeGroups.map((group) => (
+                    <button
+                      key={group.id}
+                      type="button"
+                      className={
+                        nodeGroupFilter === group.id ? "active" : undefined
+                      }
+                      onClick={() => setNodeGroupFilter(group.id)}
+                    >
+                      {(() => {
+                        const badge = nodeGroupStrategyBadge(group.strategy, t);
+                        return badge === ""
+                          ? group.name
+                          : `${group.name} · ${badge}`;
+                      })()}
+                    </button>
+                  ))}
+                </nav>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  title={t("订阅分组设置")}
+                  disabled={busy}
+                  onClick={() => setDialog("subscriptions")}
+                >
+                  ✎
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  title={t("添加")}
+                  disabled={busy}
+                  onClick={() => {
+                    resetSubscriptionForm();
+                    setDialog("subscriptions");
+                  }}
+                >
+                  +
+                </button>
+              </div>
 
               <div className="profiles-toolbar">
                 <input
@@ -2172,46 +2255,14 @@ export default function App() {
                   value={nodeQuery}
                   onChange={(event) => setNodeQuery(event.target.value)}
                 />
-                <div className="url-test">
-                  <label>
-                    {t("URL 测试地址")}
-                    <input
-                      aria-label={t("URL 测试地址")}
-                      value={urlTestAddress}
-                      disabled={busy || nodeTestInProgress}
-                      onChange={(event) => setUrlTestAddress(event.target.value)}
-                      onBlur={() => {
-                        const address =
-                          urlTestAddress.trim() || DEFAULT_URL_TEST_ADDRESS;
-                        setUrlTestAddress(address);
-                        if (
-                          settings !== null &&
-                          address !== settings.urlTestAddress
-                        ) {
-                          void onChangeSettings({ urlTestAddress: address });
-                        }
-                      }}
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    disabled={
-                      busy || nodeTestInProgress || !connected || node === null
-                    }
-                    onClick={() => void onTestUrl()}
-                  >
-                    {t("URL 测试")}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={
-                      busy || nodeTestInProgress || !connected || node === null
-                    }
-                    onClick={() => void onSpeedTest()}
-                  >
-                    {t("下载测速")}
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  title={t("自适应列宽")}
+                  onClick={() => setColumnWidths({})}
+                >
+                  {t("自适应列宽")}
+                </button>
                 {testingAllNodes ? (
                   <button type="button" onClick={onCancelNodeTests}>
                     {t("取消测速")}
@@ -2220,6 +2271,7 @@ export default function App() {
                   <button
                     type="button"
                     className="primary"
+                    title={t("一键多线程测试延迟和速度")}
                     disabled={
                       busy ||
                       nodeTestInProgress ||
@@ -2230,20 +2282,6 @@ export default function App() {
                     {t("全部测速")}
                   </button>
                 )}
-                <button
-                  type="button"
-                  disabled={busy || nodes.length < 2}
-                  onClick={() => void onSortNodesByLatency()}
-                >
-                  {t("按延迟排序")}
-                </button>
-                <button
-                  type="button"
-                  disabled={busy || lowestLatencyNodeId(nodes) === null}
-                  onClick={() => void onSelectLowestLatency()}
-                >
-                  {t("选择最低延迟")}
-                </button>
               </div>
 
               <div className="node-workspace">
@@ -2274,15 +2312,15 @@ export default function App() {
                             }
                           />
                         </th>
-                        <th className="node-index">{t("序号")}</th>
                         {(
                           [
-                            ["名称", "name"],
-                            ["协议", "protocol"],
-                            ["传输", undefined],
+                            ["类型", "protocol"],
+                            ["别名", "name"],
+                            ["地址", "server"],
+                            ["端口", undefined],
+                            ["传输协议", undefined],
                             ["TLS", undefined],
-                            ["分组", undefined],
-                            ["服务器", "server"],
+                            ["订阅分组", undefined],
                             ["延迟", "latency"],
                           ] as [string, NodeSortColumn | undefined][]
                         ).map(([label, column]) => (
@@ -2306,8 +2344,7 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {visibleNodes.map((candidate, rowNumber) => {
-                        const index = nodes.findIndex((node) => node.id === candidate.id);
+                      {visibleNodes.map((candidate) => {
                         const selected = candidate.id === node?.id;
                         const testResult = nodeTests[candidate.id];
                         let latency =
@@ -2359,7 +2396,7 @@ export default function App() {
                                 !nodeTestInProgress &&
                                 candidate.enabled
                               ) {
-                                void run(() => switchNode(candidate.id));
+                                void onActivateNode(candidate.id);
                               }
                             }}
                           >
@@ -2371,7 +2408,7 @@ export default function App() {
                                 onChange={() => toggleCheckedNode(candidate.id)}
                               />
                             </td>
-                            <td className="node-index">{rowNumber + 1}</td>
+                            <td>{candidate.protocol}</td>
                             <td>
                               <span
                                 className={
@@ -2380,25 +2417,25 @@ export default function App() {
                                     : "node-name node-disabled"
                                 }
                               >
-                                <span className="flag">{regionFlag(candidate.name)}</span>
-                                {candidate.name}
                                 {selected ? (
                                   <em className="pill active">{t("当前")}</em>
                                 ) : null}
+                                <span className="flag">{regionFlag(candidate.name)}</span>
+                                {candidate.name}
                                 {!candidate.enabled ? (
                                   <em className="pill">{t("已禁用")}</em>
                                 ) : null}
                               </span>
                             </td>
-                            <td>{candidate.protocol}</td>
+                            <td>{candidate.server}</td>
+                            <td>{candidate.port}</td>
                             <td>{candidate.transport}</td>
                             <td>{candidate.tls ?? "—"}</td>
                             <td>{
                               candidate.groupId === null
-                                ? "未分组"
-                                : (nodeGroupNames.get(candidate.groupId) ?? "未知分组")
+                                ? t("未分组")
+                                : (nodeGroupNames.get(candidate.groupId) ?? t("未知分组"))
                             }</td>
-                            <td>{`${candidate.server}:${candidate.port}`}</td>
                             <td>
                               <span className="latency">
                                 {latency}
@@ -2506,7 +2543,7 @@ export default function App() {
                         )}
                         runningNodeId={node?.id ?? null}
                         t={t}
-                        onActivate={act(() => void run(() => switchNode(target.id)))}
+                        onActivate={act(() => void onActivateNode(target.id))}
                         onToggleEnabled={act(() =>
                           void run(async () => {
                             setNodes(await setNodeEnabled(target.id, !target.enabled));
@@ -2518,6 +2555,8 @@ export default function App() {
                             ? void onTestNodes(batch)
                             : void onTestNode(target.id),
                         )}
+                        onUrlTest={act(() => void onTestUrl())}
+                        onSpeedTest={act(() => void onSpeedTest())}
                         onClone={act(() => void onCloneNode(target.id))}
                         onExportLinks={act(() =>
                           batch.length > 1
@@ -2650,98 +2689,89 @@ export default function App() {
                 )}
 
                 </div>
-                <aside className="detail-panel" aria-label={t("节点详情")}>
-                  <header>
-                    <h2>{t("节点详情")}</h2>
-                  </header>
-                  {inspected === null ? (
-                    <p className="hint">{t("尚未导入节点")}</p>
-                  ) : (
-                    <>
-                      <div className="detail-title">
-                        <span className="flag">{regionFlag(inspected.name)}</span>
-                        <strong>{inspected.name}</strong>
-                        {inspected.id === node?.id ? (
-                          <em className="pill active">{t("当前使用")}</em>
-                        ) : null}
-                      </div>
-                      <dl className="detail-list">
-                        <div>
-                          <dt>{t("协议")}</dt>
-                          <dd>{inspected.protocol}</dd>
-                        </div>
-                        <div>
-                          <dt>{t("服务器")}</dt>
-                          <dd>{inspected.server}</dd>
-                        </div>
-                        <div>
-                          <dt>{t("端口")}</dt>
-                          <dd>{inspected.port}</dd>
-                        </div>
-                        <div>
-                          <dt>{t("传输")}</dt>
-                          <dd>{inspected.transport}</dd>
-                        </div>
-                        <div>
-                          <dt>TLS</dt>
-                          <dd>{inspected.tls ?? "—"}</dd>
-                        </div>
-                        <div>
-                          <dt>{t("分组")}</dt>
-                          <dd>
-                            {inspected.groupId === null
-                              ? t("未分组")
-                              : (nodeGroupNames.get(inspected.groupId) ?? t("未知分组"))}
-                          </dd>
-                        </div>
-                        <div>
-                          <dt>{t("延迟")}</dt>
-                          <dd>
-                            {inspected.latencyMs === null
-                              ? inspected.lastTestedAt === null
-                                ? "—"
-                                : t("失败")
-                              : `${inspected.latencyMs} ms`}
-                          </dd>
-                        </div>
-                        <div>
-                          <dt>{t("最后测试")}</dt>
-                          <dd>
-                            {inspected.lastTestedAt === null
-                              ? t("尚未测试")
-                              : formatClock(inspected.lastTestedAt)}
-                          </dd>
-                        </div>
-                      </dl>
-                      <div className="detail-actions">
-                        <button
-                          type="button"
-                          className="primary"
-                          disabled={
-                            busy ||
-                            inspected.id === node?.id ||
-                            nodeTestInProgress ||
-                            !inspected.enabled
-                          }
-                          onClick={() => void run(() => switchNode(inspected.id))}
-                        >
-                          {t("设为当前节点")}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={busy || nodeTestInProgress}
-                          onClick={() => void onTestNode(inspected.id)}
-                        >
-                          {t("测试延迟")}
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </aside>
               </div>
             </section>
           )}
-          {mainTab === "proxies" && (
+          {layout === "tab" && (
+            <div className="main-tabs tab-strip-left">
+              <button
+                type="button"
+                className={mainTab === "profiles" ? "active" : undefined}
+                onClick={() => setMainTab("profiles")}
+              >
+                {t("配置项")}
+              </button>
+              <button
+                type="button"
+                className={mainTab === "msg" ? "active" : undefined}
+                onClick={() => {
+                  setSideTab("msg");
+                  setMainTab("msg");
+                  setMsgVisible(true);
+                }}
+              >
+                {t("信息")}
+              </button>
+              <button
+                type="button"
+                className={mainTab === "proxies" ? "active" : undefined}
+                onClick={() => {
+                  setSideTab("proxies");
+                  setMainTab("proxies");
+                }}
+              >
+                {t("当前代理")}
+              </button>
+              <button
+                type="button"
+                className={mainTab === "connections" ? "active" : undefined}
+                onClick={() => {
+                  setSideTab("connections");
+                  setMainTab("connections");
+                }}
+              >
+                {t("当前连接")}
+              </button>
+            </div>
+          )}
+          {(layout !== "tab" || mainTab !== "profiles") && (
+          <section className="side-panel">
+        {layout !== "tab" && (
+        <div className={layout === "vertical" ? "main-tabs tab-strip-left" : "main-tabs"}>
+          <button
+            type="button"
+            className={sideTab === "msg" ? "active" : undefined}
+            onClick={() => {
+              setSideTab("msg");
+              setMainTab("msg");
+              setMsgVisible(true);
+            }}
+          >
+            {t("信息")}
+          </button>
+          <button
+            type="button"
+            className={sideTab === "proxies" ? "active" : undefined}
+            onClick={() => {
+              setSideTab("proxies");
+              setMainTab("proxies");
+            }}
+          >
+            {t("当前代理")}
+          </button>
+          <button
+            type="button"
+            className={sideTab === "connections" ? "active" : undefined}
+            onClick={() => {
+              setSideTab("connections");
+              setMainTab("connections");
+            }}
+          >
+            {t("当前连接")}
+          </button>
+        </div>
+        )}
+          {(layout !== "tab" ? sideTab : mainTab) === "proxies" && (
             <ProxiesView
               busy={busy}
               groups={nodeGroups}
@@ -2762,10 +2792,10 @@ export default function App() {
                 })
               }
               onTestGroup={(ids) => void onTestNodes(ids)}
-              onActivate={(id) => void run(() => switchNode(id))}
+              onActivate={(id) => void onActivateNode(id)}
             />
           )}
-          {mainTab === "connections" && (
+          {(layout !== "tab" ? sideTab : mainTab) === "connections" && (
             <ConnectionsView
               busy={busy}
               connected={connected}
@@ -2802,10 +2832,8 @@ export default function App() {
               }}
             />
           )}
-          {mainTab !== "connections" &&
-            mainTab !== "proxies" &&
-            msgVisible &&
-            (layout !== "tab" || mainTab === "msg") && (
+          {(layout !== "tab" ? sideTab : mainTab) === "msg" &&
+            msgVisible && (
             <MsgView
               busy={busy}
               logs={logs}
@@ -2819,37 +2847,7 @@ export default function App() {
               onExport={() => void onExport()}
             />
           )}
-        </div>
-        <div className="main-tabs">
-          <button
-            type="button"
-            className={mainTab === "profiles" ? "active" : undefined}
-            onClick={() => setMainTab("profiles")}
-          >
-            {t("服务器")}
-          </button>
-          <button
-            type="button"
-            className={mainTab === "proxies" ? "active" : undefined}
-            onClick={() => setMainTab("proxies")}
-          >
-            {t("代理组")}
-          </button>
-          <button
-            type="button"
-            className={mainTab === "connections" ? "active" : undefined}
-            onClick={() => setMainTab("connections")}
-          >
-            {t("连接列表")}
-          </button>
-          {layout === "tab" && (
-            <button
-              type="button"
-              className={mainTab === "msg" ? "active" : undefined}
-              onClick={() => setMainTab("msg")}
-            >
-              {t("消息")}
-            </button>
+          </section>
           )}
         </div>
       </div>
@@ -2857,7 +2855,6 @@ export default function App() {
       <StatusBar
         busy={busy}
         connected={connected}
-        locale={locale}
         platform={platform}
         settings={settings}
         status={status}
@@ -2881,14 +2878,17 @@ export default function App() {
                   {t("关闭")}
                 </button>
               </header>
-              <p>
-                {update.updateAvailable
-                  ? `有新版本 ${update.latest}，当前 ${update.current}`
-                  : `已是最新版本 ${update.current}`}
-              </p>
-              {/* A link rather than an in-app download: the artifacts are
-                  unsigned, so the user has to see what they are fetching. */}
-              <p className="hint">{update.url}</p>
+              <ul className="update-list">
+                <li>
+                  <strong>MgClash</strong>
+                  <span>
+                    {update.updateAvailable
+                      ? `有新版本 ${update.latest}，当前 ${update.current}`
+                      : `已是最新版本 ${update.current}`}
+                  </span>
+                  <p className="hint">{update.url}</p>
+                </li>
+              </ul>
             </div>
           </div>
         )}
@@ -2906,12 +2906,20 @@ export default function App() {
                   {t("关闭")}
                 </button>
               </header>
-              <p>{formatCoreVersionLine(coreUpdate.singBox)}</p>
-              <p className="hint">{formatInstalledCoreLine("sing-box", coreUpdate.install.singBox)}</p>
-              <p className="hint">{coreUpdate.singBox.url}</p>
-              <p>{formatCoreVersionLine(coreUpdate.xray)}</p>
-              <p className="hint">{formatInstalledCoreLine("Xray", coreUpdate.install.xray)}</p>
-              <p className="hint">{coreUpdate.xray.url}</p>
+              <ul className="update-list">
+                <li>
+                  <strong>sing-box</strong>
+                  <span>{formatCoreVersionLine(coreUpdate.singBox)}</span>
+                  <p className="hint">{formatInstalledCoreLine("sing-box", coreUpdate.install.singBox)}</p>
+                  <p className="hint">{coreUpdate.singBox.url}</p>
+                </li>
+                <li>
+                  <strong>Xray</strong>
+                  <span>{formatCoreVersionLine(coreUpdate.xray)}</span>
+                  <p className="hint">{formatInstalledCoreLine("Xray", coreUpdate.install.xray)}</p>
+                  <p className="hint">{coreUpdate.xray.url}</p>
+                </li>
+              </ul>
               <p className="hint">
                 {t("Core 更新说明")}
               </p>
@@ -3079,20 +3087,20 @@ export default function App() {
 
       <Dialog
         hidden={dialog !== "create"}
-        title={editingNodeId === null ? t("手动创建节点") : t("编辑节点")}
+        title={t("配置项")}
         ariaLabel={editingNodeId === null ? t("手动创建节点") : t("编辑节点")}
         onClose={() => {
           setDialog(null);
           resetNodeForm();
         }}
+        onConfirm={() => void onCreateNode()}
         wide
       >
-        <h2>{editingNodeId === null ? t("手动创建节点") : t("编辑节点")}</h2>
-
         <div
-          className="settings-form"
+          className="settings-form form-grid"
           aria-label={editingNodeId === null ? t("手动创建节点") : t("编辑节点")}
         >
+          <p className="form-section">{t("配置项")}</p>
           <label>
             {t("协议")}
             <select
@@ -3121,7 +3129,7 @@ export default function App() {
           </label>
 
           <label>
-            {t("名称")}
+            {t("别名")}
             <input
               aria-label={t("新建节点名称")}
               value={createForm.name}
@@ -3133,7 +3141,7 @@ export default function App() {
           {createForm.protocol !== "custom" && (
             <>
           <label>
-            {t("服务器")}
+            {t("地址")}
             <input
               aria-label={t("新建节点服务器")}
               value={createForm.server}
@@ -3199,14 +3207,25 @@ export default function App() {
             createForm.protocol === "tuic") && (
             <label>
               UUID
-              <input
-                aria-label={t("节点 UUID")}
-                value={createForm.userId}
-                disabled={busy}
-                onChange={(event) =>
-                  updateCreateForm({ userId: event.target.value })
-                }
-              />
+              <span className="inline-field">
+                <input
+                  aria-label={t("节点 UUID")}
+                  value={createForm.userId}
+                  disabled={busy}
+                  onChange={(event) =>
+                    updateCreateForm({ userId: event.target.value })
+                  }
+                />
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    updateCreateForm({ userId: crypto.randomUUID() })
+                  }
+                >
+                  {t("生成")}
+                </button>
+              </span>
             </label>
           )}
 
@@ -3600,6 +3619,9 @@ export default function App() {
           )}
 
           {usesStreamTransport(createForm.protocol) && (
+            <>
+            <hr />
+            <p className="form-section">{t("底层传输方式")}</p>
             <label>
               {t("传输方式")}
               <select
@@ -3626,6 +3648,7 @@ export default function App() {
                 <option value="kcp">mKCP</option>
               </select>
             </label>
+            </>
           )}
 
           {usesStreamTransport(createForm.protocol) &&
@@ -3844,6 +3867,8 @@ export default function App() {
             createForm.protocol !== "shadowsocks" &&
             createForm.protocol !== "socks" && (
               <>
+                <hr />
+                <p className="form-section">TLS</p>
                 <label>
                   <input
                     aria-label={t("启用 TLS")}
@@ -4105,9 +4130,14 @@ export default function App() {
         onClose={() => setDialog(null)}
         wide
       >
-        <h2>{t("订阅")}</h2>
-
-        <div className="actions">
+        <div className="dialog-menu">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={resetSubscriptionForm}
+          >
+            {t("添加")}
+          </button>
           <button
             type="button"
             disabled={busy || nodeTestInProgress || subscriptions.length === 0}
@@ -4123,7 +4153,7 @@ export default function App() {
           <table className="node-list" aria-label={t("订阅列表")}>
             <thead>
               <tr>
-                <th>{t("名称")}</th>
+                <th>{t("别名")}</th>
                 <th>{t("节点")}</th>
                 <th>{t("更新")}</th>
                 <th>{t("操作")}</th>
@@ -4170,7 +4200,7 @@ export default function App() {
           </table>
         )}
 
-        <div className="subscription-form">
+        <div className="subscription-form form-grid">
           <label>
             {t("名称")}
             <input
@@ -4294,13 +4324,94 @@ export default function App() {
       </Dialog>
 
       <Dialog
+        hidden={dialog !== "hotkeys"}
+        title={t("全局热键设置")}
+        ariaLabel={t("全局热键设置")}
+        onClose={() => setDialog(null)}
+      >
+        {settings === null ? (
+          <p className="hint">{t("正在读取设置…")}</p>
+        ) : (
+          <div className="form-grid">
+            <label>
+              {t("热键：连接/断开")}
+              <input
+                aria-label={t("热键：连接/断开")}
+                placeholder="Ctrl+Enter"
+                value={settings.hotkeyConnect}
+                disabled={busy}
+                onChange={(event) =>
+                  void onChangeSettings({ hotkeyConnect: event.target.value })
+                }
+              />
+            </label>
+            <label>
+              {t("热键：上一节点")}
+              <input
+                aria-label={t("热键：上一节点")}
+                placeholder="Ctrl+["
+                value={settings.hotkeyPrevious}
+                disabled={busy}
+                onChange={(event) =>
+                  void onChangeSettings({ hotkeyPrevious: event.target.value })
+                }
+              />
+            </label>
+            <label>
+              {t("热键：下一节点")}
+              <input
+                aria-label={t("热键：下一节点")}
+                placeholder="Ctrl+]"
+                value={settings.hotkeyNext}
+                disabled={busy}
+                onChange={(event) =>
+                  void onChangeSettings({ hotkeyNext: event.target.value })
+                }
+              />
+            </label>
+            <p className="form-section">
+              {t("热键在系统全局生效；窗口未聚焦时也可使用。留空表示禁用。")}
+            </p>
+          </div>
+        )}
+      </Dialog>
+
+      <Dialog
+        hidden={dialog !== "backup"}
+        title={t("备份和还原")}
+        ariaLabel={t("备份和还原")}
+        onClose={() => setDialog(null)}
+      >
+        <div className="form-grid">
+          <span className="form-label">{t("备份到本地")}</span>
+          <button type="button" disabled={busy} onClick={() => void onExportProfile()}>
+            {t("备份到本地")}
+          </button>
+          <span className="form-tip" />
+          <span className="form-label">{t("从本地还原")}</span>
+          <button
+            type="button"
+            disabled={busy || connected}
+            onClick={() => void onImportProfile()}
+          >
+            {t("从本地还原")}
+          </button>
+          <span className="form-tip" />
+        </div>
+      </Dialog>
+
+      <Dialog
         hidden={dialog !== "routing"}
         title={t("路由规则")}
         ariaLabel={t("路由规则")}
         onClose={() => setDialog(null)}
         wide
       >
-        <h2>{t("路由规则")}</h2>
+        <div className="dialog-menu">
+          <button type="button" disabled={busy} onClick={() => void onOpenRouting()}>
+            {t("添加")}
+          </button>
+        </div>
 
         <p className="hint">
           {t("运行顺序固定为：本地安全规则 → 用户规则 → Geo 规则 → 默认出口。仅规则模式应用列表。")}
@@ -4734,14 +4845,31 @@ export default function App() {
         title="DNS"
         ariaLabel="DNS"
         onClose={() => setDialog(null)}
+        onConfirm={() => void onSaveDns()}
         wide
       >
-        <h2>DNS</h2>
-
+        <div className="option-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            className={dnsTab === "basic" ? "active" : undefined}
+            onClick={() => setDnsTab("basic")}
+          >
+            {t("DNS 基础设置")}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className={dnsTab === "advanced" ? "active" : undefined}
+            onClick={() => setDnsTab("advanced")}
+          >
+            {t("DNS 进阶设置")}
+          </button>
+        </div>
         {dnsDraft === null ? (
           <p className="hint">{t("正在读取 DNS 设置")}</p>
         ) : (
-          <div className="settings-form">
+          <div className="settings-form form-grid">
             <label>
               {t("模板")}
               <select
@@ -5017,12 +5145,46 @@ export default function App() {
         onClose={() => setDialog(null)}
         wide
       >
-        <h2>{t("设置")}</h2>
+        <div className="option-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            className={settingsTab === "core" ? "active" : undefined}
+            onClick={() => setSettingsTab("core")}
+          >
+            {t("Core: 基础设置")}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className={settingsTab === "ui" ? "active" : undefined}
+            onClick={() => setSettingsTab("ui")}
+          >
+            {t("界面设置")}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className={settingsTab === "tun" ? "active" : undefined}
+            onClick={() => setSettingsTab("tun")}
+          >
+            {t("Tun 模式设置")}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className={settingsTab === "coreType" ? "active" : undefined}
+            onClick={() => setSettingsTab("coreType")}
+          >
+            {t("Core 类型设置")}
+          </button>
+        </div>
 
         {settings === null ? (
           <p className="hint">{t("正在读取设置…")}</p>
         ) : (
-          <div className="settings-form" aria-label={t("应用设置")}>
+          <div className="settings-form form-grid" aria-label={t("应用设置")}>
+            <div hidden={settingsTab !== "tun"}>
             <label className="checkbox-label">
               <input
                 aria-label={t("启用 TUN")}
@@ -5046,6 +5208,8 @@ export default function App() {
               {platform ? TUN_NOTICE[platform.tunAvailability] : ""}
               TUN 与系统代理互斥，启用后本次会话不会修改系统代理。
             </p>
+            </div>
+            <div hidden={settingsTab !== "ui"}>
             <label className="checkbox-label">
               <input
                 aria-label={t("开机启动")}
@@ -5084,6 +5248,8 @@ export default function App() {
               />
               {t("关闭窗口时最小化到托盘，而不是退出")}
             </label>
+            </div>
+            <div hidden={settingsTab !== "coreType"}>
             <label>
               Core
               <select
@@ -5104,6 +5270,8 @@ export default function App() {
             <p className="hint">
               {t("自动模式按节点协议和能力矩阵决定。Xray 不支持 Hysteria2 / TUIC，选中后遇到该协议的节点会提示原因。")}
             </p>
+            </div>
+            <div hidden={settingsTab !== "core"}>
             <label>
               {t("默认日志级别")}
               <select
@@ -5496,6 +5664,7 @@ export default function App() {
             <p className="hint">
               {t("构建目标")}：{platform ? platform.artifactIdentifier : platformError}
             </p>
+            </div>
           </div>
         )}
 
