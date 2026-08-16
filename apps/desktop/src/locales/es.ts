@@ -471,6 +471,7 @@ const DICTIONARY: Dictionary = {
   "自动配置": "Gestionado",
   "清除": "Borrado",
   "不改变": "Sin cambios",
+  "基础": "General",
   "Pac 模式": "Modo PAC",
   "配置项": "Perfiles",
   "订阅分组设置": "Ajustes de suscripción",
