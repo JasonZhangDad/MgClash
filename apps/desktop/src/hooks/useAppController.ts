@@ -278,7 +278,6 @@ export function useAppController() {
   const [settingsTab, setSettingsTab] = useState<
     "core" | "ui" | "tun" | "coreType"
   >("core");
-  const [dnsTab, setDnsTab] = useState<"basic" | "advanced">("basic");
   const [theme, setTheme] = useState<ThemeMode>(() => savedTheme());
   const [fontSize, setFontSize] = useState<FontSize>(() => savedFontSize());
   const [layout, setLayout] = useState<MainLayout>(() => savedLayout());
@@ -2163,10 +2162,22 @@ export function useAppController() {
         setPaletteOpen((current) => !current);
         return;
       }
+      // Handoff: Escape closes the topmost overlay, one layer per press, so a
+      // dialog opened over the inspector does not take the inspector with it.
       if (event.key === "Escape") {
-        setPaletteOpen(false);
         setPortsOpen(false);
         setProxyPopoverOpen(false);
+        if (paletteOpen) {
+          setPaletteOpen(false);
+          return;
+        }
+        if (dialog !== null) {
+          setDialog(null);
+          if (dialog === "create") {
+            resetNodeForm();
+          }
+          return;
+        }
         if (inspectedId !== null) {
           setInspectedId(null);
         }
@@ -2174,7 +2185,7 @@ export function useAppController() {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [inspectedId]);
+  }, [dialog, inspectedId, paletteOpen, resetNodeForm]);
 
   const onToggleConnect = useCallback(() => {
     if (busy) {
@@ -2260,7 +2271,6 @@ export function useAppController() {
     dismissNotice,
     dnsDirty,
     dnsDraft,
-    dnsTab,
     editingNodeId,
     editingSubscriptionId,
     error,
@@ -2409,7 +2419,6 @@ export function useAppController() {
     setDialog,
     setDnsDirty,
     setDnsDraft,
-    setDnsTab,
     setEditingNodeId,
     setError,
     setExportedTo,

@@ -1032,20 +1032,15 @@ pub fn xray_settings_with_store(
     if std::env::var_os(XRAY_BINARY_VARIABLE).is_some()
         || std::env::var(XRAY_SHA256_VARIABLE).is_ok()
     {
-        return CoreSettings::from_values(
-            std::env::var_os(XRAY_BINARY_VARIABLE).map(PathBuf::from),
-            std::env::var(XRAY_SHA256_VARIABLE).ok(),
-        );
+        return CoreSettings::xray_from_env();
     }
     if let Some(store) = store {
         if let Some(settings) = store.xray_settings() {
             return settings;
         }
     }
-    CoreSettings::from_values(
-        std::env::var_os(XRAY_BINARY_VARIABLE).map(PathBuf::from),
-        std::env::var(XRAY_SHA256_VARIABLE).ok(),
-    )
+    // Falls back to the Xray shipped inside the artifact, matching sing-box.
+    CoreSettings::xray_from_env()
 }
 
 #[derive(Debug, Error)]

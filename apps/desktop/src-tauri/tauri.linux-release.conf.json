@@ -2,7 +2,11 @@
   "bundle": {
     "resources": {
       "../../../target/release-resources/sing-box": "sing-box",
-      "../../../target/release-resources/LICENSE-sing-box": "LICENSE-sing-box"
+      "../../../target/release-resources/LICENSE-sing-box": "LICENSE-sing-box",
+      "../../../target/release-resources/xray": "xray",
+      "../../../target/release-resources/LICENSE-xray": "LICENSE-xray",
+      "../../../target/release-resources/geoip.dat": "geoip.dat",
+      "../../../target/release-resources/geosite.dat": "geosite.dat"
     }
   }
 }

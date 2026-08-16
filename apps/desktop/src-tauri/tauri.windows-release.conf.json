@@ -3,6 +3,10 @@
     "resources": {
       "../../../target/release-resources/sing-box.exe": "sing-box.exe",
       "../../../target/release-resources/LICENSE-sing-box": "LICENSE-sing-box",
+      "../../../target/release-resources/xray.exe": "xray.exe",
+      "../../../target/release-resources/LICENSE-xray": "LICENSE-xray",
+      "../../../target/release-resources/geoip.dat": "geoip.dat",
+      "../../../target/release-resources/geosite.dat": "geosite.dat",
       "../../../target/release-resources/wintun.dll": "wintun.dll",
       "../../../target/release-resources/LICENSE-wintun": "LICENSE-wintun"
     }

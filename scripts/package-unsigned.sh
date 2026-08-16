@@ -70,21 +70,35 @@ bash "${repository}/scripts/stage-bundled-core.sh" \
   "${core}" "${core_sha256}" "${core_license}" \
   "${scratch}/core" "${core_file_name}"
 # Both Cores ship so switching in settings works without the user finding a
-# binary. Xray is staged only when it is configured: release.yml has no pinned
-# Xray digest yet (ADR 0003), and failing the whole build over that would block
-# releases that are otherwise fine. The skip is announced rather than silent,
-# because an artifact missing a Core fails later and less clearly.
-if [[ -n "${xray}" ]]; then
-  # The geo databases travel with the binary: Xray refuses to start when a
-  # geoip: or geosite: routing rule cannot find them, which is exactly what
-  # Rule mode generates.
-  bash "${repository}/scripts/stage-bundled-core.sh" \
-    "${xray}" "${xray_sha256}" "${xray_license}" \
-    "${scratch}/core" "${xray_file_name}" \
-    "${xray_geoip}" "${xray_geosite}"
-else
-  echo "no MAGIES_BUNDLED_XRAY_BIN: this artifact ships without Xray" >&2
+# binary. This is required rather than announced-and-skipped: 1.1.0 staged Xray
+# here and then copied only sing-box into every artifact, so choosing Xray in
+# settings failed with `xray_unavailable` on a build that looked fine. Failing
+# here names the missing variable instead.
+if [[ -z "${xray}" ]]; then
+  echo "MAGIES_BUNDLED_XRAY_BIN is not set: the artifact would ship without" >&2
+  echo "Xray and the Xray Core option would fail at runtime. Set it together" >&2
+  echo "with MAGIES_XRAY_SHA256, MAGIES_BUNDLED_XRAY_LICENSE," >&2
+  echo "MAGIES_BUNDLED_XRAY_GEOIP and MAGIES_BUNDLED_XRAY_GEOSITE." >&2
+  exit 1
 fi
+# The geo databases travel with the binary: Xray refuses to start when a
+# geoip: or geosite: routing rule cannot find them, which is exactly what
+# Rule mode generates.
+bash "${repository}/scripts/stage-bundled-core.sh" \
+  "${xray}" "${xray_sha256}" "${xray_license}" \
+  "${scratch}/core" "${xray_file_name}" \
+  "${xray_geoip}" "${xray_geosite}"
+
+# Everywhere sing-box is placed, Xray and its databases go too.
+copy_cores() {
+  local target="$1"
+  cp "${scratch}/core/${core_file_name}" "${target}/"
+  cp "${scratch}/core/LICENSE-sing-box" "${target}/"
+  cp "${scratch}/core/${xray_file_name}" "${target}/"
+  cp "${scratch}/core/LICENSE-xray" "${target}/"
+  cp "${scratch}/core/geoip.dat" "${target}/"
+  cp "${scratch}/core/geosite.dat" "${target}/"
+}
 if [[ "${os}" == "windows" ]]; then
   bash "${repository}/scripts/stage-bundled-wintun.sh" \
     "${wintun}" "${wintun_license}" "${scratch}/wintun"
@@ -107,8 +121,7 @@ if [[ "${os}" == "macos" ]]; then
     exit 1
   }
   mkdir -p "${app}/Contents/Resources"
-  cp "${scratch}/core/${core_file_name}" "${app}/Contents/Resources/"
-  cp "${scratch}/core/LICENSE-sing-box" "${app}/Contents/Resources/"
+  copy_cores "${app}/Contents/Resources"
   archive="${output_directory}/${name}.tar.gz"
   tar -czf "${archive}" -C "${bundle_directory}" "MgClash.app"
 
@@ -135,8 +148,7 @@ else
   if [[ "${os}" == "windows" ]]; then
     release_resources="${repository}/target/release-resources"
     mkdir -p "${release_resources}"
-    cp "${scratch}/core/sing-box.exe" "${release_resources}/"
-    cp "${scratch}/core/LICENSE-sing-box" "${release_resources}/"
+    copy_cores "${release_resources}"
     cp "${scratch}/wintun/wintun.dll" "${release_resources}/"
     cp "${scratch}/wintun/LICENSE-wintun" "${release_resources}/"
     npm run tauri -- build --bundles nsis \
@@ -146,8 +158,7 @@ else
   else
     release_resources="${repository}/target/release-resources"
     mkdir -p "${release_resources}"
-    cp "${scratch}/core/sing-box" "${release_resources}/"
-    cp "${scratch}/core/LICENSE-sing-box" "${release_resources}/"
+    copy_cores "${release_resources}"
     npm run tauri -- build --bundles deb,rpm,appimage \
       --config src-tauri/tauri.linux-release.conf.json
     binary="${repository}/target/release/MgClash"
@@ -162,8 +173,7 @@ else
   mkdir -p "${staging}/${name}"
   cp "${binary}" "${staging}/${name}/"
   cp "${repository}/README.md" "${staging}/${name}/"
-  cp "${scratch}/core/${core_file_name}" "${staging}/${name}/"
-  cp "${scratch}/core/LICENSE-sing-box" "${staging}/${name}/"
+  copy_cores "${staging}/${name}"
   if [[ "${os}" == "windows" ]]; then
     cp "${scratch}/wintun/wintun.dll" "${staging}/${name}/"
     cp "${scratch}/wintun/LICENSE-wintun" "${staging}/${name}/"

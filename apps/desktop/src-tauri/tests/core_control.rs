@@ -8,7 +8,7 @@ use std::time::Duration;
 use magies_core_runtime::Sha256Hash;
 use magies_desktop_lib::core_control::{
     CoreSettings, CoreSettingsError, HostCoreControl, HostCoreError, LazySingBoxControl,
-    LazySingBoxError, bundled_core_in, describe,
+    LazySingBoxError, bundled_core_in, bundled_xray_in, describe,
 };
 use magies_domain::CoreType;
 use magies_session::CoreSessionControl;
@@ -19,6 +19,10 @@ const HEALTH_TIMEOUT: Duration = Duration::from_millis(5);
 /// `sing-box` is invisible to it on Windows.
 fn core_file_name() -> String {
     format!("sing-box{}", std::env::consts::EXE_SUFFIX)
+}
+
+fn xray_file_name() -> String {
+    format!("xray{}", std::env::consts::EXE_SUFFIX)
 }
 
 #[test]
@@ -138,6 +142,30 @@ fn finds_a_core_in_the_macos_app_resources_directory() {
     let core = layout.write(&["..", "Resources", &core_file_name()]);
 
     assert_eq!(bundled_core_in(layout.path()), Some(core));
+}
+
+/*
+ * 1.1.0 shipped Xray inside the artifact and still refused to run it: only
+ * sing-box had a bundled lookup, so the Xray Core failed with
+ * `xray_unavailable` on a build that physically contained it.
+ */
+#[test]
+fn finds_a_bundled_xray_beside_the_executable_and_in_app_resources() {
+    let beside = Layout::new("xray-beside");
+    let core = beside.write(&[&xray_file_name()]);
+    assert_eq!(bundled_xray_in(beside.path()), Some(core));
+
+    let resources = Layout::new("xray-resources");
+    let core = resources.write(&["..", "Resources", &xray_file_name()]);
+    assert_eq!(bundled_xray_in(resources.path()), Some(core));
+}
+
+#[test]
+fn does_not_mistake_sing_box_for_a_bundled_xray() {
+    let layout = Layout::new("xray-absent");
+    layout.write(&[&core_file_name()]);
+
+    assert_eq!(bundled_xray_in(layout.path()), None);
 }
 
 #[test]

@@ -59,6 +59,16 @@ pub const SHA256_VARIABLE: &str = "MAGIES_SING_BOX_SHA256";
 /// The Core file name an artifact ships, if it ships one.
 const BUNDLED_CORE_STEM: &str = "sing-box";
 
+/// The Xray file name an artifact ships beside sing-box.
+const BUNDLED_XRAY_STEM: &str = "xray";
+
+/// The Xray digest baked in when the release build set `MAGIES_XRAY_SHA256`.
+///
+/// Same reasoning as [`BUILD_TIME_SHA256`]: a pin that lives beside the binary
+/// is no pin at all. Absent this, a bundled Xray has nothing to check against
+/// and is refused rather than run unverified.
+const BUILD_TIME_XRAY_SHA256: Option<&str> = option_env!("MAGIES_XRAY_SHA256");
+
 /// The digest baked in when the release build set `MAGIES_SING_BOX_SHA256`.
 ///
 /// Reading the pin from a file next to the Core would be no pin at all —
@@ -91,6 +101,30 @@ impl CoreSettings {
             &executable_directory,
             BUILD_TIME_SHA256,
         )
+    }
+
+    /// Resolves Xray the same way, from the bundled binary and its build-time
+    /// digest.
+    ///
+    /// Without this an artifact could ship Xray and still refuse to run it:
+    /// 1.1.0's settings only consulted `MAGIES_XRAY_BIN` and the download
+    /// store, so the bundled copy was invisible.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when no Xray can be located or it has no digest.
+    pub fn xray_from_env() -> Result<Self, CoreSettingsError> {
+        let executable_directory = std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(Path::to_path_buf))
+            .unwrap_or_default();
+        let binary = std::env::var_os(XRAY_BINARY_VARIABLE)
+            .map(PathBuf::from)
+            .or_else(|| bundled_xray_in(&executable_directory));
+        let sha256 = std::env::var(XRAY_SHA256_VARIABLE)
+            .ok()
+            .or_else(|| BUILD_TIME_XRAY_SHA256.map(str::to_owned));
+        Self::from_values(binary, sha256)
     }
 
     /// Resolves the Core from an explicit override, falling back to one shipped
@@ -618,7 +652,17 @@ impl LazySingBoxError {
 /// `Contents/Resources`, which is `../Resources` from `Contents/MacOS`.
 #[must_use]
 pub fn bundled_core_in(executable_directory: &Path) -> Option<PathBuf> {
-    let file_name = format!("{BUNDLED_CORE_STEM}{}", std::env::consts::EXE_SUFFIX);
+    bundled_core_named(executable_directory, BUNDLED_CORE_STEM)
+}
+
+/// Locates the bundled Xray, in the same places the bundled sing-box is found.
+#[must_use]
+pub fn bundled_xray_in(executable_directory: &Path) -> Option<PathBuf> {
+    bundled_core_named(executable_directory, BUNDLED_XRAY_STEM)
+}
+
+fn bundled_core_named(executable_directory: &Path, stem: &str) -> Option<PathBuf> {
+    let file_name = format!("{stem}{}", std::env::consts::EXE_SUFFIX);
     let linux_resources = executable_directory.join("..").join("lib");
     [
         executable_directory.join(&file_name),

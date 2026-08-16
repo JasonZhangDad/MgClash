@@ -328,6 +328,33 @@ export function isGeoRule(kind: RouteRuleKind): boolean {
   return kind === "geoIp" || kind === "geoSite";
 }
 
+/**
+ * Move one item to another index when both sit in the same group.
+ *
+ * Geo rules stay after user rules; a drop that would mix the two is ignored.
+ */
+export function moveWithinGroup<T>(
+  items: T[],
+  from: number,
+  to: number,
+  sameGroup: (left: T, right: T) => boolean,
+): T[] {
+  if (
+    from === to ||
+    from < 0 ||
+    to < 0 ||
+    from >= items.length ||
+    to >= items.length ||
+    !sameGroup(items[from], items[to])
+  ) {
+    return items;
+  }
+  const next = [...items];
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
+  return next;
+}
+
 export function runtimeOrderedRoute(settings: RouteSettings): RouteSettings {
   return {
     ...settings,

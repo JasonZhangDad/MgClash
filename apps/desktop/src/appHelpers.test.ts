@@ -8,7 +8,9 @@ import {
   groupTraffic,
   isBackendMissing,
   isCoreStartFailure,
+  isGeoRule,
   loadColumnWidths,
+  moveWithinGroup,
   saveColumnWidths,
   nextNodeSort,
   sortNodes,
@@ -16,6 +18,7 @@ import {
   ruleDraftFromConnection,
   savedFontSize,
 } from "./appHelpers";
+import type { RouteRuleKind } from "./session";
 
 describe("isCoreStartFailure", () => {
   it("recognizes a typed Core start failure and not a settings parse error", () => {
@@ -95,6 +98,41 @@ describe("ruleDraftFromConnection", () => {
   it("has nothing to offer for an empty host", () => {
     expect(ruleDraftFromConnection("")).toBeNull();
     expect(ruleDraftFromConnection("   ")).toBeNull();
+  });
+});
+
+describe("moveWithinGroup", () => {
+  const rules: { kind: RouteRuleKind; value: string }[] = [
+    { kind: "domainSuffix", value: "lan" },
+    { kind: "domain", value: "example.com" },
+    { kind: "geoIp", value: "cn" },
+    { kind: "geoSite", value: "cn" },
+  ];
+  const sameKind = (
+    left: (typeof rules)[number],
+    right: (typeof rules)[number],
+  ) => isGeoRule(left.kind) === isGeoRule(right.kind);
+
+  it("reorders inside the user-rule block", () => {
+    expect(moveWithinGroup(rules, 0, 1, sameKind).map((rule) => rule.value)).toEqual([
+      "example.com",
+      "lan",
+      "cn",
+      "cn",
+    ]);
+  });
+
+  it("refuses to drag a user rule into the Geo block", () => {
+    expect(moveWithinGroup(rules, 0, 2, sameKind)).toBe(rules);
+  });
+
+  it("reorders Geo rules among themselves", () => {
+    expect(moveWithinGroup(rules, 3, 2, sameKind).map((rule) => rule.kind)).toEqual([
+      "domainSuffix",
+      "domain",
+      "geoSite",
+      "geoIp",
+    ]);
   });
 });
 

@@ -13,6 +13,9 @@ interface DialogProps {
   /// v2rayN windows put Confirm/Cancel on the bottom dock.
   confirmLabel?: string;
   cancelLabel?: string;
+  /// Set when the body carries its own bottom bar, so the shell does not add a
+  /// second row of Confirm/Cancel under it — as the node form did.
+  ownFoot?: boolean;
 }
 
 /** Modal shell matching v2rayN Avalonia windows: title, body, confirm/cancel. */
@@ -26,6 +29,7 @@ export function Dialog({
   wide = false,
   confirmLabel = "确定",
   cancelLabel = "取消",
+  ownFoot = false,
 }: DialogProps) {
   return (
     <div className="dialog-backdrop" hidden={hidden} onClick={onClose}>
@@ -44,14 +48,20 @@ export function Dialog({
           </button>
         </header>
         <div className="dialog-body">{children}</div>
-        <footer className="dialog-foot">
-          <button type="button" className="primary" onClick={onConfirm ?? onClose}>
-            {confirmLabel}
-          </button>
-          <button type="button" onClick={onClose}>
-            {cancelLabel}
-          </button>
-        </footer>
+        {ownFoot ? null : (
+          <footer className="dialog-foot">
+            <button
+              type="button"
+              className="primary"
+              onClick={onConfirm ?? onClose}
+            >
+              {confirmLabel}
+            </button>
+            <button type="button" onClick={onClose}>
+              {cancelLabel}
+            </button>
+          </footer>
+        )}
       </div>
     </div>
   );

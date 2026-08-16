@@ -59,7 +59,6 @@ export function AppDialogs({ app }: { app: AppModel }) {
     dialog,
     dnsDirty,
     dnsDraft,
-    dnsTab,
     editingNodeId,
     editingSubscriptionId,
     fontSize,
@@ -119,7 +118,6 @@ export function AppDialogs({ app }: { app: AppModel }) {
     setDialog,
     setDnsDirty,
     setDnsDraft,
-    setDnsTab,
     setError,
     setProviderFormat,
     setProviderName,
@@ -403,13 +401,13 @@ export function AppDialogs({ app }: { app: AppModel }) {
           resetNodeForm();
         }}
         onConfirm={() => void onCreateNode()}
-        wide
+        ownFoot
       >
         <div
           className="settings-form form-grid node-form"
           aria-label={editingNodeId === null ? t("手动创建节点") : t("编辑节点")}
         >
-          <p className="form-section">{t("按协议只显示相关字段")}</p>
+          <p className="form-subtitle">{t("按协议只显示相关字段")}</p>
           <label className="sr-only">
             {t("协议")}
             <select
@@ -471,6 +469,8 @@ export function AppDialogs({ app }: { app: AppModel }) {
               </button>
             ))}
           </div>
+
+          <p className="form-section">{t("基础")} GENERAL</p>
 
           <label>
             {t("别名")}
@@ -1455,6 +1455,20 @@ export function AppDialogs({ app }: { app: AppModel }) {
             >
               {t("扫描二维码")}
             </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                setCreateForm(
+                  blankManualNodeForm({
+                    allowInsecure: settings?.defAllowInsecure,
+                    fingerprint: settings?.defFingerprint,
+                  }),
+                )
+              }
+            >
+              {t("重置")}
+            </button>
             <span className="node-form-foot-end">
               <button
                 type="button"
@@ -1472,32 +1486,9 @@ export function AppDialogs({ app }: { app: AppModel }) {
                 disabled={busy}
                 onClick={() => void onCreateNode()}
               >
-                {editingNodeId === null ? t("保存节点") : t("保存节点")}
+                {editingNodeId === null ? t("创建节点") : t("保存节点")}
               </button>
             </span>
-          </div>
-          <div className="actions">
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void onCreateNode()}
-            >
-              {editingNodeId === null ? t("创建节点") : t("保存节点")}
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() =>
-                setCreateForm(
-                  blankManualNodeForm({
-                    allowInsecure: settings?.defAllowInsecure,
-                    fingerprint: settings?.defFingerprint,
-                  }),
-                )
-              }
-            >
-              {t("重置")}
-            </button>
           </div>
         </div>
 

@@ -118,6 +118,12 @@ function usedKeys(): string[] {
     "标签页",
     "主窗布局",
     "快速操作",
+    // The Overview hero's System Proxy value, reached as `t(PROXY_VALUE[mode])`.
+    // It is deliberately shorter than the popover's `PROXY_LABEL`, which the
+    // hero already labels "系统代理" — so these have no literal `t("…")` to find.
+    "自动配置",
+    "清除",
+    "不改变",
   ];
 }
 

@@ -20,6 +20,16 @@ const PROXY_LABEL: Record<SystemProxyMode, string> = {
   pac: "Pac 模式",
 };
 
+/// The hero already labels the field "系统代理", so the value drops the words
+/// it would otherwise repeat. The popover keeps `PROXY_LABEL`, where each entry
+/// stands on its own.
+const PROXY_VALUE: Record<SystemProxyMode, string> = {
+  managed: "自动配置",
+  cleared: "清除",
+  unchanged: "不改变",
+  pac: "Pac 模式",
+};
+
 export function OverviewPage({ app }: { app: AppModel }) {
   const {
     t,
@@ -140,9 +150,9 @@ export function OverviewPage({ app }: { app: AppModel }) {
         </div>
         <div className="hero-foot">
           <div>
-            <span className="field-label">{t("状态栏路由模式")}</span>
+            <span className="field-label">{t("路由模式")}</span>
             <SegmentedControl
-              ariaLabel={t("状态栏路由模式")}
+              ariaLabel={t("路由模式")}
               value={status?.mode ?? "global"}
               disabled={busy || status === null}
               onChange={(mode) => void run(() => setRoutingMode(mode))}
@@ -160,7 +170,7 @@ export function OverviewPage({ app }: { app: AppModel }) {
             <div>
               <strong>{t("系统代理")}</strong>
               <span>
-                {t(PROXY_LABEL[settings?.systemProxyMode ?? "managed"])}
+                {t(PROXY_VALUE[settings?.systemProxyMode ?? "managed"])}
               </span>
             </div>
             <button
@@ -194,8 +204,8 @@ export function OverviewPage({ app }: { app: AppModel }) {
                 {tunUnavailable
                   ? t("不可用")
                   : settings?.tunEnabled
-                    ? t("已连接")
-                    : t("未连接")}
+                    ? t("已启用")
+                    : t("未启用")}
               </span>
             </div>
             <span

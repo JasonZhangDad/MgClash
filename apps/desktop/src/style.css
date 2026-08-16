@@ -414,8 +414,20 @@ button {
   overflow: auto;
 }
 
+/*
+ * A flex column so a full-height page (Settings' nav rail, the node table)
+ * stretches to the viewport instead of stopping where its content ends and
+ * reading as a card floating on the background.
+ */
 .page-host > section {
   min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.page-host > section > * {
+  flex: 1;
+  min-height: 0;
 }
 
 .page-pad {
@@ -598,7 +610,7 @@ button {
   background: transparent;
   height: 26px;
   padding: 0 10px;
-  border-radius: 6px;
+  border-radius: 5px;
   font-size: 12px;
 }
 
@@ -764,6 +776,33 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/*
+ * Label over value. Both are inline elements, so without this they render as
+ * one run-on string ("TUN未启用") instead of a labelled field.
+ */
+.hero-proxy > div,
+.hero-tun > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hero-proxy > div > strong,
+.hero-tun > div > strong {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--c-mut2);
+}
+
+.hero-proxy > div > span,
+.hero-tun > div > span {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--c-text);
 }
 
 .overview-split {
@@ -942,7 +981,7 @@ button {
   letter-spacing: 0.06em;
   border: 1px solid var(--c-line2);
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: 5px;
 }
 
 .page-tabs {
@@ -1320,7 +1359,7 @@ input.toggle:disabled {
 .menu > summary {
   list-style: none;
   padding: 6px 10px;
-  border-radius: 4px;
+  border-radius: 7px;
   cursor: pointer;
   user-select: none;
 }
@@ -1342,7 +1381,7 @@ input.toggle:disabled {
   min-width: 220px;
   padding: 4px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 11px;
   background: var(--menu);
   box-shadow: var(--shadow);
   display: flex;
@@ -1354,7 +1393,7 @@ input.toggle:disabled {
   border: 0;
   background: transparent;
   padding: 7px 10px;
-  border-radius: 4px;
+  border-radius: 7px;
 }
 
 .menu-panel button:hover:not(:disabled),
@@ -1372,7 +1411,7 @@ input.toggle:disabled {
   border: 0;
   background: transparent;
   padding: 6px 10px;
-  border-radius: 4px;
+  border-radius: 7px;
 }
 
 .menu-top:hover:not(:disabled) {
@@ -1385,7 +1424,7 @@ input.toggle:disabled {
   height: 28px;
   display: grid;
   place-items: center;
-  border-radius: 4px;
+  border-radius: 7px;
   font-size: 16px;
   line-height: 1;
 }
@@ -1446,7 +1485,7 @@ input.toggle:disabled {
   border: 1px solid var(--accent);
   background: var(--accent);
   color: #fff;
-  border-radius: 4px;
+  border-radius: 7px;
   padding: 4px 14px;
   min-width: 72px;
 }
@@ -1731,7 +1770,7 @@ input.toggle:disabled {
 .group-chips button {
   border: 0;
   background: transparent;
-  border-radius: 3px;
+  border-radius: 6px;
   padding: 4px 10px;
   white-space: nowrap;
   color: var(--text);
@@ -1754,7 +1793,7 @@ input.toggle:disabled {
   padding: 0;
   border: 0;
   background: transparent;
-  border-radius: 4px;
+  border-radius: 7px;
   color: var(--muted);
   display: inline-grid;
   place-items: center;
@@ -1804,7 +1843,7 @@ input.toggle:disabled {
   min-width: 160px;
   flex: 0 1 200px;
   border: 1px solid var(--line);
-  border-radius: 3px;
+  border-radius: 7px;
   padding: 4px 8px;
   height: 28px;
   background: var(--surface);
@@ -1819,16 +1858,46 @@ input.toggle:disabled {
 .url-test input,
 .profiles-toolbar input,
 .profiles-toolbar select,
+/* Handoff section 5: 30px fields on --c-surf2, 1px hairline, radius 7. */
 .settings-form input,
 .settings-form select,
 .subscription-form input,
 .subscription-form select,
 .log-controls select,
 .status-control select {
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 4px 8px;
-  background: var(--surface);
+  height: 30px;
+  border: 1px solid var(--c-line);
+  border-radius: 7px;
+  padding: 0 9px;
+  background: var(--c-surf2);
+  font-size: 12.5px;
+}
+
+.settings-form textarea,
+.subscription-form textarea {
+  border: 1px solid var(--c-line);
+  border-radius: 7px;
+  padding: 8px 9px;
+  background: var(--c-surf2);
+  font-size: 12.5px;
+}
+
+.settings-form input:focus,
+.settings-form select:focus,
+.settings-form textarea:focus,
+.subscription-form input:focus,
+.subscription-form select:focus {
+  background: var(--c-surf);
+}
+
+/* A checkbox is not a 30px text field. */
+.settings-form input[type="checkbox"],
+.subscription-form input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  padding: 0;
+  accent-color: var(--c-acc);
 }
 
 .profiles-toolbar button:not(.icon-btn),
@@ -1838,7 +1907,7 @@ input.toggle:disabled {
 .dialog-head button:not(.icon-btn) {
   border: 1px solid var(--line);
   background: var(--surface);
-  border-radius: 3px;
+  border-radius: 7px;
   padding: 4px 10px;
 }
 
@@ -1856,7 +1925,7 @@ input.toggle:disabled {
 .node-actions button:hover:not(:disabled) {
   color: var(--accent);
   background: var(--row-hover);
-  border-radius: 4px;
+  border-radius: 7px;
 }
 
 .profiles-toolbar button.primary,
@@ -1989,7 +2058,7 @@ tr.disabled-node td {
   margin-right: 6px;
   padding: 0 5px;
   height: 16px;
-  border-radius: 2px;
+  border-radius: 4px;
   font-size: 11px;
   font-style: normal;
   font-weight: 600;
@@ -2028,7 +2097,7 @@ tr.disabled-node td {
   list-style: none;
   min-width: 180px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 11px;
   background: var(--menu);
   box-shadow: var(--shadow);
 }
@@ -2039,7 +2108,7 @@ tr.disabled-node td {
   border: 0;
   background: transparent;
   padding: 7px 10px;
-  border-radius: 4px;
+  border-radius: 7px;
 }
 
 .context-menu button:hover:not(:disabled) {
@@ -2200,7 +2269,7 @@ input.toggle:checked::after {
 .proxy-mode-group > button {
   border: 1px solid var(--line);
   background: var(--surface);
-  border-radius: 4px;
+  border-radius: 7px;
   padding: 2px 8px;
 }
 
@@ -2268,7 +2337,7 @@ input.toggle:checked::after {
 .notice {
   border: 1px solid var(--line);
   background: var(--surface-2);
-  border-radius: 6px;
+  border-radius: 9px;
   padding: 10px 12px;
 }
 
@@ -2314,24 +2383,28 @@ input.toggle:checked::after {
   gap: 8px;
 }
 
+/* Handoff section 5: scrim rgba(8,12,18,.34), dialog dropped 44px from the top. */
 .dialog-backdrop {
   position: fixed;
   inset: 0;
   z-index: 60;
   display: grid;
-  place-items: center;
-  background: rgba(0, 0, 0, 0.35);
-  padding: 24px;
+  grid-template-rows: min-content;
+  justify-items: center;
+  background: rgba(8, 12, 18, 0.34);
+  padding: 44px 24px 24px;
 }
 
 .dialog {
-  width: min(640px, 100%);
-  max-height: min(84vh, 900px);
-  overflow: auto;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  box-shadow: var(--shadow);
+  display: flex;
+  width: min(660px, 100%);
+  max-height: min(84vh, 712px);
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--c-surf);
+  border: 1px solid var(--c-line);
+  border-radius: 14px;
+  box-shadow: var(--c-shadow);
 }
 
 .dialog-wide {
@@ -2340,18 +2413,20 @@ input.toggle:checked::after {
 
 .dialog-head {
   display: flex;
+  flex: none;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface-2);
-  position: sticky;
-  top: 0;
+  padding: 13px 15px;
+  border-bottom: 1px solid var(--c-line);
+  background: var(--c-surf2);
+  font-size: 15px;
+  font-weight: 650;
 }
 
 .dialog-body {
-  padding: 12px;
+  flex: 1;
+  padding: 14px 16px 16px;
   min-height: 0;
   overflow: auto;
 }
@@ -2369,7 +2444,7 @@ input.toggle:checked::after {
   min-width: 100px;
   border: 1px solid var(--line);
   background: var(--surface);
-  border-radius: 4px;
+  border-radius: 7px;
   padding: 5px 16px;
 }
 
@@ -2400,27 +2475,94 @@ input.toggle:checked::after {
   border-bottom-color: var(--accent);
 }
 
+/*
+ * `display: contents` below promotes each label into its text and its control
+ * as two separate grid items, so the column count has to be even or every row
+ * shifts the pairing by one and labels drift away from their fields.
+ */
 .form-grid {
   display: grid;
-  grid-template-columns: 220px minmax(200px, 1fr) minmax(0, 1.2fr);
+  grid-template-columns: 168px minmax(0, 1fr);
   gap: 8px 12px;
   align-items: center;
 }
 
-.form-grid > label:not(.checkbox-label) {
+/*
+ * `.sr-only` is excluded: `display: contents` removes the label's own box, and
+ * with it the `position: absolute` / `clip` that hides it — which is how the
+ * screen-reader-only protocol select ended up drawn next to the chips.
+ */
+.form-grid > label:not(.checkbox-label):not(.sr-only) {
   display: contents;
 }
 
-.form-grid > label > input,
-.form-grid > label > select,
-.form-grid > label > textarea {
-  max-width: 400px;
+/*
+ * A checkbox belongs beside its own text, not a column away from it. These
+ * labels opt out of `display: contents` and take a whole row, which also keeps
+ * the two-cell rhythm intact for the fields that follow.
+ */
+.form-grid > label:not(.sr-only):has(> input[type="checkbox"]) {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: 8px;
+  align-items: center;
 }
 
+/*
+ * Only the two-cell label pairs may sit in the two-column rhythm. Anything else
+ * — chip rows, hints, section headings, standalone checkboxes — takes a whole
+ * row, because a child that occupies a single cell shifts every later pair by
+ * one and walks each label away from its field.
+ */
+.form-grid > *:not(label),
+.form-grid > label.checkbox-label {
+  grid-column: 1 / -1;
+}
+
+/* Fill the field column: a fixed cap left the dialog's right half empty. */
+.form-grid > label > input,
+.form-grid > label > select,
+.form-grid > label > textarea,
+.form-grid > label > .inline-field {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* Handoff section 5: 11px / 650 / .04em / --c-mut2 section headings. */
 .form-grid > .form-section {
   grid-column: 1 / -1;
-  margin: 8px 0 0;
-  font-weight: 600;
+  margin: 14px 0 2px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  color: var(--c-mut2);
+  text-transform: none;
+}
+
+.form-grid > .form-section:first-child {
+  margin-top: 0;
+}
+
+/* Handoff section 5's note bar: --c-surf2 panel, radius 8, 11.5px --c-mut. */
+.form-grid > .form-hint,
+.form-grid > .hint,
+.dialog-body > .hint {
+  grid-column: 1 / -1;
+  margin: 10px 0 0;
+  border-radius: 8px;
+  padding: 9px 11px;
+  background: var(--c-surf2);
+  color: var(--c-mut);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.form-subtitle {
+  grid-column: 1 / -1;
+  margin: 0 0 10px;
+  color: var(--c-mut);
+  font-size: 12px;
 }
 
 .form-grid > hr {
@@ -2434,7 +2576,7 @@ input.toggle:checked::after {
   display: flex;
   gap: 8px;
   align-items: center;
-  max-width: 400px;
+  max-width: 100%;
 }
 
 .form-grid .inline-field input {
@@ -2467,7 +2609,7 @@ input.toggle:checked::after {
 .form-grid select,
 .form-grid textarea {
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: 7px;
   padding: 4px 8px;
   background: var(--surface);
   width: 100%;
@@ -2486,7 +2628,7 @@ input.toggle:checked::after {
   border: 0;
   background: transparent;
   padding: 4px 10px;
-  border-radius: 4px;
+  border-radius: 7px;
 }
 
 .dialog-menu button:hover:not(:disabled) {
@@ -2517,7 +2659,7 @@ input.toggle:checked::after {
   gap: 4px;
   padding: 8px;
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: 7px;
 }
 
 .detail-panel {
@@ -2927,12 +3069,49 @@ input.toggle:checked::after {
   color: #fff;
 }
 
+/*
+ * Save and cancel stay reachable: the form is taller than the dialog on a
+ * 1280x800 window, and a footer that scrolls away reads as a form you cannot
+ * submit. It spans both grid columns rather than sitting in the label column.
+ */
+/*
+ * Handoff section 5's bottom bar: --c-surf2, hairline on top, share-link and
+ * QR on the left, cancel and save on the right. It sticks because the form is
+ * taller than the dialog and a footer that scrolls away reads as a form you
+ * cannot submit. Negative margins pull it out to the dialog's own edges.
+ */
 .node-form-foot {
+  position: sticky;
+  bottom: -16px;
+  z-index: 1;
   display: flex;
+  grid-column: 1 / -1;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  padding-top: 12px;
+  border-top: 1px solid var(--c-line);
+  margin: 12px -16px -16px;
+  padding: 11px 16px;
+  background: var(--c-surf2);
+}
+
+.node-form-foot button {
+  height: 30px;
+  border: 1px solid var(--c-line);
+  border-radius: 7px;
+  padding: 0 12px;
+  background: var(--c-surf);
+  font-size: 12.5px;
+}
+
+.node-form-foot button.btn-primary {
+  background: var(--c-acc);
+  border-color: var(--c-acc);
+  color: #fff;
+}
+
+.node-form-foot button.btn-primary:hover:not(:disabled) {
+  background: var(--c-acc-b);
 }
 
 .node-form-foot-end {
@@ -3005,6 +3184,309 @@ input.toggle:checked::after {
 
 .overflow-wrap {
   position: relative;
+}
+
+.card-vdiv {
+  width: 1px;
+  height: 28px;
+  background: var(--c-line);
+  flex: none;
+}
+
+.mode-card-row {
+  flex-wrap: wrap;
+}
+
+.mode-card-row .segmented {
+  margin-left: auto;
+}
+
+.rules-card > .card-head .btn-primary,
+.ruleset-card > .card-head .btn-secondary:first-of-type {
+  margin-left: auto;
+}
+
+.scheme-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 0 16px 14px;
+}
+
+.scheme-row select {
+  height: 30px;
+  border: 1px solid var(--c-line);
+  border-radius: 7px;
+  padding: 0 9px;
+  background: var(--c-surf2);
+}
+
+.rules-card,
+.ruleset-card,
+.dns-card {
+  overflow: hidden;
+}
+
+.rules-card > .card-head,
+.ruleset-card > .card-head,
+.dns-card > .card-head,
+.dns-effect > .card-head {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--c-line);
+}
+
+.rules-card > .card-head {
+  margin-left: 0;
+}
+
+.rule-composer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--c-line);
+  background: var(--c-surf2);
+}
+
+.rule-composer select,
+.rule-composer input {
+  height: 30px;
+  border: 1px solid var(--c-line);
+  border-radius: 7px;
+  padding: 0 9px;
+  background: var(--c-surf);
+  font-size: 12.5px;
+}
+
+.rule-composer input {
+  flex: 1 1 160px;
+  min-width: 140px;
+}
+
+.rule-composer .btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rule-grid,
+.provider-grid {
+  display: grid;
+  align-items: stretch;
+}
+
+.rule-grid {
+  grid-template-columns: 34px 132px minmax(0, 1fr) 108px 88px 44px;
+}
+
+.provider-grid {
+  grid-template-columns: 150px minmax(0, 1fr) 84px 96px 128px 76px;
+}
+
+.rule-grid > .grid-head,
+.rule-grid > .grid-row,
+.provider-grid > .grid-head,
+.provider-grid > .grid-row {
+  display: contents;
+}
+
+.rule-grid > .grid-head > *,
+.provider-grid > .grid-head > * {
+  height: 32px;
+  padding: 0 8px;
+  background: var(--c-surf2);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-mut2);
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--c-line);
+}
+
+.rule-grid > .grid-row > *,
+.provider-grid > .grid-row > * {
+  min-width: 0;
+  height: 34px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid var(--c-line);
+  font-size: 12.5px;
+}
+
+.rule-grid > .grid-row:hover > *,
+.provider-grid > .grid-row:hover > * {
+  background: var(--c-hover);
+}
+
+.drag-handle {
+  width: 30px;
+  height: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--c-mut2);
+  cursor: grab;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.drag-handle:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.row-menu {
+  position: relative;
+}
+
+.row-menu-pop {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 20;
+  min-width: 140px;
+  padding: 5px;
+  border: 1px solid var(--c-line);
+  border-radius: 11px;
+  background: var(--c-surf);
+  box-shadow: var(--c-shadow);
+}
+
+.row-menu-pop[hidden] {
+  display: none;
+}
+
+.row-menu-pop button {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: 7px 10px;
+  border-radius: 7px;
+  font-size: 12.5px;
+}
+
+.row-menu-pop button:hover:not(:disabled) {
+  background: var(--c-hover);
+}
+
+.dns-main {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.dns-card-body {
+  padding: 6px 16px 14px;
+}
+
+.dns-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--c-line);
+}
+
+.dns-field:last-child {
+  border-bottom: 0;
+}
+
+.dns-field-copy {
+  width: 230px;
+  flex: 0 0 auto;
+}
+
+.dns-field-copy strong {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 550;
+}
+
+.dns-field-copy span {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--c-mut2);
+}
+
+.dns-field-control {
+  flex: 1;
+  min-width: 0;
+}
+
+.dns-field-control input,
+.dns-field-control select,
+.dns-field-control textarea {
+  width: 100%;
+  max-width: 100%;
+  height: 30px;
+  border: 1px solid var(--c-line);
+  border-radius: 7px;
+  padding: 0 10px;
+  background: var(--c-surf2);
+  font-size: 12.5px;
+}
+
+.dns-field-control textarea {
+  height: auto;
+  padding: 8px 10px;
+}
+
+.warn-chip {
+  font-size: 11px;
+  font-style: normal;
+  color: var(--c-warn);
+  background: var(--c-warn-t);
+  border-radius: 5px;
+  padding: 1px 7px;
+  font-weight: 600;
+}
+
+.chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.dns-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  background: var(--c-surf2);
+  border: 1px solid var(--c-line);
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+
+.dns-chip button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--c-mut2);
+  line-height: 1;
+}
+
+.chip-input {
+  width: 140px !important;
+  flex: 0 0 auto;
+}
+
+.chip-add {
+  height: 26px;
+  border: 1px dashed var(--c-line2);
+  border-radius: 6px;
+  padding: 0 8px;
+  background: transparent;
+  color: var(--c-mut2);
+  font-size: 11.5px;
 }
 
 .btn-danger {

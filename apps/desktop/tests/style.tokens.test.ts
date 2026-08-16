@@ -76,4 +76,41 @@ describe("handoff tokens and shell numbers", () => {
     expect(css).toMatch(/\.app-topbar\s*\{[^}]*height:\s*48px/s);
     expect(css).toMatch(/\.app-statusbar\s*\{[^}]*height:\s*28px/s);
   });
+
+  /*
+   * `.form-grid > label { display: contents }` splits every label into its text
+   * and its control, so each one consumes two cells. An odd column count shifts
+   * the pairing by one on every row and walks each label away from its field —
+   * which is what shipped in 1.1.0, scrambling the add-node form.
+   */
+  it("keeps the form grid on an even column count", () => {
+    const at = css.indexOf(".form-grid {");
+    expect(at).toBeGreaterThan(-1);
+    const block = css.slice(at, css.indexOf("}", at));
+    const columns = /grid-template-columns:\s*([^;]+);/.exec(block)?.[1] ?? "";
+    expect(columns).not.toBe("");
+
+    // Count top-level tracks: a space separates tracks only outside minmax(...).
+    let depth = 0;
+    let tracks = 1;
+    for (const character of columns.trim().replace(/\s+/gu, " ")) {
+      if (character === "(") depth += 1;
+      else if (character === ")") depth -= 1;
+      else if (character === " " && depth === 0) tracks += 1;
+    }
+
+    expect(tracks % 2).toBe(0);
+    // `.sr-only` must stay out of it: `display: contents` drops the label's box
+    // and with it the clip that hides a screen-reader-only control.
+    expect(css).toMatch(
+      /\.form-grid\s*>\s*label:not\(\.checkbox-label\):not\(\.sr-only\)\s*\{[^}]*display:\s*contents/s,
+    );
+
+    // Parity also needs every non-pair child to take a whole row: a chip row or
+    // a hint occupying one cell shifts each later pair by one, which is the
+    // second half of the same 1.1.0 bug.
+    expect(css).toMatch(
+      /\.form-grid\s*>\s*\*:not\(label\),\s*\.form-grid\s*>\s*label\.checkbox-label\s*\{[^}]*grid-column:\s*1\s*\/\s*-1/s,
+    );
+  });
 });
