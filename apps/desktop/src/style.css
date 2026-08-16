@@ -414,8 +414,20 @@ button {
   overflow: auto;
 }
 
+/*
+ * A flex column so a full-height page (Settings' nav rail, the node table)
+ * stretches to the viewport instead of stopping where its content ends and
+ * reading as a card floating on the background.
+ */
 .page-host > section {
   min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.page-host > section > * {
+  flex: 1;
+  min-height: 0;
 }
 
 .page-pad {

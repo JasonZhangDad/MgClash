@@ -1014,6 +1014,41 @@ describe("redesigned shell", () => {
     ).toBe(true);
   });
 
+  /*
+   * The handoff closes the topmost overlay on Escape. Dialogs were left out, so
+   * the node form could only be dismissed by finding its close button.
+   */
+  it("closes the node dialog on Escape without closing the window", async () => {
+    await render();
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(".nav-item[data-page='nodes']")
+        ?.click();
+    });
+    await act(async () => {
+      [...container.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent?.includes("添加节点"))
+        ?.click();
+    });
+    const dialog = container.querySelector("[aria-label='手动创建节点']");
+    expect(dialog).not.toBeNull();
+    expect(dialog?.closest(".dialog-backdrop")?.hasAttribute("hidden")).toBe(
+      false,
+    );
+
+    await act(async () => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    });
+    expect(
+      container
+        .querySelector("[aria-label='手动创建节点']")
+        ?.closest(".dialog-backdrop")
+        ?.hasAttribute("hidden"),
+    ).toBe(true);
+  });
+
   it("uses page chrome for routing, DNS, and settings fields", async () => {
     loadSessionStatusMock.mockResolvedValue({
       connected: false,

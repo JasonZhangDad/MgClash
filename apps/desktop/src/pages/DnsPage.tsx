@@ -22,7 +22,11 @@ export function DnsPage({ app }: { app: AppModel }) {
         <div className="dns-main">
         <Card className="dns-card">
           <header className="card-head">
-            <strong>{t("DNS 基础设置")}</strong>
+            {/* Follows the open tab; a fixed "基础" title contradicted the
+                tab bar right under it. */}
+            <strong>
+              {dnsTab === "basic" ? t("DNS 基础设置") : t("DNS 进阶设置")}
+            </strong>
             {dnsDraft ? (
               <SegmentedControl
                 ariaLabel={t("DNS 模板")}
@@ -76,37 +80,6 @@ export function DnsPage({ app }: { app: AppModel }) {
           <p className="hint">{t("正在读取 DNS 设置")}</p>
         ) : (
           <div className="settings-form form-grid">
-            <label>
-              {t("模板")}
-              <select
-                aria-label={t("DNS 模板")}
-                disabled={busy}
-                value={dnsDraft.template}
-                onChange={(event) => {
-                  const template = event.target.value as DnsTemplate;
-                  const patch =
-                    template === "advanced"
-                      ? {
-                          mode: "doh" as const,
-                          server: "cloudflare-dns.com",
-                          port: 443,
-                          dohPath: "/dns-query",
-                          bootstrap: "223.5.5.5",
-                          fakeIpEnabled: true,
-                        }
-                      : {
-                          mode: "system" as const,
-                          bootstrap: "",
-                          fakeIpEnabled: false,
-                        };
-                  setDnsDraft({ ...dnsDraft, ...patch, template });
-                  setDnsDirty(true);
-                }}
-              >
-                <option value="simple">{t("简易")}</option>
-                <option value="advanced">{t("高级")}</option>
-              </select>
-            </label>
             <label>
               {t("模式")}
               <select

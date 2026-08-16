@@ -63,10 +63,9 @@ export function RoutingPage({ app }: { app: AppModel }) {
         <div className="mode-card-row">
           <div>
             <strong>{t("路由模式")} Routing mode</strong>
-            <p className="hint">{t("运行顺序固定为：本地安全规则 → 用户规则 → Geo 规则 → 默认出口。仅规则模式应用列表。")}</p>
           </div>
           <SegmentedControl
-            ariaLabel={t("状态栏路由模式")}
+            ariaLabel={t("路由模式")}
             value={status?.mode ?? "global"}
             disabled={busy || status === null}
             onChange={(mode) => void run(() => setRoutingMode(mode))}
@@ -119,7 +118,7 @@ export function RoutingPage({ app }: { app: AppModel }) {
           <p className="hint">{t("正在读取路由设置")}</p>
         ) : (
           <>
-            <div className="settings-form">
+            <div className="settings-form form-grid">
               <label>
                 {t("路由方案")}
                 <select
@@ -212,7 +211,7 @@ export function RoutingPage({ app }: { app: AppModel }) {
                 {t("删除方案")}
               </button>
             </div>
-            <div className="settings-form">
+            <div className="settings-form form-grid">
               <label>
                 {t("规则类型")}
                 <select
@@ -382,7 +381,7 @@ export function RoutingPage({ app }: { app: AppModel }) {
                 {t("全部更新")}
               </button>
             </header>
-            <div className="settings-form" aria-label={t("规则集")}>
+            <div className="settings-form form-grid" aria-label={t("规则集")}>
               <label>
                 {t("规则集名称")}
                 <input
@@ -533,7 +532,7 @@ export function RoutingPage({ app }: { app: AppModel }) {
               </table>
             )}
 
-            <div className="settings-form">
+            <div className="settings-form form-grid">
               <label>
                 {t("默认出口")}
                 <select
