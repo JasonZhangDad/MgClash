@@ -265,7 +265,13 @@ export interface NodeTestResult {
   status: NodeTestStatus;
 }
 
+export interface DailyTraffic {
+  bytes: number;
+  day: string;
+}
+
 export interface TrafficSnapshot {
+  daily?: DailyTraffic[];
   downloadBytesPerSecond: number;
   monthBytes: number;
   todayBytes: number;

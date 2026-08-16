@@ -78,6 +78,9 @@ export function NodeContextMenu({
       aria-label={`节点操作 ${target.name}`}
       style={{ left: position.x, top: position.y }}
     >
+      <li className="menu-target" role="presentation">
+        {target.name} · {target.protocol}
+      </li>
       <li className="menu-group-label" role="presentation">
         {t("连接")}
       </li>

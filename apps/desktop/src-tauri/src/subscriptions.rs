@@ -29,7 +29,7 @@ pub struct SubscriptionBackupEntry {
     pub subconverter_url: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopSubscriptionSummary {
     pub id: Uuid,
@@ -44,6 +44,28 @@ pub struct DesktopSubscriptionSummary {
     pub include_keywords: String,
     pub exclude_keywords: String,
     pub subconverter_url: Option<String>,
+    pub url: String,
+}
+
+impl std::fmt::Debug for DesktopSubscriptionSummary {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DesktopSubscriptionSummary")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("update_interval_minutes", &self.update_interval_minutes)
+            .field("auto_update", &self.auto_update)
+            .field("last_updated_at", &self.last_updated_at)
+            .field("enabled", &self.enabled)
+            .field("node_count", &self.node_count)
+            .field("last_error", &self.last_error)
+            .field("user_agent", &self.user_agent)
+            .field("include_keywords", &self.include_keywords)
+            .field("exclude_keywords", &self.exclude_keywords)
+            .field("subconverter_url", &self.subconverter_url)
+            .field("url", &"[REDACTED]")
+            .finish()
+    }
 }
 
 pub struct DesktopSubscriptionController<S: SecretStore> {
@@ -62,7 +84,7 @@ impl<S: SecretStore> DesktopSubscriptionController<S> {
         }
     }
 
-    /// Lists subscriptions without exposing their URL credentials.
+    /// Lists subscriptions, including the stored URL for the desktop card.
     ///
     /// # Errors
     ///
@@ -74,7 +96,12 @@ impl<S: SecretStore> DesktopSubscriptionController<S> {
             .subscriptions()?
             .iter()
             .map(|subscription| {
-                summary(&store, subscription, errors.get(&subscription.id).cloned())
+                summary(
+                    &store,
+                    &self.secret_store,
+                    subscription,
+                    errors.get(&subscription.id).cloned(),
+                )
             })
             .collect()
     }
@@ -111,7 +138,7 @@ impl<S: SecretStore> DesktopSubscriptionController<S> {
                 exclude_keywords,
                 subconverter_url,
             )?;
-        summary(&store, &subscription, None)
+        summary(&store, &self.secret_store, &subscription, None)
     }
 
     /// Updates editable settings and optionally replaces the URL credential.
@@ -152,6 +179,7 @@ impl<S: SecretStore> DesktopSubscriptionController<S> {
             )?;
         summary(
             &store,
+            &self.secret_store,
             &subscription,
             self.errors().get(&subscription.id).cloned(),
         )
@@ -302,7 +330,19 @@ impl<S: SecretStore> DesktopSubscriptionController<S> {
                 Ok(summary)
             }
             Err(error) => {
-                self.errors().insert(id, error.to_string());
+                let message = error.to_string();
+                let redacted = self
+                    .store()
+                    .subscription(id)
+                    .ok()
+                    .flatten()
+                    .and_then(|subscription| {
+                        stored_subscription_url(&self.secret_store, &subscription).ok()
+                    })
+                    .filter(|url| !url.is_empty())
+                    .map(|url| message.replace(&url, "[REDACTED]"))
+                    .unwrap_or(message);
+                self.errors().insert(id, redacted);
                 Err(error)
             }
         }
@@ -322,6 +362,7 @@ impl<S: SecretStore> DesktopSubscriptionController<S> {
             .ok_or(SubscriptionTransactionError::SubscriptionNotFound { id })?;
         summary(
             &store,
+            &self.secret_store,
             &subscription,
             self.errors().get(&subscription.id).cloned(),
         )
@@ -346,8 +387,21 @@ fn subscription_is_due(subscription: &Subscription, now: TimestampMillis) -> boo
     })
 }
 
-fn summary(
+fn stored_subscription_url<S: SecretStore>(
+    secret_store: &S,
+    subscription: &Subscription,
+) -> Result<String, DesktopSubscriptionError> {
+    let secret = secret_store
+        .get(&subscription.url_secret_ref)
+        .map_err(|source| DesktopSubscriptionError::SecretRead { source })?;
+    str::from_utf8(secret.expose_secret())
+        .map(str::to_owned)
+        .map_err(|source| DesktopSubscriptionError::InvalidUrlSecret { source })
+}
+
+fn summary<S: SecretStore>(
     store: &SqliteSubscriptionStore,
+    secret_store: &S,
     subscription: &Subscription,
     last_error: Option<String>,
 ) -> Result<DesktopSubscriptionSummary, DesktopSubscriptionError> {
@@ -364,6 +418,7 @@ fn summary(
         include_keywords: subscription.include_keywords.clone(),
         exclude_keywords: subscription.exclude_keywords.clone(),
         subconverter_url: subscription.subconverter_url.clone(),
+        url: stored_subscription_url(secret_store, subscription)?,
     })
 }
 
@@ -468,6 +523,11 @@ mod tests {
         assert_eq!(created.node_count, 0);
         assert_eq!(created.last_updated_at, None);
         assert!(created.auto_update);
+        assert_eq!(created.url, "https://example.com/list?token=url-secret");
+        assert_eq!(
+            controller.list().unwrap()[0].url,
+            "https://example.com/list?token=url-secret"
+        );
         assert!(!format!("{created:?}").contains("url-secret"));
 
         let edited = controller
@@ -653,8 +713,15 @@ mod tests {
             .unwrap_err();
 
         let summary = controller.list().unwrap().pop().unwrap();
+        assert_eq!(summary.url, "not a URL");
         assert!(summary.last_error.is_some());
-        assert!(!summary.last_error.unwrap().contains("url-secret"));
+        assert!(
+            !summary
+                .last_error
+                .as_ref()
+                .is_some_and(|error| error.contains("url-secret"))
+        );
+        assert!(!format!("{summary:?}").contains("url-secret"));
     }
 
     #[test]

@@ -76,7 +76,7 @@ use crate::subscriptions::{
     DesktopSubscriptionController, DesktopSubscriptionError, DesktopSubscriptionSummary,
 };
 use crate::traffic::{
-    NodeTraffic, SqliteTrafficCounter, TrafficCounterError, TrafficSnapshot, sample_traffic,
+    NodeTraffic, SqliteTrafficCounter, TrafficCounterError, TrafficReport, sample_traffic,
 };
 use crate::tray::{TrayAction, TrayUi, menu_model};
 use crate::url_test::{SpeedTestOutcome, UrlTestError, probe_download_speed, probe_url};
@@ -473,10 +473,7 @@ fn refresh_tray(app: &AppHandle) -> Result<(), CommandError> {
         })
 }
 
-fn set_system_proxy_mode_from_tray(
-    app: &AppHandle,
-    mode: &str,
-) -> Result<(), CommandError> {
+fn set_system_proxy_mode_from_tray(app: &AppHandle, mode: &str) -> Result<(), CommandError> {
     let parsed = crate::app_settings::parse_system_proxy_mode(mode).ok_or(CommandError {
         code: "invalid_system_proxy_mode",
         message: format!("unknown system proxy mode: {mode}"),
@@ -543,6 +540,10 @@ fn handle_background_tray_action(app: &AppHandle, action: TrayAction) {
 }
 
 #[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive State and AppHandle by value"
+)]
 fn request_app_exit(app: AppHandle) {
     start_app_exit(&app);
 }
@@ -982,8 +983,8 @@ async fn session_speed_test(
     clippy::needless_pass_by_value,
     reason = "Tauri commands receive State by value"
 )]
-fn session_traffic(state: State<'_, AppState>) -> TrafficSnapshot {
-    state.traffic().snapshot()
+fn session_traffic(state: State<'_, AppState>) -> TrafficReport {
+    TrafficReport::from_counter(&state.traffic())
 }
 
 #[tauri::command]
@@ -991,12 +992,12 @@ fn session_traffic(state: State<'_, AppState>) -> TrafficSnapshot {
     clippy::needless_pass_by_value,
     reason = "Tauri commands receive State by value"
 )]
-fn session_clear_traffic(state: State<'_, AppState>) -> Result<TrafficSnapshot, CommandError> {
+fn session_clear_traffic(state: State<'_, AppState>) -> Result<TrafficReport, CommandError> {
     let mut traffic = state.traffic();
     traffic
         .clear(Local::now().date_naive(), Instant::now())
         .map_err(|error| traffic_counter_command_error(&error))?;
-    Ok(traffic.snapshot())
+    Ok(TrafficReport::from_counter(&traffic))
 }
 
 fn connections_error(error: &ConnectionsError) -> CommandError {

@@ -6,14 +6,29 @@ import { describe, expect, it } from "vitest";
 // can call `t(...)` has to be scanned, not just App.tsx.
 import appSource from "./App.tsx?raw";
 import appHelpersSource from "./appHelpers.ts?raw";
+import appControllerSource from "./hooks/useAppController.ts?raw";
 import cameraScannerSource from "./components/CameraScanner.tsx?raw";
+import commandPaletteSource from "./components/CommandPalette.tsx?raw";
 import connectionsViewSource from "./components/ConnectionsView.tsx?raw";
 import nodeContextMenuSource from "./components/NodeContextMenu.tsx?raw";
 import proxiesViewSource from "./components/ProxiesView.tsx?raw";
 import dialogSource from "./components/Dialog.tsx?raw";
 import menuBarSource from "./components/MenuBar.tsx?raw";
 import msgViewSource from "./components/MsgView.tsx?raw";
-import statusBarSource from "./components/StatusBar.tsx?raw";
+import appStatusBarSource from "./components/layout/AppStatusBar.tsx?raw";
+import sidebarSource from "./components/layout/Sidebar.tsx?raw";
+import topBarSource from "./components/layout/TopBar.tsx?raw";
+import nodeInspectorSource from "./components/nodes/NodeInspector.tsx?raw";
+import nodesPageSource from "./components/nodes/NodesPage.tsx?raw";
+import appDialogsSource from "./components/overlays/AppDialogs.tsx?raw";
+import overviewSource from "./pages/OverviewPage.tsx?raw";
+import trafficSource from "./pages/TrafficPage.tsx?raw";
+import connectionsPageSource from "./pages/ConnectionsPage.tsx?raw";
+import logsPageSource from "./pages/LogsPage.tsx?raw";
+import proxiesPageSource from "./pages/ProxiesPage.tsx?raw";
+import routingPageSource from "./pages/RoutingPage.tsx?raw";
+import dnsPageSource from "./pages/DnsPage.tsx?raw";
+import settingsPageSource from "./pages/SettingsPage.tsx?raw";
 
 import { ROUTE_KIND_LABEL } from "./appHelpers";
 import {
@@ -35,13 +50,28 @@ import {
 function usedKeys(): string[] {
   const source = [
     appSource,
+    appControllerSource,
     appHelpersSource,
     cameraScannerSource,
+    commandPaletteSource,
     connectionsViewSource,
     nodeContextMenuSource,
     proxiesViewSource,
     menuBarSource,
-    statusBarSource,
+    appStatusBarSource,
+    sidebarSource,
+    topBarSource,
+    nodeInspectorSource,
+    nodesPageSource,
+    appDialogsSource,
+    overviewSource,
+    trafficSource,
+    connectionsPageSource,
+    logsPageSource,
+    proxiesPageSource,
+    routingPageSource,
+    dnsPageSource,
+    settingsPageSource,
     msgViewSource,
     dialogSource,
   ].join("\n");
@@ -53,11 +83,25 @@ function usedKeys(): string[] {
     // above cannot see. The other entries happen to appear literally elsewhere
     // too; relying on that coincidence is how one of them ends up untranslated.
     ...Object.values(ROUTE_KIND_LABEL),
+    "通用",
+    "网络",
+    "内核",
+    "外观",
+    "数据与备份",
+    "高级",
+    "路由",
     // Column titles passed to SortableHeader as `label`, then translated
     // there as `t(label)` — the regex above cannot see the string.
     "传输协议",
     "订阅分组",
     "别名",
+    "今日上传",
+    "今日下载",
+    "总上传",
+    "总下载",
+    "优秀",
+    "一般",
+    "较差",
     "添加 [VMess]",
     "添加 [VLESS]",
     "添加 [Shadowsocks]",
@@ -69,6 +113,11 @@ function usedKeys(): string[] {
     "添加 [TUIC]",
     "添加 [AnyTLS]",
     "添加 [Naive]",
+    "左右分栏",
+    "上下分栏",
+    "标签页",
+    "主窗布局",
+    "快速操作",
   ];
 }
 

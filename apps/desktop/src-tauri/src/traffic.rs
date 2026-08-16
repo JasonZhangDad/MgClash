@@ -1,6 +1,6 @@
 //! Live traffic samples from sing-box's loopback-only Clash API.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -71,6 +71,41 @@ pub struct TrafficSnapshot {
     pub total_bytes: u64,
 }
 
+/// One calendar day's persisted aggregate, as `traffic_daily` stores it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DailyTraffic {
+    pub day: String,
+    pub bytes: u64,
+}
+
+/// Live snapshot plus the persisted daily series for the Traffic page.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrafficReport {
+    pub upload_bytes_per_second: u64,
+    pub download_bytes_per_second: u64,
+    pub today_bytes: u64,
+    pub month_bytes: u64,
+    pub total_bytes: u64,
+    pub daily: Vec<DailyTraffic>,
+}
+
+impl TrafficReport {
+    #[must_use]
+    pub fn from_counter(counter: &SqliteTrafficCounter) -> Self {
+        let snapshot = counter.snapshot();
+        Self {
+            upload_bytes_per_second: snapshot.upload_bytes_per_second,
+            download_bytes_per_second: snapshot.download_bytes_per_second,
+            today_bytes: snapshot.today_bytes,
+            month_bytes: snapshot.month_bytes,
+            total_bytes: snapshot.total_bytes,
+            daily: counter.daily_history(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TrafficTotals {
     day: NaiveDate,
@@ -122,6 +157,8 @@ pub struct SqliteTrafficCounter {
     /// The day each node's daily counters belong to, so a node untouched since
     /// yesterday rolls over when it next carries traffic rather than on load.
     node_days: HashMap<Uuid, NaiveDate>,
+    /// Per-day aggregates that survive a calendar roll (`traffic_daily`).
+    daily: BTreeMap<NaiveDate, u64>,
 }
 
 impl SqliteTrafficCounter {
@@ -178,6 +215,8 @@ impl SqliteTrafficCounter {
             .ok_or(TrafficCounterError::CounterOverflow)?;
         let (totals, _) = self.totals.rolled_to(today);
         self.totals = totals.with_added_bytes(bytes)?;
+        let day_total = self.daily.get(&today).copied().unwrap_or(0);
+        self.daily.insert(today, add(day_total, bytes)?);
         self.rate = rate;
         self.dirty = true;
         self.persist_if_due(now)
@@ -212,11 +251,26 @@ impl SqliteTrafficCounter {
         self.rate = TrafficRate::default();
         self.node_totals.clear();
         self.node_days.clear();
+        self.daily.clear();
         self.dirty = true;
         self.connection.execute("DELETE FROM node_traffic", [])?;
+        self.connection.execute("DELETE FROM traffic_daily", [])?;
         self.flush()?;
         self.last_persisted_at = now;
         Ok(())
+    }
+
+    /// Persisted daily aggregates, oldest first. Days with no bytes are omitted.
+    #[must_use]
+    pub fn daily_history(&self) -> Vec<DailyTraffic> {
+        self.daily
+            .iter()
+            .filter(|(_, bytes)| **bytes > 0)
+            .map(|(day, bytes)| DailyTraffic {
+                day: day.format("%Y-%m-%d").to_string(),
+                bytes: *bytes,
+            })
+            .collect()
     }
 
     #[must_use]
@@ -255,6 +309,16 @@ impl SqliteTrafficCounter {
                 self.totals.total_bytes,
             ],
         )?;
+        for (day, bytes) in &self.daily {
+            if *bytes == 0 {
+                continue;
+            }
+            self.connection.execute(
+                "INSERT INTO traffic_daily (day, bytes) VALUES (?1, ?2)
+                 ON CONFLICT(day) DO UPDATE SET bytes = excluded.bytes",
+                params![day.format("%Y-%m-%d").to_string(), bytes],
+            )?;
+        }
         for (id, totals) in &self.node_totals {
             let day = self.node_days.get(id).copied().unwrap_or(self.totals.day);
             self.connection.execute(
@@ -301,6 +365,10 @@ impl SqliteTrafficCounter {
                  today_download INTEGER NOT NULL CHECK (today_download >= 0),
                  total_upload INTEGER NOT NULL CHECK (total_upload >= 0),
                  total_download INTEGER NOT NULL CHECK (total_download >= 0)
+             );
+             CREATE TABLE IF NOT EXISTS traffic_daily (
+                 day TEXT PRIMARY KEY,
+                 bytes INTEGER NOT NULL CHECK (bytes >= 0)
              );",
         )?;
         let stored = connection
@@ -329,6 +397,10 @@ impl SqliteTrafficCounter {
                 total_bytes: decode_counter("total_bytes", total_bytes)?,
             },
         };
+        let mut daily = load_daily_traffic(&connection)?;
+        if totals.today_bytes > 0 {
+            daily.entry(totals.day).or_insert(totals.today_bytes);
+        }
         let (totals, dirty) = totals.rolled_to(today);
         let (node_totals, node_days) = load_node_traffic(&connection)?;
         Ok(Self {
@@ -339,6 +411,7 @@ impl SqliteTrafficCounter {
             last_persisted_at: now,
             node_totals,
             node_days,
+            daily,
         })
     }
 
@@ -350,6 +423,24 @@ impl SqliteTrafficCounter {
         self.last_persisted_at = now;
         Ok(())
     }
+}
+
+fn load_daily_traffic(
+    connection: &Connection,
+) -> Result<BTreeMap<NaiveDate, u64>, TrafficCounterError> {
+    let mut statement = connection.prepare("SELECT day, bytes FROM traffic_daily")?;
+    let rows = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+    })?;
+    let mut daily = BTreeMap::new();
+    for row in rows {
+        let (day, bytes) = row?;
+        let Ok(day) = NaiveDate::parse_from_str(&day, "%Y-%m-%d") else {
+            continue;
+        };
+        daily.insert(day, decode_counter("bytes", bytes)?);
+    }
+    Ok(daily)
 }
 
 /// Every node's stored counters, with the day each one's daily figures belong to.

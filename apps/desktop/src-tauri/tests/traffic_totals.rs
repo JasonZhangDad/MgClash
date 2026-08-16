@@ -334,6 +334,68 @@ fn clearing_zeros_aggregate_and_per_node_totals() {
     assert_eq!(snapshot.download_bytes_per_second, 0);
 }
 
+#[test]
+fn keeps_prior_days_in_daily_history_across_a_day_boundary() {
+    let started_at = Instant::now();
+    let mut counter = SqliteTrafficCounter::open_in_memory(day(2026, 8, 11), started_at).unwrap();
+
+    counter
+        .record(day(2026, 8, 11), rate(400), started_at, None)
+        .unwrap();
+    counter
+        .record(
+            day(2026, 8, 12),
+            rate(30),
+            started_at + Duration::from_secs(1),
+            None,
+        )
+        .unwrap();
+
+    let history = counter.daily_history();
+    assert_eq!(
+        history
+            .iter()
+            .map(|row| (row.day.as_str(), row.bytes))
+            .collect::<Vec<_>>(),
+        vec![("2026-08-11", 400), ("2026-08-12", 30)]
+    );
+}
+
+#[test]
+fn daily_history_is_empty_when_nothing_was_recorded() {
+    let counter = SqliteTrafficCounter::open_in_memory(day(2026, 8, 11), Instant::now()).unwrap();
+    assert!(counter.daily_history().is_empty());
+}
+
+#[test]
+fn daily_history_survives_reopen_on_the_next_day() {
+    let database = TestDatabase::new("daily-history");
+    let started_at = Instant::now();
+    {
+        let mut counter =
+            SqliteTrafficCounter::open(database.path(), day(2026, 8, 11), started_at).unwrap();
+        counter
+            .record(day(2026, 8, 11), rate(400), started_at, None)
+            .unwrap();
+        counter.flush().unwrap();
+    }
+
+    let mut reopened =
+        SqliteTrafficCounter::open(database.path(), day(2026, 8, 12), Instant::now()).unwrap();
+    reopened
+        .record(day(2026, 8, 12), rate(30), Instant::now(), None)
+        .unwrap();
+
+    let history = reopened.daily_history();
+    assert_eq!(
+        history
+            .iter()
+            .map(|row| (row.day.as_str(), row.bytes))
+            .collect::<Vec<_>>(),
+        vec![("2026-08-11", 400), ("2026-08-12", 30)]
+    );
+}
+
 fn split_rate(upload: u64, download: u64) -> TrafficRate {
     TrafficRate {
         upload_bytes_per_second: upload,

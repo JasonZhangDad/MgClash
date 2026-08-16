@@ -11,6 +11,7 @@ export interface SubscriptionSummary {
   name: string;
   nodeCount: number;
   updateIntervalMinutes: number;
+  url: string;
   userAgent: string | null;
   subconverterUrl: string | null;
 }
