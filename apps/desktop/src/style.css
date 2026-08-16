@@ -1423,6 +1423,19 @@ input.toggle:disabled {
   font-size: 11px;
 }
 
+/* Which node the actions apply to, per handoff section 4. */
+.menu-target {
+  padding: 4px 10px 6px;
+  border-bottom: 1px solid var(--c-line);
+  margin-bottom: 4px;
+  overflow: hidden;
+  color: var(--c-mut2);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .menubar-actions {
   display: flex;
   align-items: center;

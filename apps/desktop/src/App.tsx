@@ -207,21 +207,13 @@ export default function App() {
             <section hidden={page !== "logs"} aria-label={t("消息窗口")}>
               <LogsPage app={app} />
             </section>
-            <section
-              hidden={page !== "routing"}
-              aria-label={t("路由规则")}
-              role="dialog"
-            >
+            <section hidden={page !== "routing"} aria-label={t("路由规则")}>
               <RoutingPage app={app} />
             </section>
-            <section hidden={page !== "dns"} aria-label="DNS" role="dialog">
+            <section hidden={page !== "dns"} aria-label="DNS">
               <DnsPage app={app} />
             </section>
-            <section
-              hidden={page !== "settings"}
-              aria-label={t("设置")}
-              role="dialog"
-            >
+            <section hidden={page !== "settings"} aria-label={t("设置")}>
               <SettingsPage app={app} />
             </section>
             {inspected !== null ? <NodeInspector app={app} /> : null}
