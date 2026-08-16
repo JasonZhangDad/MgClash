@@ -3208,23 +3208,26 @@ describe("App", () => {
     setDnsSettingsMock.mockResolvedValue(saved);
     await render();
 
-    const mode = container.querySelector<HTMLSelectElement>(
-      "select[aria-label='DNS 模式']",
+    const mode = container.querySelector<HTMLButtonElement>(
+      "[aria-label='DNS 模式'] [data-value='doh']",
     );
     expect(mode).not.toBeNull();
-    await act(async () => selectValue("doh", mode!));
+    await act(async () => mode!.click());
     const path = container.querySelector<HTMLInputElement>(
       "input[aria-label='DoH 路径']",
     );
-    const domains = container.querySelector<HTMLTextAreaElement>(
-      "textarea[aria-label='系统 DNS 域名后缀']",
+    const domains = container.querySelector<HTMLInputElement>(
+      "input[aria-label='系统 DNS 域名后缀']",
     );
     expect(path).not.toBeNull();
     expect(domains).not.toBeNull();
     await act(async () => {
       typeInput("/custom-query", path!);
-      type("lan\ncorp.example", domains!);
+      typeInput("lan", domains!);
     });
+    await act(async () => button("+ 添加").click());
+    await act(async () => typeInput("corp.example", domains!));
+    await act(async () => button("+ 添加").click());
 
     await act(async () => button("保存 DNS").click());
 
@@ -3241,11 +3244,11 @@ describe("App", () => {
     setDnsSettingsMock.mockResolvedValue(CONNECTED);
     await render();
 
-    const mode = container.querySelector<HTMLSelectElement>(
-      "select[aria-label='DNS 模式']",
+    const mode = container.querySelector<HTMLButtonElement>(
+      "[aria-label='DNS 模式'] [data-value='doh']",
     );
     expect(mode?.disabled).toBe(false);
-    await act(async () => selectValue("doh", mode!));
+    await act(async () => mode!.click());
 
     await act(async () => button("保存 DNS").click());
 
@@ -3302,7 +3305,7 @@ describe("App", () => {
     );
     await act(async () => selectValue("direct", finalOutbound!));
 
-    const rows = container.querySelectorAll("[aria-label='路由规则列表'] tbody tr");
+    const rows = container.querySelectorAll("[aria-label='路由规则列表'] [data-row]");
     expect(rows[0]?.textContent).toContain("域名后缀");
     expect(rows[1]?.textContent).toContain("GeoIP");
     await act(async () => button("保存路由").click());
@@ -3341,7 +3344,7 @@ describe("App", () => {
     await act(async () => button("添加规则集").click());
 
     expect(
-      container.querySelectorAll("[aria-label='规则集列表'] tbody tr"),
+      container.querySelectorAll("[aria-label='规则集列表'] [data-row]"),
     ).toHaveLength(1);
 
     await act(async () => button("保存路由").click());
@@ -3459,7 +3462,7 @@ describe("App", () => {
     // single tracker domain.
     await act(async () => button("添加规则").click());
 
-    const rows = container.querySelectorAll("[aria-label='路由规则列表'] tbody tr");
+    const rows = container.querySelectorAll("[aria-label='路由规则列表'] [data-row]");
     expect(rows[0]?.textContent).toContain("协议");
     expect(rows[0]?.textContent).toContain("bittorrent");
 
@@ -3505,7 +3508,7 @@ describe("App", () => {
     });
     await act(async () => button("添加规则").click());
 
-    const rows = container.querySelectorAll("[aria-label='路由规则列表'] tbody tr");
+    const rows = container.querySelectorAll("[aria-label='路由规则列表'] [data-row]");
     expect(rows[0]?.textContent).toContain("入站");
 
     await act(async () => button("保存路由").click());
@@ -4401,7 +4404,7 @@ describe("App", () => {
     await act(async () => button("添加规则").click());
 
     const rows = [
-      ...container.querySelectorAll("[aria-label='路由规则列表'] tbody tr"),
+      ...container.querySelectorAll("[aria-label='路由规则列表'] [data-row]"),
     ];
     expect(rows[0]?.textContent).toContain("拦截");
 
@@ -4661,7 +4664,7 @@ describe("App", () => {
     ]);
     await render();
 
-    const row = container.querySelector("[aria-label='规则集列表'] tbody tr");
+    const row = container.querySelector("[aria-label='规则集列表'] [data-row]");
     expect(row?.textContent).toContain("未缓存");
 
     await act(async () =>
@@ -4672,7 +4675,7 @@ describe("App", () => {
 
     expect(updateRuleSetMock).toHaveBeenCalledWith("ads");
     expect(
-      container.querySelector("[aria-label='规则集列表'] tbody tr")?.textContent,
+      container.querySelector("[aria-label='规则集列表'] [data-row]")?.textContent,
     ).toContain("2.0 KB");
   });
 
@@ -4697,11 +4700,11 @@ describe("App", () => {
     ]);
     await render();
 
-    await act(async () => button("全部更新规则集").click());
+    await act(async () => button("全部更新").click());
 
     expect(updateRuleSetsMock).toHaveBeenCalledTimes(1);
     expect(
-      container.querySelector("[aria-label='规则集列表'] tbody tr")?.textContent,
+      container.querySelector("[aria-label='规则集列表'] [data-row]")?.textContent,
     ).toContain("4.0 KB");
 
     // A vendor that is down surfaces rather than looking like success.
@@ -4709,7 +4712,7 @@ describe("App", () => {
       code: "rule_set_download_failed",
       message: "failed to download https://example.com/ads.srs",
     });
-    await act(async () => button("全部更新规则集").click());
+    await act(async () => button("全部更新").click());
     expect(container.querySelector("[role='alert']")?.textContent).toContain(
       "failed to download",
     );

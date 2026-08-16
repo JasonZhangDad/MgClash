@@ -76,6 +76,19 @@ export function IconMore(props: IconProps) {
   );
 }
 
+export function IconGrip(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="5.5" cy="3.5" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="10.5" cy="3.5" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="5.5" cy="8" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="10.5" cy="8" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="5.5" cy="12.5" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="10.5" cy="12.5" r="0.9" fill="currentColor" stroke="none" />
+    </Svg>
+  );
+}
+
 export function IconRefresh(props: IconProps) {
   return (
     <Svg {...props}>

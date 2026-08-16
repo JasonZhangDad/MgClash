@@ -3186,6 +3186,309 @@ input.toggle:checked::after {
   position: relative;
 }
 
+.card-vdiv {
+  width: 1px;
+  height: 28px;
+  background: var(--c-line);
+  flex: none;
+}
+
+.mode-card-row {
+  flex-wrap: wrap;
+}
+
+.mode-card-row .segmented {
+  margin-left: auto;
+}
+
+.rules-card > .card-head .btn-primary,
+.ruleset-card > .card-head .btn-secondary:first-of-type {
+  margin-left: auto;
+}
+
+.scheme-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 0 16px 14px;
+}
+
+.scheme-row select {
+  height: 30px;
+  border: 1px solid var(--c-line);
+  border-radius: 7px;
+  padding: 0 9px;
+  background: var(--c-surf2);
+}
+
+.rules-card,
+.ruleset-card,
+.dns-card {
+  overflow: hidden;
+}
+
+.rules-card > .card-head,
+.ruleset-card > .card-head,
+.dns-card > .card-head,
+.dns-effect > .card-head {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--c-line);
+}
+
+.rules-card > .card-head {
+  margin-left: 0;
+}
+
+.rule-composer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--c-line);
+  background: var(--c-surf2);
+}
+
+.rule-composer select,
+.rule-composer input {
+  height: 30px;
+  border: 1px solid var(--c-line);
+  border-radius: 7px;
+  padding: 0 9px;
+  background: var(--c-surf);
+  font-size: 12.5px;
+}
+
+.rule-composer input {
+  flex: 1 1 160px;
+  min-width: 140px;
+}
+
+.rule-composer .btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rule-grid,
+.provider-grid {
+  display: grid;
+  align-items: stretch;
+}
+
+.rule-grid {
+  grid-template-columns: 34px 132px minmax(0, 1fr) 108px 88px 44px;
+}
+
+.provider-grid {
+  grid-template-columns: 150px minmax(0, 1fr) 84px 96px 128px 76px;
+}
+
+.rule-grid > .grid-head,
+.rule-grid > .grid-row,
+.provider-grid > .grid-head,
+.provider-grid > .grid-row {
+  display: contents;
+}
+
+.rule-grid > .grid-head > *,
+.provider-grid > .grid-head > * {
+  height: 32px;
+  padding: 0 8px;
+  background: var(--c-surf2);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-mut2);
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--c-line);
+}
+
+.rule-grid > .grid-row > *,
+.provider-grid > .grid-row > * {
+  min-width: 0;
+  height: 34px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid var(--c-line);
+  font-size: 12.5px;
+}
+
+.rule-grid > .grid-row:hover > *,
+.provider-grid > .grid-row:hover > * {
+  background: var(--c-hover);
+}
+
+.drag-handle {
+  width: 30px;
+  height: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--c-mut2);
+  cursor: grab;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.drag-handle:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.row-menu {
+  position: relative;
+}
+
+.row-menu-pop {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 20;
+  min-width: 140px;
+  padding: 5px;
+  border: 1px solid var(--c-line);
+  border-radius: 11px;
+  background: var(--c-surf);
+  box-shadow: var(--c-shadow);
+}
+
+.row-menu-pop[hidden] {
+  display: none;
+}
+
+.row-menu-pop button {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: 7px 10px;
+  border-radius: 7px;
+  font-size: 12.5px;
+}
+
+.row-menu-pop button:hover:not(:disabled) {
+  background: var(--c-hover);
+}
+
+.dns-main {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.dns-card-body {
+  padding: 6px 16px 14px;
+}
+
+.dns-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--c-line);
+}
+
+.dns-field:last-child {
+  border-bottom: 0;
+}
+
+.dns-field-copy {
+  width: 230px;
+  flex: 0 0 auto;
+}
+
+.dns-field-copy strong {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 550;
+}
+
+.dns-field-copy span {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--c-mut2);
+}
+
+.dns-field-control {
+  flex: 1;
+  min-width: 0;
+}
+
+.dns-field-control input,
+.dns-field-control select,
+.dns-field-control textarea {
+  width: 100%;
+  max-width: 100%;
+  height: 30px;
+  border: 1px solid var(--c-line);
+  border-radius: 7px;
+  padding: 0 10px;
+  background: var(--c-surf2);
+  font-size: 12.5px;
+}
+
+.dns-field-control textarea {
+  height: auto;
+  padding: 8px 10px;
+}
+
+.warn-chip {
+  font-size: 11px;
+  font-style: normal;
+  color: var(--c-warn);
+  background: var(--c-warn-t);
+  border-radius: 5px;
+  padding: 1px 7px;
+  font-weight: 600;
+}
+
+.chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.dns-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  background: var(--c-surf2);
+  border: 1px solid var(--c-line);
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+
+.dns-chip button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--c-mut2);
+  line-height: 1;
+}
+
+.chip-input {
+  width: 140px !important;
+  flex: 0 0 auto;
+}
+
+.chip-add {
+  height: 26px;
+  border: 1px dashed var(--c-line2);
+  border-radius: 6px;
+  padding: 0 8px;
+  background: transparent;
+  color: var(--c-mut2);
+  font-size: 11.5px;
+}
+
 .btn-danger {
   background: var(--c-dang);
   color: #fff;

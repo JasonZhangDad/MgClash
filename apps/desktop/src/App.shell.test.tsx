@@ -1109,11 +1109,19 @@ describe("redesigned shell", () => {
     expect(container.querySelector("[aria-label='路由规则列表']")).not.toBeNull();
     expect(container.querySelector("[aria-label='规则集列表']")).not.toBeNull();
     expect(container.querySelector("[aria-label='默认出口']")).not.toBeNull();
+    expect(container.querySelector(".rule-grid")).not.toBeNull();
+    expect(container.querySelector(".provider-grid")).not.toBeNull();
+    expect(container.querySelector(".drag-handle")).not.toBeNull();
+    expect(container.querySelector("[aria-label='规则操作 1']")).not.toBeNull();
+    expect(container.querySelector(".routing-page .form-grid")).toBeNull();
     await act(async () => {
       container
         .querySelector<HTMLButtonElement>(".nav-item[data-page='dns']")
         ?.click();
     });
+    expect(container.querySelector(".dns-basic")).not.toBeNull();
+    expect(container.querySelector(".dns-advanced")).not.toBeNull();
+    expect(container.querySelector(".option-tabs")).toBeNull();
     expect(container.querySelector("[aria-label='DNS 模式']")).not.toBeNull();
     expect(container.querySelector("[aria-label='DNS 服务器']")).not.toBeNull();
     expect(container.querySelector("[aria-label='DNS 地址策略']")).not.toBeNull();
@@ -1126,6 +1134,8 @@ describe("redesigned shell", () => {
     expect(container.querySelector("[aria-label='DoH 路径']")).not.toBeNull();
     expect(container.querySelector("[aria-label='DNS Hosts']")).not.toBeNull();
     expect(container.querySelector("[aria-label='DNS 端口']")).not.toBeNull();
+    expect(container.textContent).toContain("DoH 会加密查询");
+    expect(container.textContent).toContain("按域名路由更准确");
     expect(
       [...container.querySelectorAll("button")].some(
         (button) => button.textContent === "保存并重启内核",

@@ -278,7 +278,6 @@ export function useAppController() {
   const [settingsTab, setSettingsTab] = useState<
     "core" | "ui" | "tun" | "coreType"
   >("core");
-  const [dnsTab, setDnsTab] = useState<"basic" | "advanced">("basic");
   const [theme, setTheme] = useState<ThemeMode>(() => savedTheme());
   const [fontSize, setFontSize] = useState<FontSize>(() => savedFontSize());
   const [layout, setLayout] = useState<MainLayout>(() => savedLayout());
@@ -2272,7 +2271,6 @@ export function useAppController() {
     dismissNotice,
     dnsDirty,
     dnsDraft,
-    dnsTab,
     editingNodeId,
     editingSubscriptionId,
     error,
@@ -2421,7 +2419,6 @@ export function useAppController() {
     setDialog,
     setDnsDirty,
     setDnsDraft,
-    setDnsTab,
     setEditingNodeId,
     setError,
     setExportedTo,
