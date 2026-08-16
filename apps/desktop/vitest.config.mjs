@@ -25,5 +25,10 @@ export default defineConfig({
         statements: 80,
       },
     },
+    // The shell tests drive the whole app through many `act` flushes. The
+    // macos-x86_64 runner takes roughly six times the local wall clock and
+    // overran the 5s default; this is headroom for a slow runner, not a
+    // licence for a slow test.
+    testTimeout: 20000,
   },
 });
