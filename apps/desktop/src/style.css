@@ -766,6 +766,33 @@ button {
   gap: 8px;
 }
 
+/*
+ * Label over value. Both are inline elements, so without this they render as
+ * one run-on string ("TUN未启用") instead of a labelled field.
+ */
+.hero-proxy > div,
+.hero-tun > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hero-proxy > div > strong,
+.hero-tun > div > strong {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--c-mut2);
+}
+
+.hero-proxy > div > span,
+.hero-tun > div > span {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--c-text);
+}
+
 .overview-split {
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
@@ -2400,21 +2427,58 @@ input.toggle:checked::after {
   border-bottom-color: var(--accent);
 }
 
+/*
+ * `display: contents` below promotes each label into its text and its control
+ * as two separate grid items, so the column count has to be even or every row
+ * shifts the pairing by one and labels drift away from their fields.
+ */
 .form-grid {
   display: grid;
-  grid-template-columns: 220px minmax(200px, 1fr) minmax(0, 1.2fr);
+  grid-template-columns: 168px minmax(0, 1fr);
   gap: 8px 12px;
   align-items: center;
 }
 
-.form-grid > label:not(.checkbox-label) {
+/*
+ * `.sr-only` is excluded: `display: contents` removes the label's own box, and
+ * with it the `position: absolute` / `clip` that hides it — which is how the
+ * screen-reader-only protocol select ended up drawn next to the chips.
+ */
+.form-grid > label:not(.checkbox-label):not(.sr-only) {
   display: contents;
 }
 
+/*
+ * A checkbox belongs beside its own text, not a column away from it. These
+ * labels opt out of `display: contents` and take a whole row, which also keeps
+ * the two-cell rhythm intact for the fields that follow.
+ */
+.form-grid > label:not(.sr-only):has(> input[type="checkbox"]) {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: 8px;
+  align-items: center;
+}
+
+/*
+ * Only the two-cell label pairs may sit in the two-column rhythm. Anything else
+ * — chip rows, hints, section headings, standalone checkboxes — takes a whole
+ * row, because a child that occupies a single cell shifts every later pair by
+ * one and walks each label away from its field.
+ */
+.form-grid > *:not(label),
+.form-grid > label.checkbox-label {
+  grid-column: 1 / -1;
+}
+
+/* Fill the field column: a fixed cap left the dialog's right half empty. */
 .form-grid > label > input,
 .form-grid > label > select,
-.form-grid > label > textarea {
-  max-width: 400px;
+.form-grid > label > textarea,
+.form-grid > label > .inline-field {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .form-grid > .form-section {
@@ -2434,7 +2498,7 @@ input.toggle:checked::after {
   display: flex;
   gap: 8px;
   align-items: center;
-  max-width: 400px;
+  max-width: 100%;
 }
 
 .form-grid .inline-field input {
@@ -2927,12 +2991,24 @@ input.toggle:checked::after {
   color: #fff;
 }
 
+/*
+ * Save and cancel stay reachable: the form is taller than the dialog on a
+ * 1280x800 window, and a footer that scrolls away reads as a form you cannot
+ * submit. It spans both grid columns rather than sitting in the label column.
+ */
 .node-form-foot {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
   display: flex;
+  grid-column: 1 / -1;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  padding-top: 12px;
+  border-top: 1px solid var(--c-line);
+  margin-top: 8px;
+  padding: 10px 0;
+  background: var(--c-surf);
 }
 
 .node-form-foot-end {

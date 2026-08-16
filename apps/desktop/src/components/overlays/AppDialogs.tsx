@@ -1455,6 +1455,20 @@ export function AppDialogs({ app }: { app: AppModel }) {
             >
               {t("扫描二维码")}
             </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                setCreateForm(
+                  blankManualNodeForm({
+                    allowInsecure: settings?.defAllowInsecure,
+                    fingerprint: settings?.defFingerprint,
+                  }),
+                )
+              }
+            >
+              {t("重置")}
+            </button>
             <span className="node-form-foot-end">
               <button
                 type="button"
@@ -1472,32 +1486,9 @@ export function AppDialogs({ app }: { app: AppModel }) {
                 disabled={busy}
                 onClick={() => void onCreateNode()}
               >
-                {editingNodeId === null ? t("保存节点") : t("保存节点")}
+                {editingNodeId === null ? t("创建节点") : t("保存节点")}
               </button>
             </span>
-          </div>
-          <div className="actions">
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void onCreateNode()}
-            >
-              {editingNodeId === null ? t("创建节点") : t("保存节点")}
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() =>
-                setCreateForm(
-                  blankManualNodeForm({
-                    allowInsecure: settings?.defAllowInsecure,
-                    fingerprint: settings?.defFingerprint,
-                  }),
-                )
-              }
-            >
-              {t("重置")}
-            </button>
           </div>
         </div>
 
