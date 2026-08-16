@@ -289,6 +289,17 @@ describe("redesigned shell", () => {
     await act(async () => root.render(<App />));
   }
 
+  /// Polls until `ready` holds. The initial loads resolve over several promise
+  /// chains, so a single `act` flush is not enough to guarantee the data has
+  /// landed — on a slow runner it observably has not.
+  async function settle(ready: () => boolean): Promise<void> {
+    for (let attempt = 0; attempt < 50 && !ready(); attempt += 1) {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+  }
+
   it("opens overview connect and the node inspector", async () => {
     await render();
     expect(
@@ -594,6 +605,11 @@ describe("redesigned shell", () => {
         .querySelector<HTMLButtonElement>(".nav-item[data-page='connections']")
         ?.click();
     });
+    await settle(
+      () =>
+        container.querySelectorAll("[aria-label='连接列表'] tbody tr").length ===
+        2,
+    );
     const processFilter = container.querySelector<HTMLSelectElement>(
       "select[aria-label='进程']",
     );
