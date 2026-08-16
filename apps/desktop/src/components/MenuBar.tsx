@@ -27,8 +27,6 @@ interface MenuBarProps {
   onViewConfig: () => void;
   onImportProfile: () => void;
   onExit: () => void;
-  layout: "horizontal" | "vertical" | "tab";
-  onLayout: (layout: "horizontal" | "vertical" | "tab") => void;
   theme: "light" | "dark";
   onTheme: (theme: "light" | "dark") => void;
   fontSize: FontSize;
@@ -76,8 +74,6 @@ export function MenuBar({
   onViewConfig,
   onImportProfile,
   onExit,
-  layout,
-  onLayout,
   theme,
   onTheme,
   fontSize,
@@ -260,16 +256,6 @@ export function MenuBar({
                 ))}
               </select>
             </label>
-            <div className="menu-group-label">{t("主窗布局")}</div>
-            <button type="button" role="menuitem" className={layout === "horizontal" ? "active" : undefined} onClick={() => onLayout("horizontal")}>
-              {t("左右分栏")}
-            </button>
-            <button type="button" role="menuitem" className={layout === "vertical" ? "active" : undefined} onClick={() => onLayout("vertical")}>
-              {t("上下分栏")}
-            </button>
-            <button type="button" role="menuitem" className={layout === "tab" ? "active" : undefined} onClick={() => onLayout("tab")}>
-              {t("标签页")}
-            </button>
           </div>
         </details>
       </div>

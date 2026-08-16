@@ -4,7 +4,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   clampColumnWidth,
+  describeFailure,
   groupTraffic,
+  isBackendMissing,
+  isCoreStartFailure,
   loadColumnWidths,
   saveColumnWidths,
   nextNodeSort,
@@ -13,6 +16,49 @@ import {
   ruleDraftFromConnection,
   savedFontSize,
 } from "./appHelpers";
+
+describe("isCoreStartFailure", () => {
+  it("recognizes a typed Core start failure and not a settings parse error", () => {
+    expect(
+      isCoreStartFailure({
+        code: "core_not_configured",
+        message: "the pinned sing-box binary is not configured",
+      }),
+    ).toBe(true);
+    expect(
+      isCoreStartFailure(new Error("sing-box process failed to start")),
+    ).toBe(true);
+    expect(
+      isCoreStartFailure({
+        code: "settings_unavailable",
+        message: "the Core config template must be a JSON object",
+      }),
+    ).toBe(false);
+    expect(describeFailure(new Error("refresh failed"))).toBe("refresh failed");
+  });
+});
+
+describe("isBackendMissing", () => {
+  it("recognizes a missing Tauri IPC and not a typed command error", () => {
+    expect(
+      isBackendMissing(
+        new TypeError("Cannot read properties of undefined (reading 'invoke')"),
+      ),
+    ).toBe(true);
+    expect(
+      isBackendMissing(
+        new Error("window.__TAURI_INTERNALS__ is not available"),
+      ),
+    ).toBe(true);
+    expect(
+      isBackendMissing({
+        code: "invalid_share_link",
+        message: "the share link is not a supported URI",
+      }),
+    ).toBe(false);
+    expect(isBackendMissing(new Error("refresh failed"))).toBe(false);
+  });
+});
 
 describe("ruleDraftFromConnection", () => {
   it("turns a hostname into a domain-suffix rule", () => {

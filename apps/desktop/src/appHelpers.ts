@@ -255,6 +255,48 @@ export type MainLayout = "horizontal" | "vertical" | "tab";
 export type MainTab = "profiles" | "proxies" | "connections" | "msg";
 export type ThemeMode = "light" | "dark";
 
+export type AppPage =
+  | "overview"
+  | "nodes"
+  | "proxies"
+  | "connections"
+  | "traffic"
+  | "logs"
+  | "routing"
+  | "dns"
+  | "settings";
+
+export type NodesTab = "all" | "groups" | "subs";
+
+export type SettingsSection =
+  | "general"
+  | "network"
+  | "tun"
+  | "core"
+  | "dns"
+  | "routing"
+  | "appearance"
+  | "language"
+  | "hotkeys"
+  | "data"
+  | "updates"
+  | "advanced"
+  | "about";
+
+export type InspectTab =
+  | "general"
+  | "auth"
+  | "transport"
+  | "tls"
+  | "advanced"
+  | "chain"
+  | "diagnostics";
+
+export interface TrafficSample {
+  down: number;
+  up: number;
+}
+
 export const TUN_LABEL: Record<PlatformSummary["tunAvailability"], string> = {
   requiresElevation: "需要管理员权限",
   unavailableInUnsignedBuild: "未签名版本不可用",
@@ -369,10 +411,10 @@ export function regionFlag(name: string): string {
 }
 
 export function latencyQuality(ms: number): "good" | "ok" | "bad" {
-  if (ms < 100) {
+  if (ms < 80) {
     return "good";
   }
-  if (ms < 200) {
+  if (ms < 150) {
     return "ok";
   }
   return "bad";
@@ -492,4 +534,31 @@ export function describeFailure(error: unknown): string {
     return error.message;
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Vite-only / no Tauri IPC — the desktop backend is not reachable. */
+export function isBackendMissing(error: unknown): boolean {
+  if (isCommandError(error)) {
+    return false;
+  }
+  const message = describeFailure(error);
+  return /__TAURI_INTERNALS__|__TAURI__|reading ['"]invoke['"]|invoke(?: function)? is not available|IPC (?:function |backend )?(?:is )?unavailable|not (?:running )?in (?:a )?Tauri/iu.test(
+    message,
+  );
+}
+
+/** Core failed to start — show the designed retry / logs / ports banner. */
+export function isCoreStartFailure(error: unknown): boolean {
+  const code = isCommandError(error) ? error.code : "";
+  const message = describeFailure(error);
+  if (
+    code === "core_not_configured" ||
+    code === "core_unavailable" ||
+    code.includes("core_start")
+  ) {
+    return true;
+  }
+  return /failed to start|binary is not configured|无法启动|启动失败/u.test(
+    message,
+  );
 }

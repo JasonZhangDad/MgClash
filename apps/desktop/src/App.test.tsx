@@ -262,6 +262,7 @@ const SUBSCRIPTION = {
   name: "Airport",
   nodeCount: 3,
   updateIntervalMinutes: 60,
+  url: "https://airport.example/list",
   userAgent: null,
   subconverterUrl: null,
 };
@@ -523,6 +524,35 @@ describe("App", () => {
       );
     });
   }
+
+  it("renders the unsigned banner as one English sentence", async () => {
+    loadAppSettingsMock.mockResolvedValue({
+      ...DEFAULT_SETTINGS,
+      locale: "en" as const,
+    });
+    await render();
+
+    const notice = container.querySelector("[aria-label='Unsigned notice']");
+    const sentence = notice?.querySelector("p")?.textContent ?? "";
+    expect(sentence).toMatch(/This is an unsigned/i);
+    expect(sentence).not.toMatch(/This is\s*Unsigned\s*版本/u);
+    expect(sentence).not.toMatch(/This isUnsigned/u);
+    expect(sentence).not.toContain("版本");
+
+    const picker = container.querySelector<HTMLSelectElement>(
+      "[aria-label='Interface language']",
+    );
+    if (!picker) {
+      throw new Error("no language picker");
+    }
+    await act(async () => selectValue("zh-Hans", picker));
+
+    const chinese = container.querySelector("[aria-label='未签名提示']");
+    expect(chinese?.textContent).toContain(
+      "这是未签名版本：macOS Gatekeeper 与 Windows SmartScreen 会在首次打开时提示，需要你手动确认后才能运行。",
+    );
+    expect(chinese?.textContent).not.toMatch(/This is\s*Unsigned/u);
+  });
 
   it("warns on first run that this build is unsigned", async () => {
     await render();
@@ -791,6 +821,24 @@ describe("App", () => {
     return field;
   }
 
+  function activeSegment(label: string): string | null {
+    return (
+      container
+        .querySelector(`[aria-label='${label}'] button.is-on`)
+        ?.getAttribute("data-value") ?? null
+    );
+  }
+
+  async function chooseSegment(label: string, value: string): Promise<void> {
+    const target = container.querySelector<HTMLButtonElement>(
+      `[aria-label='${label}'] button[data-value='${value}']`,
+    );
+    if (!target) {
+      throw new Error(`no "${label}" segment "${value}"`);
+    }
+    await act(async () => target.click());
+  }
+
   function bulkField(): HTMLTextAreaElement {
     const field = container.querySelector<HTMLTextAreaElement>(
       "textarea[aria-label='批量节点列表']",
@@ -1029,11 +1077,16 @@ describe("App", () => {
     loadNodesMock.mockResolvedValue([CONNECTED.node]);
     await render();
 
-    const control = container.querySelector<HTMLSelectElement>(
+    const control = container.querySelector<HTMLButtonElement>(
       "[aria-label='状态栏系统代理']",
     );
     expect(control?.disabled).toBe(false);
-    await act(async () => selectValue("pac", control!));
+    await act(async () => control?.click());
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>("[data-value='pac']")
+        ?.click();
+    });
 
     expect(saveAppSettingsMock).toHaveBeenCalledWith(
       expect.objectContaining({ systemProxyMode: "pac" }),
@@ -1047,7 +1100,7 @@ describe("App", () => {
       });
     await render();
 
-    expect(createSelect("日志级别").value).toBe("debug");
+    expect(activeSegment("日志级别")).toBe("debug");
     expect(loadLogsMock).toHaveBeenCalledWith("debug", null);
   });
 
@@ -1105,9 +1158,7 @@ describe("App", () => {
     await render();
     loadLogsMock.mockClear();
 
-    await act(async () => {
-      selectValue("error", createSelect("日志级别"));
-    });
+    await chooseSegment("日志级别", "error");
     expect(loadLogsMock).toHaveBeenLastCalledWith("error", null);
 
     await act(async () => {
@@ -1937,7 +1988,9 @@ describe("App", () => {
     const headers = [
       ...container.querySelectorAll("[aria-label='节点列表'] thead th"),
     ].map((cell) => cell.textContent);
-    expect(headers.slice(1, 5)).toEqual(["类型", "别名", "地址", "端口"]);
+    expect(headers).toEqual(
+      expect.arrayContaining(["别名", "协议", "地址", "分组", "延迟", "今日流量", "累计流量"]),
+    );
   });
 
   it("assigns and filters named node groups", async () => {
@@ -2317,6 +2370,22 @@ describe("App", () => {
     expect(connectSessionMock).toHaveBeenCalled();
   });
 
+  it("double-clicks the selected node to connect while disconnected", async () => {
+    loadSessionStatusMock.mockResolvedValue(SELECTED);
+    loadNodesMock.mockResolvedValue([SELECTED.node]);
+    connectSessionMock.mockResolvedValue({ ...SELECTED, connected: true });
+    await render();
+    const row = container.querySelector("[aria-label='节点列表'] tbody tr");
+    expect(row?.className).toContain("active-node");
+
+    await act(async () => {
+      row?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    });
+
+    expect(connectSessionMock).toHaveBeenCalled();
+    expect(selectNodeMock).not.toHaveBeenCalled();
+  });
+
   it("copies an exported share link without rendering it", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
@@ -2384,14 +2453,19 @@ describe("App", () => {
 
   it("switches the System Proxy mode from the status bar", async () => {
     await render();
-    const control = container.querySelector<HTMLSelectElement>(
+    const control = container.querySelector<HTMLButtonElement>(
       "[aria-label='状态栏系统代理']",
     );
     if (!control) {
       throw new Error("no System Proxy control in the status bar");
     }
 
-    await act(async () => selectValue("unchanged", control));
+    await act(async () => control.click());
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>("[data-value='unchanged']")
+        ?.click();
+    });
 
     // Leaving the host's proxy alone and clearing it are different requests,
     // which is why there are four values rather than a checkbox.
@@ -2402,13 +2476,16 @@ describe("App", () => {
 
   it("offers all four System Proxy modes v2rayN has", async () => {
     await render();
-    const control = container.querySelector<HTMLSelectElement>(
+    const control = container.querySelector<HTMLButtonElement>(
       "[aria-label='状态栏系统代理']",
     );
+    await act(async () => control?.click());
 
     expect(
-      [...(control?.options ?? [])].map((option) => option.value),
-    ).toEqual(["cleared", "managed", "unchanged", "pac"]);
+      [...container.querySelectorAll<HTMLButtonElement>(
+        "[aria-label='状态栏系统代理'] + .popover [data-value]",
+      )].map((option) => option.dataset.value),
+    ).toEqual(["managed", "cleared", "unchanged", "pac"]);
   });
 
   it("shows each node's own traffic in the table", async () => {
@@ -2426,10 +2503,8 @@ describe("App", () => {
 
     const row = container.querySelector("[aria-label='节点列表'] tbody tr");
 
-    expect(row?.textContent).toContain("1.0 KB");
-    expect(row?.textContent).toContain("2.0 KB");
-    expect(row?.textContent).toContain("1.0 MB");
-    expect(row?.textContent).toContain("2.0 MB");
+    expect(row?.textContent).toContain("3.0 KB");
+    expect(row?.textContent).toContain("3.0 MB");
   });
 
   it("shows zeroes for a node that has carried nothing", async () => {
@@ -2894,8 +2969,11 @@ describe("App", () => {
     expect(actions).not.toContain("编辑");
   });
 
-  it("adds a subscription without exposing its URL in the list", async () => {
-    createSubscriptionMock.mockResolvedValue(SUBSCRIPTION);
+  it("adds a subscription and shows its stored URL on the card", async () => {
+    createSubscriptionMock.mockResolvedValue({
+      ...SUBSCRIPTION,
+      url: "https://example.com/list?token=url-secret",
+    });
     await render();
 
     const name = container.querySelector<HTMLInputElement>(
@@ -2909,7 +2987,7 @@ describe("App", () => {
     }
     await act(async () => {
       typeInput("Airport", name);
-      type("https://example.com/secret", url);
+      type("https://example.com/list?token=url-secret", url);
     });
     await act(async () => button("添加订阅").click());
 
@@ -2919,14 +2997,22 @@ describe("App", () => {
       includeKeywords: "",
       name: "Airport",
       updateIntervalMinutes: 60,
-      url: "https://example.com/secret",
+      url: "https://example.com/list?token=url-secret",
       userAgent: null,
       subconverterUrl: null,
     });
-    expect(
-      container.querySelector("[aria-label='订阅列表']")?.textContent,
-    ).toContain("Airport");
-    expect(container.textContent).not.toContain("https://example.com/secret");
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(".nav-item[data-page='nodes']")
+        ?.click();
+      [...container.querySelectorAll<HTMLButtonElement>(".page-tabs button")]
+        .find((button) => button.textContent?.includes("订阅"))
+        ?.click();
+    });
+    const card = container.querySelector("[aria-label='订阅 Airport']");
+    expect(card?.querySelector("[aria-label='订阅地址']")?.textContent).toContain(
+      "https://example.com/list?token=url-secret",
+    );
   });
 
   it("edits subscription metadata without replacing its saved URL", async () => {
@@ -3071,15 +3157,21 @@ describe("App", () => {
     const ruleStatus: SessionStatus = { ...IDLE, mode: "rule" };
     setRoutingModeMock.mockResolvedValue(ruleStatus);
     await render();
-    const field = container.querySelector<HTMLSelectElement>(
-      "select[aria-label='状态栏路由模式']",
+    const field = container.querySelector<HTMLButtonElement>(
+      ".app-statusbar [aria-label='状态栏路由模式']",
     );
     expect(field).not.toBeNull();
 
-    await act(async () => selectValue("rule", field!));
+    await act(async () => field?.click());
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          ".app-statusbar [data-value='rule']",
+        )
+        ?.click();
+    });
 
     expect(setRoutingModeMock).toHaveBeenCalledWith("rule");
-    expect(field?.value).toBe("rule");
   });
 
   it("changes routing mode while connected", async () => {
@@ -3087,11 +3179,16 @@ describe("App", () => {
     setRoutingModeMock.mockResolvedValue({ ...CONNECTED, mode: "rule" });
     await render();
 
-    const mode = container.querySelector<HTMLSelectElement>(
-      "select[aria-label='状态栏路由模式']",
+    const mode = container.querySelector<HTMLButtonElement>(
+      ".app-statusbar [aria-label='状态栏路由模式']",
     );
     expect(mode?.disabled).toBe(false);
-    await act(async () => selectValue("rule", mode!));
+    await act(async () => mode?.click());
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(".app-statusbar [data-value='rule']")
+        ?.click();
+    });
 
     expect(setRoutingModeMock).toHaveBeenCalledWith("rule");
   });
@@ -3884,20 +3981,19 @@ describe("App", () => {
     connectSessionMock.mockResolvedValue({ ...SELECTED, node: osaka, connected: true });
     await render();
 
-    await act(async () => button("当前代理").click());
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>("[data-page='proxies']")?.click(),
+    );
 
     const rows = [
-      ...container.querySelectorAll("[aria-label='代理组节点'] tbody tr"),
+      ...container.querySelectorAll("[aria-label='代理组节点'] .member-card"),
     ];
     expect(rows.map((row) => row.textContent)).toEqual([
       expect.stringContaining("Osaka"),
     ]);
     expect(rows[0]?.textContent).toContain("88 ms");
 
-    const strategy = container.querySelector<HTMLSelectElement>(
-      "[aria-label='代理组策略']",
-    );
-    await act(async () => selectValue("select", strategy!));
+    await chooseSegment("代理组策略", "select");
     expect(setNodeGroupStrategyMock).toHaveBeenCalledWith(work.id, "select");
 
     await act(async () =>
@@ -3924,7 +4020,9 @@ describe("App", () => {
     loadNodesMock.mockResolvedValue([SELECTED.node, osaka]);
     await render();
 
-    await act(async () => button("当前代理").click());
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>("[data-page='proxies']")?.click(),
+    );
     await act(async () => button("测试本组延迟").click());
 
     expect(testAllNodesMock).toHaveBeenCalledWith(
@@ -4239,9 +4337,11 @@ describe("App", () => {
     await render();
 
     // The second group only shows once it is picked from the rail.
-    await act(async () => button("当前代理").click());
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>("[data-page='proxies']")?.click(),
+    );
     expect(
-      container.querySelectorAll("[aria-label='代理组节点'] tbody tr"),
+      container.querySelectorAll("[aria-label='代理组节点'] .member-card"),
     ).toHaveLength(0);
     await act(async () =>
       [...container.querySelectorAll<HTMLButtonElement>(
@@ -4251,7 +4351,7 @@ describe("App", () => {
         ?.click(),
     );
     expect(
-      [...container.querySelectorAll("[aria-label='代理组节点'] tbody tr")].map(
+      [...container.querySelectorAll("[aria-label='代理组节点'] .member-card")].map(
         (row) => row.textContent,
       ),
     ).toEqual([expect.stringContaining("Osaka")]);
@@ -4394,6 +4494,114 @@ describe("App", () => {
     expect(saveAppSettingsMock).toHaveBeenCalledWith(
       expect.objectContaining({ urlTestToleranceMs: 150 }),
     );
+  });
+
+  it("draws daily history when the backend returns at least two days", async () => {
+    loadTrafficMock.mockResolvedValue({
+      downloadBytesPerSecond: 2_048,
+      monthBytes: 0,
+      todayBytes: 10,
+      totalBytes: 20,
+      uploadBytesPerSecond: 1_024,
+      daily: [
+        { day: "2026-08-11", bytes: 400 },
+        { day: "2026-08-12", bytes: 30 },
+      ],
+    });
+    await render();
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(".nav-item[data-page='traffic']")
+        ?.click();
+    });
+
+    const page = container.querySelector("[aria-label='流量']");
+    const history = page?.querySelector("[aria-label='历史流量统计']");
+    expect(history?.textContent).toContain("历史流量统计");
+    expect(history?.textContent).not.toContain("FUTURE");
+    expect(history?.textContent).not.toContain("没有按时间序列的历史数据");
+    expect(history?.querySelector("svg polyline, svg path")).not.toBeNull();
+    expect(history?.textContent).toContain("2026-08-11");
+    expect(history?.textContent).toContain("2026-08-12");
+    expect(page?.textContent).toContain("1.0 KB/s");
+    expect(page?.textContent).toContain("2.0 KB/s");
+    expect(page?.querySelector(".sparkline")).not.toBeNull();
+  });
+
+  it("does not invent sample days when daily history is empty", async () => {
+    loadTrafficMock.mockResolvedValue({
+      downloadBytesPerSecond: 0,
+      monthBytes: 0,
+      todayBytes: 0,
+      totalBytes: 0,
+      uploadBytesPerSecond: 0,
+      daily: [],
+    });
+    await render();
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(".nav-item[data-page='traffic']")
+        ?.click();
+    });
+
+    const history = container.querySelector("[aria-label='历史流量统计']");
+    expect(history?.textContent).toContain("历史流量统计");
+    expect(history?.querySelector("svg polyline, svg path")).toBeNull();
+    expect(history?.textContent ?? "").not.toMatch(/20\d{2}-\d{2}-\d{2}/u);
+  });
+
+  it("routes via-proxy subscription actions through the existing refresh commands", async () => {
+    loadSubscriptionsMock.mockResolvedValue([SUBSCRIPTION]);
+    refreshSubscriptionMock.mockResolvedValue(SUBSCRIPTION);
+    refreshAllSubscriptionsMock.mockResolvedValue([SUBSCRIPTION]);
+    await render();
+
+    await act(async () => button("更新全部订阅 (通过代理)").click());
+    expect(refreshAllSubscriptionsMock).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(".nav-item[data-page='nodes']")
+        ?.click();
+      [...container.querySelectorAll<HTMLButtonElement>(".page-tabs button")]
+        .find((button) => button.textContent?.includes("订阅"))
+        ?.click();
+    });
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          "[aria-label='更新当前订阅 (通过代理) Airport']",
+        )
+        ?.click(),
+    );
+    expect(refreshSubscriptionMock).toHaveBeenCalledWith(SUBSCRIPTION.id);
+    expect(refreshSubscriptionMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => button("更新当前订阅 (通过代理)").click());
+    expect(refreshSubscriptionMock).toHaveBeenCalledTimes(2);
+    expect(refreshSubscriptionMock).toHaveBeenNthCalledWith(2, SUBSCRIPTION.id);
+  });
+
+  it("shows a designed desktop-backend notice when invoke is unavailable", async () => {
+    const missing = new TypeError(
+      "Cannot read properties of undefined (reading 'invoke')",
+    );
+    loadPlatformSummaryMock.mockRejectedValue(missing);
+    loadSessionStatusMock.mockRejectedValue(missing);
+    loadNodesMock.mockRejectedValue(missing);
+    loadSubscriptionsMock.mockRejectedValue(missing);
+    loadSystemProxyStartupStatusMock.mockRejectedValue(missing);
+    await render();
+
+    const notice = container.querySelector("[aria-label='需要桌面应用']");
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent).toContain("需要桌面应用");
+    expect(notice?.textContent).toContain("Tauri");
+    expect(notice?.textContent).toContain("演示");
+    expect(container.querySelector("p.error")).toBeNull();
+    expect(container.textContent).not.toContain("Tokyo Edge");
+    expect(container.querySelector("[aria-label='订阅 Airport']")).toBeNull();
+    expect(container.querySelectorAll(".node-list tbody tr")).toHaveLength(0);
   });
 
   it("refreshes subscriptions while connected", async () => {
@@ -4595,18 +4803,22 @@ describe("App", () => {
     });
     await render();
 
-    await act(async () => button("当前代理").click());
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>("[data-page='proxies']")?.click(),
+    );
     const groupTotals = container.querySelector("[aria-label='代理组流量']");
     expect(groupTotals?.textContent).toContain("2.0 KB");
     expect(groupTotals?.textContent).toContain("8.0 KB");
 
-    await act(async () => button("当前连接").click());
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>("[data-page='traffic']")?.click(),
+    );
     const rows = [
-      ...container.querySelectorAll("[aria-label='进程流量'] tbody tr"),
+      ...container.querySelectorAll("[aria-label='进程流量'] li"),
     ];
     expect(rows[0]?.textContent).toContain("Safari");
-    // Two connections of the same program add up.
-    expect(rows[0]?.textContent).toContain("4.0 KB");
+    // Two connections of the same program add up (upload + download).
+    expect(rows[0]?.textContent).toContain("6.0 KB");
   });
 
   it("chains a node through a front proxy from the context menu", async () => {
@@ -4922,36 +5134,35 @@ describe("App", () => {
     expect(actions).toContain("移除重复");
   });
 
-  it("changes the main window layout from the menu", async () => {
+  it("does not offer the three old window layouts", async () => {
     await render();
 
     expect(container.querySelector(".app-shell")?.getAttribute("data-layout")).toBe(
-      "horizontal",
+      null,
     );
-
-    await act(async () => button("标签页").click());
-
-    expect(container.querySelector(".app-shell")?.getAttribute("data-layout")).toBe(
-      "tab",
+    const labels = [...container.querySelectorAll("button")].map(
+      (entry) => entry.textContent,
     );
-    expect(localStorage.getItem("mgclash.mainLayout")).toBe("tab");
+    expect(labels).not.toContain("左右分栏");
+    expect(labels).not.toContain("上下分栏");
+    expect(labels).not.toContain("标签页");
     expect(button("信息")).not.toBeNull();
-
-    await act(async () => button("左右分栏").click());
-
-    expect(container.querySelector(".app-shell")?.getAttribute("data-layout")).toBe(
-      "horizontal",
-    );
   });
 
   it("shows the message pane as a side tab", async () => {
     await render();
 
     expect(container.querySelector("[aria-label='消息窗口']")).not.toBeNull();
-    await act(async () => button("当前代理").click());
-    expect(container.querySelector("[aria-label='消息窗口']")).toBeNull();
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>("[data-page='proxies']")?.click(),
+    );
+    expect(
+      container.querySelector("[aria-label='消息窗口']")?.hasAttribute("hidden"),
+    ).toBe(true);
     await act(async () => button("信息").click());
-    expect(container.querySelector("[aria-label='消息窗口']")).not.toBeNull();
+    expect(
+      container.querySelector("[aria-label='消息窗口']")?.hasAttribute("hidden"),
+    ).toBe(false);
   });
 
   it("adds and imports servers while connected", async () => {
@@ -5008,10 +5219,6 @@ describe("App", () => {
       });
     }
 
-    await act(async () => button("上下分栏").click());
-    expect(container.querySelector(".app-shell")?.getAttribute("data-layout")).toBe(
-      "vertical",
-    );
   });
 
   it("saves editable SOCKS, HTTP, and Clash API ports from settings", async () => {
